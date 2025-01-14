@@ -1,7 +1,8 @@
-package usecase
+package ldb
 
 import (
 	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -305,7 +306,7 @@ func compareBytes(a, b []byte) bool {
 }
 
 // Dump a complete sector. The sector is loadead in ram. If no sector is specified, all the table is dumped.
-func (t *TableDefinition) Dump(startingSector int, limit int, dataChan chan []string) (int, error) {
+func (t *TableDefinition) Dump(startingSector int, endingSector int, limit int, dataChan chan []string) (int, error) {
 	sectorId := -1
 	count := 0
 	defer close(dataChan)
@@ -330,9 +331,28 @@ func (t *TableDefinition) Dump(startingSector int, limit int, dataChan chan []st
 			}
 		}
 		//dump only the specified sector
-		if sectorId >= 0 {
+		if (sectorId >= 0 && endingSector == 0) || (endingSector > 0 && k0 > endingSector) {
 			return count, nil
 		}
 	}
 	return count, nil
+}
+
+func (t *TableDefinition) QueryKey(keyHex string) ([][]string, error) {
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding key %s - %v", keyHex, err)
+	}
+
+	outputChan := make(chan []string, 1024)
+	_, err = t.FetchRecordset(nil, key, false, outputChan, true)
+	if err != nil {
+		return nil, fmt.Errorf("fetchRecordset has vailed with error %v", err)
+	}
+
+	result := make([][]string, 0)
+	for r := range outputChan {
+		result = append(result, r)
+	}
+	return result, nil
 }

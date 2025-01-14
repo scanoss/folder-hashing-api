@@ -1,4 +1,4 @@
-package usecase
+package ldb
 
 import (
 	"encoding/binary"

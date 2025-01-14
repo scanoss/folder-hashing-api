@@ -1,4 +1,4 @@
-package usecase
+package ldb
 
 import (
 	"encoding/hex"
@@ -114,7 +114,7 @@ func TestLDBdump(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		var err error
-		recordsNumber, err = hfhTable.Dump(0x80, 1023, outputChan)
+		recordsNumber, err = hfhTable.Dump(0x80, 0, 1023, outputChan)
 		if err != nil {
 			t.Errorf("Unexpected error during dump: %v", err)
 			return
