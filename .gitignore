@@ -34,3 +34,5 @@ local-build-commands.txt
 *.gz
 *.zip
 
+pkg/usecase/ldb/test/test_kb/hfh/80.ldb
+pkg/usecase/ldb/test/test_kb/url/00.ldb

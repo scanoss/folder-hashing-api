@@ -1,4 +1,5 @@
 
+export PATH := /usr/bin/go/bin:$(PATH)
 #vars
 IMAGE_NAME=scanoss-hfh-api
 REPO=scanoss
