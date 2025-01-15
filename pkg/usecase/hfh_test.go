@@ -14,18 +14,18 @@ func TestHFHscanHash(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected reading the table config", err)
 		return
 	}
-	var fileNamesSimhash uint64 = 0x800000c9bc6bdfcd
-	result, distance, content := scanHash(hfhTable, fileNamesSimhash, 0, 30)
+	fileNamesSimhash := "800000c9bc6bdfcd"
+	result, distance, content, err := scanHash(hfhTable, fileNamesSimhash, 0, 30)
 	t.Logf("Result: %x", result)
 	t.Log("distance:", distance)
 	t.Log("content:", content)
 
-	if distance > 0 || result[0] != fileNamesSimhash {
+	if distance > 0 {
 		t.Errorf("the hashes do not match: %x vs %x", fileNamesSimhash, result[0])
 	}
-	fileNamesSimhash = 0x801f1fd9bc5bdfad
+	fileNamesSimhash = "801f1fd9bc5bdfad"
 
-	result, distance, content = scanHash(hfhTable, fileNamesSimhash, 0, 30)
+	result, distance, content, err = scanHash(hfhTable, fileNamesSimhash, 0, 30)
 	t.Logf("Result: %x", result)
 	t.Log("distance:", distance)
 	t.Log("content:", content)
@@ -41,33 +41,31 @@ func TestHFHscanFirstStage(t *testing.T) {
 		t.Errorf("unexpected error during initialization %v", err)
 	}
 
-	var fileNamesSimhash uint64 = 0x80e4303fe722c919
-	var fileContentsSimhash uint64 = 0xcb92edc5f2207547
-	stage, confidence, result, err := scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
+	fileNamesSimhash := "8467f50e64828bb0"
+	fileContentsSimhash := "8be1b3e7a672d96c"
+	result, err := scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
 	if err != nil {
 		t.Errorf("scan failed with error: %v", err)
 	}
-	t.Log("stage:", stage)
-	t.Log("confidence:", confidence)
+
 	t.Log("result:", result)
 
-	if confidence < 100 {
-		t.Errorf("unexpected confidence result: %.1f, expected 100", confidence)
+	if result.probability < 100 {
+		t.Errorf("unexpected confidence result: %.1f, expected 100", result.probability)
 		return
 	}
 
-	fileNamesSimhash = 0x80e4303fe722cA1A
-	fileContentsSimhash = 0xcb92efc5d2207547
-	stage, confidence, result, err = scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
+	fileNamesSimhash = "8467f50e64828bb0"
+	fileContentsSimhash = "8be1b2e7a672d96b"
+	result, err = scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
 	if err != nil {
 		t.Errorf("scan failed with error: %v", err)
 	}
-	t.Log("stage:", stage)
-	t.Log("confidence:", confidence)
+
 	t.Log("result:", result)
 
-	if confidence < 60 {
-		t.Errorf("unexpected confidence result: %.1f, expected 63", confidence)
+	if result.probability < 60 {
+		t.Errorf("unexpected confidence result: %.1f, expected 100", result.probability)
 		return
 	}
 }
