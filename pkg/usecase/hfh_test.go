@@ -242,4 +242,12 @@ func TestHFHscanTreeSecondStage(t *testing.T) {
 	}
 
 	t.Log("Second stage results:", scanner.resultsMap)
+
+	err = scanner.scanTreeThirdStage(node)
+	if err != nil {
+		t.Errorf("unexpected error during scan process %v", err)
+		return
+	}
+
+	t.Log("third stage results:", scanner.resultsMap)
 }

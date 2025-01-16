@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // TableDefinition defines the base structure of a table
@@ -355,4 +356,91 @@ func (t *TableDefinition) QueryKey(keyHex string) ([][]string, error) {
 		result = append(result, r)
 	}
 	return result, nil
+}
+
+func (t *TableDefinition) DumpParallel(startingSector int, endingSector int, limit int, dataChan chan []string, numThreads int) (int, error) {
+	sectorId := -1
+	count := 0
+	defer close(dataChan)
+
+	if startingSector >= 0 {
+		sectorId = startingSector
+	}
+
+	// Canal para recolectar resultados de FetchRecordset
+	type fetchResult struct {
+		recordsNumber int
+		err           error
+	}
+	resultsChan := make(chan fetchResult)
+
+	var wg sync.WaitGroup
+	activeThreads := 0 // Contador de threads activos
+
+	for k0 := sectorId; k0 < 256; k0++ {
+		sector := ldbLoadSector(t, []byte{byte(k0)})
+		for k1 := 0; k1 < 256; k1++ {
+			for k2 := 0; k2 < 256; k2++ {
+				for k3 := 0; k3 < 256; k3++ {
+					key := []byte{byte(k0), byte(k1), byte(k2), byte(k3)}
+
+					// Esperar si ya alcanzamos el máximo de threads
+					if activeThreads >= numThreads {
+						// Procesar un resultado antes de continuar
+						result := <-resultsChan
+						if result.err != nil {
+							return count, result.err
+						}
+						count += int(result.recordsNumber)
+						activeThreads--
+
+						if limit > 0 && count > limit {
+							// Esperar los threads restantes antes de salir
+							for i := 0; i < activeThreads; i++ {
+								result := <-resultsChan
+								if result.err != nil {
+									return count, result.err
+								}
+								count += int(result.recordsNumber)
+							}
+							return count, nil
+						}
+					}
+
+					wg.Add(1)
+					activeThreads++
+
+					go func(sector Sector, key []byte) {
+						defer wg.Done()
+						recordsNumber, err := t.FetchRecordset(&sector, key, true, dataChan, false)
+						resultsChan <- fetchResult{recordsNumber, err}
+					}(sector, key)
+				}
+			}
+		}
+
+		// Dump only the specified sector
+		if (sectorId >= 0 && endingSector == 0) || (endingSector > 0 && k0 > endingSector) {
+			break
+		}
+	}
+
+	// Esperar que todas las goroutines terminen
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Procesar los resultados restantes
+	for result := range resultsChan {
+		if result.err != nil {
+			return count, result.err
+		}
+		count += int(result.recordsNumber)
+		if limit > 0 && count > limit {
+			return count, nil
+		}
+	}
+
+	return count, nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/bits"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -336,5 +337,95 @@ func (s *HFHscan) scanTreeSecondStage(node *pb.HFHRequest_Children) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *HFHscan) scanTreeThirdStage(node *pb.HFHRequest_Children) error {
+	if node.Children == nil {
+		return nil
+	}
+	// If the matching probability is major than the TH we don't need to continue
+	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability >= float32(s.threshold) {
+		return nil
+	}
+
+	// Go to the leaves first
+	for _, child := range node.Children {
+		s.scanTreeThirdStage(child)
+	}
+
+	childPurlHits := make(map[string]int)
+	childPurlProb := make(map[string]float32)
+	allVersions := make(map[string]map[string]bool)
+	childWithHits := 0
+
+	for _, child := range node.Children {
+		//ignore low prob results
+		if len(s.resultsMap[child.PathId].components) <= 0 { //|| child.Result.Prob < threshold {
+			continue
+		}
+
+		//rank the child purls
+		for _, p := range s.resultsMap[child.PathId].components {
+			childWithHits++
+			childPurlHits[p.Purl]++
+			if s.resultsMap[child.PathId].stage > 0 {
+				childPurlProb[p.Purl] += s.resultsMap[child.PathId].probability * (1 / float32(len(node.Children)))
+			} else {
+				childPurlProb[p.Purl] = -1
+			}
+			if _, ok := allVersions[p.Purl]; !ok {
+				allVersions[p.Purl] = make(map[string]bool)
+			}
+
+			for _, version := range p.Versions {
+				allVersions[p.Purl][version] = true
+			}
+		}
+	}
+
+	if len(childPurlHits) == 0 {
+		return nil
+	}
+
+	sortedPurls := make([]string, 0, len(childPurlProb))
+	for purl := range childPurlProb {
+		sortedPurls = append(sortedPurls, purl)
+	}
+
+	// Ordenar el slice de purls basado en sus probabilidades en orden descendente
+	sort.Slice(sortedPurls, func(i, j int) bool {
+		return childPurlProb[sortedPurls[i]] > childPurlProb[sortedPurls[j]]
+	})
+
+	// Update the now results
+	if len(sortedPurls) > 0 {
+		eqprob := childPurlProb[sortedPurls[0]] // * float32(childPurlHits[sortedPurls[0]]) / float32(childWithHits) * (1 / float32(len(node.Children)))
+		if eqprob > float32(s.threshold) {
+			//s.resultsMap[node.PathId].components
+			var newCOmponents []HFHscanResultItem
+			for _, purl := range sortedPurls {
+				var versions []string
+				for v := range allVersions {
+					versions = append(versions, v)
+				}
+				newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Confidence: childPurlProb[purl]}
+				newCOmponents = append(newCOmponents, newCOmponent)
+			}
+			nodeResults := s.resultsMap[node.PathId]
+			nodeResults.components = newCOmponents
+			nodeResults.probability = eqprob
+
+			if s.resultsMap[node.PathId].probability > 100.0 {
+				log.Printf("Warning prob %f bigger than 100.0%%\n", s.resultsMap[node.PathId].probability)
+				nodeResults.probability = 100.0
+			}
+			nodeResults.stage = 3
+			s.resultsMap[node.PathId] = nodeResults
+
+		} else {
+			log.Printf("%s: %s prob %f lower than threshold %d\n", node.PathId, sortedPurls, childPurlProb[sortedPurls[0]], s.threshold)
+		}
+	}
 	return nil
 }
