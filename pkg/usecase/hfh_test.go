@@ -6,6 +6,7 @@ import (
 	pb "github.com/scanoss/papi/api/scanningv2"
 
 	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
+	test "scanoss.com/hfh-api/pkg/usecase/test"
 )
 
 func TestHFHscanHash(t *testing.T) {
@@ -145,4 +146,100 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 	if scanner.resultsMap["/root/child3"].components[0].Purl != expectedPurl {
 		t.Errorf("result component doesn't match: %s vs %s", scanner.resultsMap["/root/child3"].components[0].Purl, expectedPurl)
 	}
+}
+
+func TestHFHscanSecondStage(t *testing.T) {
+	scanner, err := NewHFFHScan(24, false, "/data/ldb/", "hfh_kb")
+	if err != nil {
+		t.Errorf("unexpected error during initialization %v", err)
+	}
+	fileContentsSimhash := "b2ffa1047e0c64a3"
+	result, err := scanner.scanSecondStage(fileContentsSimhash)
+	if err != nil {
+		t.Errorf("scan failed with error: %v", err)
+	}
+
+	t.Log("result:", result)
+
+	if result.probability < 100 {
+		t.Errorf("unexpected confidence result: %.1f, expected 100", result.probability)
+		return
+	}
+
+	fileContentsSimhash = "b2dfa2047e0c64b3"
+	result, err = scanner.scanSecondStage(fileContentsSimhash)
+	if err != nil {
+		t.Errorf("scan failed with error: %v", err)
+	}
+
+	t.Log("result:", result)
+
+	if result.probability < 60 {
+		t.Errorf("unexpected confidence result: %.1f, expected 100", result.probability)
+		return
+	}
+}
+
+func TestHFHscanTreeSecondStage(t *testing.T) {
+	scanner, err := NewHFFHScan(70, false, "/data/ldb/", "hfh_kb")
+	if err != nil {
+		t.Errorf("unexpected error during initialization %v", err)
+		return
+	}
+
+	node := &pb.HFHRequest_Children{
+		PathId:         "/root",
+		SimHashNames:   "9172bd3ef2ab37b0",
+		SimHashContent: "8fce1505d6bbc965",
+		Children: []*pb.HFHRequest_Children{
+			{
+				PathId:         "/root/child1",
+				SimHashNames:   "d7fbe83ee4bdfefc",
+				SimHashContent: "b2ffa1047e0c64a3",
+			},
+			{
+				PathId:         "/root/child2",
+				SimHashNames:   "8ee95581318be650",
+				SimHashContent: "c4793d04a8785dec",
+			},
+			{
+				PathId:         "/root/child3",
+				SimHashNames:   "8382b543602ba3b8",
+				SimHashContent: "89d3ff8dd2ad4840",
+			},
+		},
+	}
+
+	err = scanner.scanTreeFirstStage(node)
+	if err != nil {
+		t.Errorf("unexpected error during scan process %v", err)
+		return
+	}
+	t.Log(scanner.resultsMap)
+	expectedPurl := "pkg:github/mirror/busybox"
+	if scanner.resultsMap["/root"].components[0].Purl != expectedPurl {
+		t.Errorf("result component doesn't match: %s vs %s", scanner.resultsMap["/root"].components[0].Purl, expectedPurl)
+	}
+	//clean the result map
+	scanner.resultsMap = make(map[string]HFHscanResult)
+
+	node = test.Monorepo_root
+	err = scanner.scanTreeFirstStage(node)
+	if err != nil {
+		t.Errorf("unexpected error during scan process %v", err)
+		return
+	}
+	t.Log("first stage results:", scanner.resultsMap)
+	expectedPurl = "pkg:github/recastnavigation/recastnavigation"
+	/*if scanner.resultsMap["/root/child3"].components[0].Purl != expectedPurl {
+		t.Errorf("result component doesn't match: %s vs %s", scanner.resultsMap["/root/child3"].components[0].Purl, expectedPurl)
+	}*/
+
+	err = scanner.scanTreeSecondStage(node)
+	if err != nil {
+		t.Errorf("unexpected error during scan process %v", err)
+		return
+	}
+
+	t.Log("Second stage results:", scanner.resultsMap)
 }

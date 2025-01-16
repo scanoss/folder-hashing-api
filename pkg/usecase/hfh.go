@@ -45,7 +45,7 @@ func NewHFFHScan(threshold int, bestMatch bool, ldbPath string, kbName string) (
 		return nil, fmt.Errorf("error creating HFHtable: %v", err)
 	}
 
-	hfhSecTable, err := ldb.NewTableFromCfg(ldbPath, kbName, "url", []string{"partialFileContents", "fileNames"})
+	hfhSecTable, err := ldb.NewTableFromCfg(ldbPath, kbName, "hfhSec", []string{"partialFileContents", "fileNames"})
 	if err != nil {
 		return nil, fmt.Errorf("error creating HFHsecTable: %v", err)
 	}
@@ -236,7 +236,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 
 	if len(bestUrlsKey) > 0 {
 
-		log.Printf("file content %x distance: %d - URL: %s", fileContentsSimhash, minFilesContentdistance, bestUrlsKey)
+		log.Printf("file content %s distance: %d - URL: %s", fileContentsSimhash, minFilesContentdistance, bestUrlsKey)
 		probability := (1 - float32(minFilesContentdistance)/float32(s.dMin)) * 100
 		st := 1
 		if probability < 0 {
@@ -279,59 +279,62 @@ func (s *HFHscan) scanTreeFirstStage(node *pb.HFHRequest_Children) error {
 	return nil
 }
 
-func (s *HFHscan) scanSecondStage(fileContentsSimhash uint64) (*HFHscanResult, error) {
+func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, error) {
 
-	head := headCalc(fileContentsSimhash)
+	hash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding key %s - %v", fileContentsSimhash, err)
+	}
+	head := headCalc(hash)
 	//Overwrite the MS byte with the head to keep the hash size total
-	key := (fileContentsSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
+	key := (hash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
 	keyHex := fmt.Sprintf("%02x", key)
-	match, distance, content, err := scanHash(s.hfhSecTable, keyHex, s.sectorTol/8, s.dMin/4)
+	log.Printf("filecontents query hash %s\n", keyHex)
+	match, distance, content, err := scanHash(s.hfhSecTable, keyHex, s.sectorTol/4, s.dMin/3)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Printf("secHash: %x - matched: %x- distance %d\n", key, match, distance)
-
-	processedPurls := make(map[string]bool)
-	urlVersionMap := make(map[string][]string)
-	uniqueVersionMap := make(map[string]bool)
-
-	var purlList []string
-
+	var urlKeys []string
 	for _, c := range content {
 		//go to the main hfh table to look for the url hash
 		key := c[0]
-		record, err := s.hfhTable.QueryKey(key)
+		records, err := s.hfhTable.QueryKey(key)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		//go to the url table to look for the url information
-		urlKey := record[0][2]
-		urls, err := s.urlTable.QueryKey(urlKey)
-		if err != nil {
-			fmt.Println(err)
-			continue
+		for _, r := range records {
+			urlKeys = append(urlKeys, r[2])
 		}
-		//extract the purl from the record
-		purl := urls[0][6]
-		//process uniques purl versions
-		if !processedPurls[purl] {
-			purlList = append(purlList, purl)
-			processedPurls[purl] = true
-		}
-		if _, exist := uniqueVersionMap[purl+urls[0][3]]; exist {
-			continue
-		}
-		uniqueVersionMap[purl+urls[0][3]] = true
-		urlVersionMap[purl] = append(urlVersionMap[purl], urls[0][3])
 	}
 
 	probability := (1 - float32(distance)/float32(s.dMin)) * 100
-	secondStageComponents := make([]HFHscanResultItem, len(purlList))
-	for i, purl := range purlList {
-		secondStageComponents[i].Purl = purl
-		secondStageComponents[i].Versions = urlVersionMap[purl]
+	components := getComponents(s.urlTable, urlKeys)
+
+	return &HFHscanResult{components: components, probability: probability, stage: 2}, nil
+}
+
+func (s *HFHscan) scanTreeSecondStage(node *pb.HFHRequest_Children) error {
+
+	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability > float32(s.threshold) {
+		return nil
 	}
-	return &HFHscanResult{components: secondStageComponents, probability: probability, stage: 2}, nil
+
+	result, err := s.scanSecondStage(node.SimHashContent)
+	if err != nil {
+		return err
+	}
+	if result.probability >= float32(s.threshold) && result.components != nil {
+		s.resultsMap[node.PathId] = *result
+	}
+
+	if s.resultsMap[node.PathId].probability < float32(s.threshold) || s.resultsMap[node.PathId].stage == 0 {
+		for _, child := range node.Children {
+			s.scanTreeSecondStage(child)
+		}
+	}
+
+	return nil
 }
