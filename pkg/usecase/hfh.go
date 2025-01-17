@@ -128,14 +128,14 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 	//process each sector, run this process in a new thread
 	var wg sync.WaitGroup
 	wg.Add(1)
-	outputChan := make(chan []string, 1024*sectorTol)
+	outputChan := make(chan []string, 2048*sectorTol)
 
 	// Exec dump function in its own thread
 	go func() {
 		defer wg.Done()
 		var err error
 		//_, err = table.Dump(start, end, -1, outputChan)
-		_, err = table.DumpParallel(start, end, -1, outputChan)
+		err = table.DumpParallel(start, end, -1, outputChan)
 		if err != nil {
 			log.Printf("Unexpected error during dump: %v", err)
 		}

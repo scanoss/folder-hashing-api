@@ -308,13 +308,23 @@ func compareBytes(a, b []byte) bool {
 
 // Dump a complete sector. The sector is loadead in ram. If no sector is specified, all the table is dumped.
 func (t *TableDefinition) Dump(startingSector int, endingSector int, limit int, dataChan chan []string) (int, error) {
-	sectorId := 0
+	from := 0
+	to := 255
 	count := 0
+	if startingSector > 255 || endingSector > 255 {
+		return -1, fmt.Errorf("invalid starting / ending sector")
+	}
+
 	defer close(dataChan)
 	if startingSector >= 0 {
-		sectorId = startingSector
+		from = startingSector
 	}
-	for k0 := sectorId; k0 < 256; k0++ {
+
+	if endingSector >= 0 {
+		to = endingSector
+	}
+
+	for k0 := from; k0 <= to; k0++ {
 		sector := ldbLoadSector(t, []byte{byte(k0)})
 		for k1 := 0; k1 < 256; k1++ {
 			for k2 := 0; k2 < 256; k2++ {
@@ -330,10 +340,6 @@ func (t *TableDefinition) Dump(startingSector int, endingSector int, limit int, 
 					}
 				}
 			}
-		}
-		//dump only the specified sector
-		if (startingSector >= 0 && endingSector == 0) || (endingSector > 0 && k0 > endingSector) {
-			return count, nil
 		}
 	}
 	return count, nil
@@ -358,69 +364,71 @@ func (t *TableDefinition) QueryKey(keyHex string) ([][]string, error) {
 	return result, nil
 }
 
-func (t *TableDefinition) DumpParallel(startingSector int, endingSector int, limit int, dataChan chan []string) (int, error) {
-	sectorId := 0
-	count := 0
-	threadsNumber := 10
+func (t *TableDefinition) DumpParallel(startingSector int, endingSector int, limit int, dataChan chan []string) error {
+	from := 0
+	to := 255
+
+	if startingSector > 255 || endingSector > 255 {
+		return fmt.Errorf("invalid starting / ending sector")
+	}
 	if startingSector >= 0 {
-		sectorId = startingSector
-		threadsNumber = endingSector - startingSector
-		if threadsNumber <= 0 {
-			threadsNumber = 1
-		}
+		from = startingSector
+	}
+	if endingSector >= 0 {
+		to = endingSector
 	}
 
-	// Canal para señalizar cancelación
-	done := make(chan struct{})
+	threadsNumber := endingSector - startingSector
+	if threadsNumber <= 0 {
+		threadsNumber = 1
+	}
+	if threadsNumber > 32 {
+		threadsNumber = 32
+	}
+
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, threadsNumber)
+	errChan := make(chan error, 1)
 
-	// Garantizar que cerramos el canal de datos después de que todas las goroutines terminen
-	defer func() {
-		close(done) // Señalizar a todas las goroutines que deben terminar
-		wg.Wait()   // Esperar a que todas las goroutines terminen
-		close(dataChan)
-	}()
+	for k0 := from; k0 <= to; k0++ {
+		semaphore <- struct{}{}
+		wg.Add(1)
+		k0Local := k0
 
-	for k0 := sectorId; k0 < 256; k0++ {
-		// Verificar condición de parada
-		if (startingSector >= 0 && endingSector == 0 && k0 > startingSector) ||
-			(endingSector > 0 && k0 > endingSector) {
-			return count, nil
-		}
+		go func() {
+			defer func() {
+				<-semaphore
+				wg.Done()
+			}()
 
-		select {
-		case semaphore <- struct{}{}: // Intentar adquirir un slot
-			wg.Add(1)
-			k0Local := k0
+			sector := ldbLoadSector(t, []byte{byte(k0Local)})
 
-			go func() {
-				defer func() {
-					<-semaphore // Liberar el semáforo
-					wg.Done()
-				}()
-
-				sector := ldbLoadSector(t, []byte{byte(k0Local)})
-
-				// Bucles anidados con verificación de cancelación
-				for k1 := 0; k1 < 256; k1++ {
-					select {
-					case <-done:
-						return
-					default:
-						for k2 := 0; k2 < 256; k2++ {
-							for k3 := 0; k3 < 256; k3++ {
-								key := []byte{byte(k0Local), byte(k1), byte(k2), byte(k3)}
-								t.FetchRecordset(&sector, key, true, dataChan, false)
+			for k1 := 0; k1 < 256; k1++ {
+				for k2 := 0; k2 < 256; k2++ {
+					for k3 := 0; k3 < 256; k3++ {
+						key := []byte{byte(k0Local), byte(k1), byte(k2), byte(k3)}
+						if _, err := t.FetchRecordset(&sector, key, true, dataChan, false); err != nil {
+							select {
+							case errChan <- err:
+							default:
 							}
+							return
 						}
 					}
 				}
-			}()
-		case <-done:
-			return count, nil
-		}
+			}
+		}()
 	}
 
-	return count, nil
+	go func() {
+		wg.Wait()
+		close(dataChan)
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-dataChan:
+		return nil
+	}
 }
