@@ -307,3 +307,20 @@ func TestHFHproduceResponse(t *testing.T) {
 	t.Log("response:", results)
 
 }
+
+func TestHFHScan(t *testing.T) {
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	if err != nil {
+		t.Errorf("unexpected error during initialization %v", err)
+		return
+	}
+
+	node := test.Monorepo_root
+	response, err := scanner.Scan(node)
+	if err != nil {
+		t.Errorf("scannning fails %v", err)
+		return
+	}
+
+	t.Log(response)
+}

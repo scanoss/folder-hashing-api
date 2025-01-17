@@ -26,6 +26,7 @@ import (
 	common "github.com/scanoss/papi/api/commonv2"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	myconfig "scanoss.com/hfh-api/pkg/config"
+	u "scanoss.com/hfh-api/pkg/usecase"
 )
 
 type hfhServer struct {
@@ -56,10 +57,24 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	}
 	// TODO add use case to run folder scanning
 	s.Infof("Processing folder details: %+v", request)
+
+	scanner, err := u.NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	if err != nil {
+		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}
+		return &pb.HFHResponse{Status: &statusResp}, err
+	}
+
+	results, err := scanner.Scan(request.Root)
+	if err != nil {
+		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}
+		return &pb.HFHResponse{Status: &statusResp}, err
+	}
+
 	telemetryHfhScanRequestTime(ctx, d.config, requestStartTime)
 	// Set the status and respond with the data
 	statusResp := common.StatusResponse{Status: common.StatusCode_SUCCESS, Message: "Success"}
-	return &pb.HFHResponse{Status: &statusResp}, nil
+
+	return &pb.HFHResponse{Results: results, Status: &statusResp}, nil
 }
 
 // telemetryHfhScanRequestTime records the versions request time to telemetry.

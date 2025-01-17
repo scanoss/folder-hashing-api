@@ -74,8 +74,29 @@ func NewHFFHScan(threshold float32, bestMatch bool, ldbPath string, kbName strin
 		resultsMap:      make(map[string]HFHscanResult)}, nil
 }
 
-func (s *HFHscan) Scan(projectTree *pb.HFHRequest_Children) error {
-	return nil
+func (s *HFHscan) Scan(projectTree *pb.HFHRequest_Children) ([]*pb.HFHResponse_Result, error) {
+
+	err := s.scanTreeFirstStage(projectTree)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
+	}
+	err = s.scanTreeSecondStage(projectTree)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error during scan process second stage %v", err)
+	}
+
+	err = s.scanTreeThirdStage(projectTree)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error during scan process third stage %v", err)
+	}
+
+	var results []*pb.HFHResponse_Result
+	err = s.produceResults(projectTree, &results)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error producing the response %v", err)
+	}
+
+	return results, nil
 }
 
 func hammingDistance(x, y uint64) int {
