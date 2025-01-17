@@ -37,7 +37,7 @@ func TestHFHscanHash(t *testing.T) {
 }
 
 func TestHFHscanFirstStage(t *testing.T) {
-	scanner, err := NewHFFHScan(24, false, "/data/ldb/", "hfh_kb")
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
 	if err != nil {
 		t.Errorf("unexpected error during initialization %v", err)
 	}
@@ -72,7 +72,7 @@ func TestHFHscanFirstStage(t *testing.T) {
 }
 
 func TestHFHscanTreeFirstStage(t *testing.T) {
-	scanner, err := NewHFFHScan(70, false, "/data/ldb/", "hfh_kb")
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
 	if err != nil {
 		t.Errorf("unexpected error during initialization %v", err)
 		return
@@ -149,7 +149,7 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 }
 
 func TestHFHscanSecondStage(t *testing.T) {
-	scanner, err := NewHFFHScan(24, false, "/data/ldb/", "hfh_kb")
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
 	if err != nil {
 		t.Errorf("unexpected error during initialization %v", err)
 	}
@@ -181,7 +181,7 @@ func TestHFHscanSecondStage(t *testing.T) {
 }
 
 func TestHFHscanTreeSecondStage(t *testing.T) {
-	scanner, err := NewHFFHScan(70, false, "/data/ldb/", "hfh_kb")
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
 	if err != nil {
 		t.Errorf("unexpected error during initialization %v", err)
 		return
@@ -250,4 +250,60 @@ func TestHFHscanTreeSecondStage(t *testing.T) {
 	}
 
 	t.Log("third stage results:", scanner.resultsMap)
+	var results []*pb.HFHResponse_Result
+	scanner.produceResults(node, &results)
+	t.Log("response:", results)
+}
+
+func TestHFHproduceResponse(t *testing.T) {
+
+	resultsMap := map[string]HFHscanResult{
+		"/monorepo/deps/libsignal-protocol-test/java": {
+			components: []HFHscanResultItem{
+				{
+					Purl:     "pkg:github/signalapp/libsignal-protocol-java",
+					Versions: []string{"v2.3.0"},
+				},
+			},
+			stage:       1,
+			probability: 83.33333,
+		},
+		"/monorepo/deps/other": {
+			components: []HFHscanResultItem{
+				{
+					Purl:     "pkg:github/recastnavigation/recastnavigation",
+					Versions: []string{"v1.6.0"},
+				},
+			},
+			stage:       1,
+			probability: 100,
+		},
+		"/monorepo/other/CSerial-0.3_test": {
+			components: []HFHscanResultItem{
+				{
+					Purl:     "pkg:github/rm5248/cserial",
+					Versions: []string{"v0.3", "7b5cbd5"},
+				},
+			},
+			stage:       0,
+			probability: 50,
+		},
+		"/monorepo": {
+			components:  []HFHscanResultItem{},
+			stage:       2,
+			probability: 66.666664,
+		},
+	}
+
+	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	if err != nil {
+		t.Errorf("unexpected error during initialization %v", err)
+		return
+	}
+	scanner.resultsMap = resultsMap
+	node := test.Monorepo_root
+	var results []*pb.HFHResponse_Result
+	scanner.produceResults(node, &results)
+	t.Log("response:", results)
+
 }

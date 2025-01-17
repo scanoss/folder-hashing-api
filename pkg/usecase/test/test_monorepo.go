@@ -1,6 +1,8 @@
 package test
 
-import pb "github.com/scanoss/papi/api/scanningv2"
+import (
+	pb "github.com/scanoss/papi/api/scanningv2"
+)
 
 var Monorepo_root = &pb.HFHRequest_Children{
 	PathId:         "/monorepo",
