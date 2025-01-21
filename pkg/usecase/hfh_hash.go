@@ -1,7 +1,6 @@
 package usecase
 
 import (
-	"log"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -24,7 +23,7 @@ func headCalc(simHash uint64) byte {
 	return byte(sum >> 4 & 0xFF)
 }
 
-func HashCalc(node *DirectoryNode) HFHhash {
+func HashCalc(node *directoryNode) HFHhash {
 	processedHashes := make(map[string]bool)
 	var fileHashesList [][]byte
 	var selectedNames []string
@@ -47,7 +46,6 @@ func HashCalc(node *DirectoryNode) HFHhash {
 	FilesNameSimhash := simhash.Simhash(simhash.NewWordFeatureSet([]byte(concatenatedNames)))
 	/* Calc Files content simhash */
 	FilesContentSimhash := simhash.Fingerprint(simhash.VectorizeBytes(fileHashesList))
-	log.Printf("%s contents simhash: %x\n", node.Path, FilesContentSimhash)
 
 	/* Calc hash head to group close hashes by sector */
 	head := headCalc(FilesNameSimhash)
@@ -55,7 +53,6 @@ func HashCalc(node *DirectoryNode) HFHhash {
 
 	/*Overwrite the MS byte with the head to keep the hash size total */
 	FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
-	log.Printf("%s: names simhash: %x\n", node.Path, FilesNameSimhash)
 
 	return HFHhash{
 		NameHash:    FilesNameSimhash,

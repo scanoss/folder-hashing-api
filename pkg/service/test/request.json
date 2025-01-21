@@ -1,0 +1,165 @@
+{
+  "best_match": true,
+  "threshold": 60,
+  "root": {
+    "path_id": "/monorepo",
+    "sim_hash_names": "81517c5492aa0fc8",
+    "sim_hash_content": "f98fc3f728a8b4d4",
+    "children": [
+      {
+        "path_id": "/monorepo/deps",
+        "sim_hash_names": "7e515d5592ae0bc8",
+        "sim_hash_content": "d98fc3f520e83444",
+        "children": [
+          {
+            "path_id": "/monorepo/deps/libsignal-protocol-test",
+            "sim_hash_names": "7253dc5d9e794d5a",
+            "sim_hash_content": "fbbbcaf62ae01ce0",
+            "children": [
+              {
+                "path_id": "/monorepo/deps/libsignal-protocol-test/android",
+                "sim_hash_names": "7a94747a58c053e6",
+                "sim_hash_content": "f3c2fe0f9fdfff7c"
+              },
+              {
+                "path_id": "/monorepo/deps/libsignal-protocol-test/java",
+                "sim_hash_names": "8b53dc6dde6b4b52",
+                "sim_hash_content": "fbabc3f6a8f03ce0"
+              },
+              {
+                "path_id": "/monorepo/deps/libsignal-protocol-test/protobuf",
+                "sim_hash_names": "cabf3fcbd1fffff9",
+                "sim_hash_content": "e83dfde7176c9eff"
+              },
+              {
+                "path_id": "/monorepo/deps/libsignal-protocol-test/tests",
+                "sim_hash_names": "7d11957bd77a3dcc",
+                "sim_hash_content": "9bda46797ac28afa"
+              }
+            ]
+          },
+          {
+            "path_id": "/monorepo/deps/other",
+            "sim_hash_names": "60f56d190b871b42",
+            "sim_hash_content": "7c3b5bd6a67a7458",
+            "children": [
+              {
+                "path_id": "/monorepo/deps/other/recastnavigation-1.6.0",
+                "sim_hash_names": "60f56d190b871b42",
+                "sim_hash_content": "7c3b5bd6a67a7458"
+              }
+            ]
+          },
+          {
+            "path_id": "/monorepo/deps/zlib-1.2.13",
+            "sim_hash_names": "841b7c7791ea27e8",
+            "sim_hash_content": "808ec3a921ada497",
+            "children": [
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/amiga",
+                "sim_hash_names": "80dfed122852b8ac",
+                "sim_hash_content": "7f4ffffff53ffef7"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/contrib",
+                "sim_hash_names": "7f1b785295ca866a",
+                "sim_hash_content": "c0cfdbe84d897497"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/examples",
+                "sim_hash_names": "b6e7b445e7cea4bf",
+                "sim_hash_content": "f69eec852175f7d1"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/msdos",
+                "sim_hash_names": "9af6ddf7b62e1eff",
+                "sim_hash_content": "a20a59710ce899c"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/nintendods",
+                "sim_hash_names": "82f56db23c448aa9",
+                "sim_hash_content": "6f830d8e90ebd5d3"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/old",
+                "sim_hash_names": "c7f4ed75bccf8eef",
+                "sim_hash_content": "911893bd20479514"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/os400",
+                "sim_hash_names": "b9fef7cfb6ef3f3d",
+                "sim_hash_content": "3ddf81f356752eb3"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/qnx",
+                "sim_hash_names": "a3aebf18efb23ebf",
+                "sim_hash_content": "9f450a908a4ac50f"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/test",
+                "sim_hash_names": "aceeb5cce72ff33d",
+                "sim_hash_content": "20e2521d626448eb"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/watcom",
+                "sim_hash_names": "93f1e79c780d60fc",
+                "sim_hash_content": "fbafff5fff1fbd7e"
+              },
+              {
+                "path_id": "/monorepo/deps/zlib-1.2.13/win32",
+                "sim_hash_names": "84ff7f27b4649ace",
+                "sim_hash_content": "9ceed789b1349654"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path_id": "/monorepo/other",
+        "sim_hash_names": "91cf9a9c892c17fe",
+        "sim_hash_content": "bba7faff6c8abfbf",
+        "children": [
+          {
+            "path_id": "/monorepo/other/CSerial-0.3_test",
+            "sim_hash_names": "99db919561663ef0",
+            "sim_hash_content": "b7c278af951aec17",
+            "children": [
+              {
+                "path_id": "/monorepo/other/CSerial-0.3_test/debian",
+                "sim_hash_names": "8ed3991d6ba20ed0",
+                "sim_hash_content": "3bcbf8efb716ee37"
+              },
+              {
+                "path_id": "/monorepo/other/CSerial-0.3_test/examples",
+                "sim_hash_names": "c1e3fdcd8fa5bfbf",
+                "sim_hash_content": "86eb0475e01d55b5"
+              }
+            ]
+          },
+          {
+            "path_id": "/monorepo/other/rapidjson-1.1.0-test",
+            "sim_hash_names": "788dae1ddd6b737f",
+            "sim_hash_content": "3937f3d66ca89ffc",
+            "children": [
+              {
+                "path_id": "/monorepo/other/rapidjson-1.1.0-test/bin",
+                "sim_hash_names": "606b1d4755a08512",
+                "sim_hash_content": "fbfdf6f7eaf9fffc"
+              },
+              {
+                "path_id": "/monorepo/other/rapidjson-1.1.0-test/docker",
+                "sim_hash_names": "75ad55386e099693",
+                "sim_hash_content": "3534a3a2871915ec"
+              },
+              {
+                "path_id": "/monorepo/other/rapidjson-1.1.0-test/include",
+                "sim_hash_names": "78b5aa1ff925737f",
+                "sim_hash_content": "bc17fbd76caa9fbf"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
