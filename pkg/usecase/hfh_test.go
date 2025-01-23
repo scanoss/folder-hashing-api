@@ -1,13 +1,40 @@
 package usecase
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
-	pb "github.com/scanoss/papi/api/scanningv2"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 
+	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
+	config "scanoss.com/hfh-api/pkg/config"
+	"scanoss.com/hfh-api/pkg/dtos"
 	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
 	test "scanoss.com/hfh-api/pkg/usecase/test"
 )
+
+func testScanInitHelper() (*HFHscan, error) {
+	err := zlog.NewSugaredDevLogger()
+	if err != nil {
+		return nil, fmt.Errorf("an error '%s' was not expected when opening a sugared logger", err)
+	}
+	defer zlog.SyncZap()
+	ctx := ctxzap.ToContext(context.Background(), zlog.L)
+	s := ctxzap.Extract(ctx).Sugar()
+
+	//load default config
+	cfg, err := config.NewServerConfig(nil)
+	if err != nil {
+		return nil, fmt.Errorf("Fatal error loading default config")
+	}
+
+	scanner, err := HFHScanInit(s, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("error during scanner initialization")
+	}
+	return scanner, nil
+}
 
 func TestHFHscanHash(t *testing.T) {
 	hfhTable, err := ldb.NewTableFromCfg("./ldb/test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"})
@@ -37,13 +64,14 @@ func TestHFHscanHash(t *testing.T) {
 }
 
 func TestHFHscanFirstStage(t *testing.T) {
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
-	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
-	}
 
 	fileNamesSimhash := "8467f50e64828bb0"
 	fileContentsSimhash := "8be1b3e7a672d96c"
+	scanner, err := testScanInitHelper()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
 	result, err := scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
 	if err != nil {
 		t.Errorf("scan failed with error: %v", err)
@@ -72,17 +100,18 @@ func TestHFHscanFirstStage(t *testing.T) {
 }
 
 func TestHFHscanTreeFirstStage(t *testing.T) {
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	scanner, err := testScanInitHelper()
 	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
+		t.Fatal(err)
 		return
 	}
+	scanner.resultsMap = make(map[string]HFHscanResult)
 
-	node := &pb.HFHRequest_Children{
+	node := &dtos.HFHScanInputChildren{
 		PathId:         "/root",
 		SimHashNames:   "9172bd3ef2ab37b0",
 		SimHashContent: "8fce1505d6bbc965",
-		Children: []*pb.HFHRequest_Children{
+		Children: []*dtos.HFHScanInputChildren{
 			{
 				PathId:         "/root/child1",
 				SimHashNames:   "d7fbe83ee4bdfefc",
@@ -100,7 +129,6 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 			},
 		},
 	}
-
 	err = scanner.scanTreeFirstStage(node)
 	if err != nil {
 		t.Errorf("unexpected error during scan process %v", err)
@@ -114,11 +142,11 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 	//clean the result map
 	scanner.resultsMap = make(map[string]HFHscanResult)
 
-	node = &pb.HFHRequest_Children{
+	node = &dtos.HFHScanInputChildren{
 		PathId:         "/root",
 		SimHashNames:   "81517c5492aa0fc8",
 		SimHashContent: "f98fc3f728a8b4d4",
-		Children: []*pb.HFHRequest_Children{
+		Children: []*dtos.HFHScanInputChildren{
 			{
 				PathId:         "/root/child1",
 				SimHashNames:   "788dae1ddd6b737f",
@@ -149,9 +177,10 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 }
 
 func TestHFHscanSecondStage(t *testing.T) {
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	scanner, err := testScanInitHelper()
 	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
+		t.Fatal(err)
+		return
 	}
 	fileContentsSimhash := "b2ffa1047e0c64a3"
 	result, err := scanner.scanSecondStage(fileContentsSimhash)
@@ -181,17 +210,18 @@ func TestHFHscanSecondStage(t *testing.T) {
 }
 
 func TestHFHscanTreeSecondStage(t *testing.T) {
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	scanner, err := testScanInitHelper()
 	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
+		t.Fatal(err)
 		return
 	}
+	scanner.resultsMap = make(map[string]HFHscanResult)
 
-	node := &pb.HFHRequest_Children{
+	node := &dtos.HFHScanInputChildren{
 		PathId:         "/root",
 		SimHashNames:   "9172bd3ef2ab37b0",
 		SimHashContent: "8fce1505d6bbc965",
-		Children: []*pb.HFHRequest_Children{
+		Children: []*dtos.HFHScanInputChildren{
 			{
 				PathId:         "/root/child1",
 				SimHashNames:   "d7fbe83ee4bdfefc",
@@ -250,9 +280,9 @@ func TestHFHscanTreeSecondStage(t *testing.T) {
 	}
 
 	t.Log("third stage results:", scanner.resultsMap)
-	var results []*pb.HFHResponse_Result
-	scanner.produceResults(node, &results)
-	t.Log("response:", results)
+	var results dtos.HFHResultOutput
+	scanner.produceResults(node, &results.Results)
+	t.Log("response:", results.Results)
 }
 
 func TestHFHproduceResponse(t *testing.T) {
@@ -295,28 +325,27 @@ func TestHFHproduceResponse(t *testing.T) {
 		},
 	}
 
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	scanner, err := testScanInitHelper()
 	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
+		t.Fatal(err)
 		return
 	}
 	scanner.resultsMap = resultsMap
 	node := test.Monorepo_root
-	var results []*pb.HFHResponse_Result
-	scanner.produceResults(node, &results)
+	var results dtos.HFHResultOutput
+	scanner.produceResults(node, &results.Results)
 	t.Log("response:", results)
 
 }
 
 func TestHFHScan(t *testing.T) {
-	scanner, err := NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	scanner, err := testScanInitHelper()
 	if err != nil {
-		t.Errorf("unexpected error during initialization %v", err)
+		t.Fatal(err)
 		return
 	}
-
-	node := test.Monorepo_root
-	response, err := scanner.Scan(node)
+	scanInput := dtos.HFHscanInput{Threshold: 0.50, BestMatch: false, Root: test.Monorepo_root}
+	response, err := scanner.Scan(&scanInput)
 	if err != nil {
 		t.Errorf("scannning fails %v", err)
 		return

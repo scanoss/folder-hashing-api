@@ -59,9 +59,9 @@ func loadPath(path string) *directoryNode {
 
 	for f := range files {
 		a := filter.EvaluateItem(files[f])
-		if !a.Actions.StoreInMZ {
+		/*	if !a.Actions.StoreInMZ {
 			continue
-		}
+		}*/
 		//log.Printf("%x,%s\n", a.Key, files[f].Name)
 
 		dir := filepath.Dir(a.Path)

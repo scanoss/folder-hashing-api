@@ -56,6 +56,17 @@ type ServerConfig struct {
 		BlockByDefault bool   `env:"COMP_BLOCK_BY_DEFAULT"` // Block request by default if they are not in the allow list
 		TrustProxy     bool   `env:"COMP_TRUST_PROXY"`      // Trust the interim proxy or not (causes the source IP to be validated instead of the proxy)
 	}
+	Ldb struct {
+		Path   string `env:"LDB_PATH"` // LDB working path
+		KbName string `env:"LDB_KB"`   // LDB KB name (must be inside the working path)
+	}
+	Hfh struct {
+		Dmax      int     `env:"HFH_DMIN"`       // HFH maximum distanse to consider a candidate
+		Th1       float32 `env:"HFH_TH1"`        // HFH first stafge analysis threshold
+		Th2       float32 `env:"HFH_TH2"`        // HFH second stafge analysis threshold
+		Th3       float32 `env:"HFH_TH3"`        // HFH third stafge analysis threshold
+		SectorTol int     `env:"HFH_SECTOR_TOL"` // HFH maximum distanse to consider a candidate
+	}
 }
 
 // NewServerConfig loads all config options and return a struct for use.
@@ -86,4 +97,11 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Logging.DynamicPort = "localhost:60061"
 	cfg.Telemetry.Enabled = false
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
+	cfg.Ldb.Path = "/var/lib/ldb"
+	cfg.Ldb.KbName = "hfh_kb"
+	cfg.Hfh.Dmax = 30
+	cfg.Hfh.SectorTol = 8
+	cfg.Hfh.Th1 = 80
+	cfg.Hfh.Th2 = 65
+	cfg.Hfh.Th3 = 51
 }

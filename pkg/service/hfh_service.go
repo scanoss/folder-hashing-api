@@ -20,6 +20,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -31,12 +33,19 @@ import (
 
 type hfhServer struct {
 	pb.ScanningServer
-	config *myconfig.ServerConfig
+	config  *myconfig.ServerConfig
+	scanner *u.HFHscan
 }
 
-func NewFolderHashingServer(config *myconfig.ServerConfig) pb.ScanningServer {
+func NewFolderHashingServer(config *myconfig.ServerConfig, ctx context.Context) pb.ScanningServer {
 	setupMetrics()
-	return &hfhServer{config: config}
+	s := ctxzap.Extract(ctx).Sugar()
+	scanner, err := u.HFHScanInit(s, config)
+	if err != nil {
+		fmt.Printf("HFH ldb module critial error %v", err)
+		os.Exit(1)
+	}
+	return &hfhServer{config: config, scanner: scanner}
 }
 
 // Echo sends back the same message received.
@@ -57,24 +66,25 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	}
 	// TODO add use case to run folder scanning
 	s.Infof("Processing folder details: %+v", request)
-
-	scanner, err := u.NewHFFHScan(1, false, "/data/ldb/", "hfh_kb")
+	dtoRequest, err := convertHFHscanInput(s, request)
+	if err != nil {
+		return nil, fmt.Errorf("error processing request")
+	}
+	dtoResults, err := d.scanner.Scan(&dtoRequest)
 	if err != nil {
 		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}
 		return &pb.HFHResponse{Status: &statusResp}, err
 	}
-
-	results, err := scanner.Scan(request.Root)
+	results, err := convertHFHscanOutput(s, dtoResults)
 	if err != nil {
-		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}
-		return &pb.HFHResponse{Status: &statusResp}, err
+		return nil, fmt.Errorf("error processing response")
 	}
 
 	telemetryHfhScanRequestTime(ctx, d.config, requestStartTime)
 	// Set the status and respond with the data
-	statusResp := common.StatusResponse{Status: common.StatusCode_SUCCESS, Message: "Success"}
+	results.Status = &common.StatusResponse{Status: common.StatusCode_SUCCESS, Message: "Success"}
 
-	return &pb.HFHResponse{Results: results, Status: &statusResp}, nil
+	return results, nil
 }
 
 // telemetryHfhScanRequestTime records the versions request time to telemetry.

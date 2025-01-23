@@ -1,8 +1,14 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
+
+	pb "github.com/scanoss/papi/api/scanningv2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
+	"scanoss.com/hfh-api/pkg/dtos"
 )
 
 // Structure for storing OTEL metrics.
@@ -16,4 +22,33 @@ var oltpMetrics = metricsCounters{}
 func setupMetrics() {
 	meter := otel.Meter("scanoss.com/hfh-api")
 	oltpMetrics.hfhScanHistogram, _ = meter.Int64Histogram("hfh.scan.req_time", metric.WithDescription("The time taken to run a hfh scan request (ms)"))
+}
+
+func convertHFHscanInput(s *zap.SugaredLogger, request *pb.HFHRequest) (dtos.HFHscanInput, error) {
+	data, err := json.Marshal(request)
+	if err != nil {
+		s.Errorf("Problem marshalling component request input: %v", err)
+		return dtos.HFHscanInput{}, errors.New("problem marshalling component input")
+	}
+	dtoRequest, err := dtos.ParseHFHRequest(s, data)
+	if err != nil {
+		s.Errorf("Problem parsing component request input: %v", err)
+		return dtos.HFHscanInput{}, errors.New("problem parsing component input")
+	}
+	return dtoRequest, nil
+}
+
+func convertHFHscanOutput(s *zap.SugaredLogger, output dtos.HFHResultOutput) (*pb.HFHResponse, error) {
+	data, err := json.Marshal(output)
+	if err != nil {
+		s.Errorf("Problem marshalling component request output: %v", err)
+		return &pb.HFHResponse{}, errors.New("problem marshalling component output")
+	}
+	var compResp pb.HFHResponse
+	err = json.Unmarshal(data, &compResp)
+	if err != nil {
+		s.Errorf("Problem unmarshalling component request output: %v", err)
+		return &pb.HFHResponse{}, errors.New("problem unmarshalling component output")
+	}
+	return &compResp, nil
 }

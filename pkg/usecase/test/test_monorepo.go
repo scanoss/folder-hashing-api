@@ -1,33 +1,59 @@
 package test
 
 import (
-	pb "github.com/scanoss/papi/api/scanningv2"
+	"scanoss.com/hfh-api/pkg/dtos"
 )
 
-var Monorepo_root = &pb.HFHRequest_Children{
+var Monorepo_root = &dtos.HFHScanInputChildren{
 	PathId:         "/monorepo",
-	SimHashNames:   "81517c5492aa0fc8",
-	SimHashContent: "f98fc3f728a8b4d4",
-	Children: []*pb.HFHRequest_Children{
+	SimHashNames:   "659d18058f6f0fca",
+	SimHashContent: "da8ff2b524e23c84",
+	Children: []*dtos.HFHScanInputChildren{
 		{
 			PathId:         "/monorepo/deps",
-			SimHashNames:   "7e515d5592ae0bc8",
-			SimHashContent: "d98fc3f520e83444",
-			Children: []*pb.HFHRequest_Children{
+			SimHashNames:   "7453d94582af2548",
+			SimHashContent: "c88cc2f420f43444",
+			Children: []*dtos.HFHScanInputChildren{
 				{
 					PathId:         "/monorepo/deps/libsignal-protocol-test",
-					SimHashNames:   "7253dc5d9e794d5a",
-					SimHashContent: "fbbbcaf62ae01ce0",
-					Children: []*pb.HFHRequest_Children{
+					SimHashNames:   "7a53cd7c9e79495a",
+					SimHashContent: "dbabcae5aae83ce0",
+					Children: []*dtos.HFHScanInputChildren{
 						{
 							PathId:         "/monorepo/deps/libsignal-protocol-test/android",
-							SimHashNames:   "7a94747a58c053e6",
-							SimHashContent: "f3c2fe0f9fdfff7c",
+							SimHashNames:   "66c51a1814c76dc5",
+							SimHashContent: "ffeafe299f5ff939",
+							Children: []*dtos.HFHScanInputChildren{
+								{
+									PathId:         "/monorepo/deps/libsignal-protocol-test/android/src",
+									SimHashNames:   "a8d9f77f1cc577f5",
+									SimHashContent: "e380fe089f5df130",
+								},
+							},
+						},
+						{
+							PathId:         "/monorepo/deps/libsignal-protocol-test/gradle",
+							SimHashNames:   "9753eac8a64833b2",
+							SimHashContent: "c7d9ffbffbffbf7d",
+							Children: []*dtos.HFHScanInputChildren{
+								{
+									PathId:         "/monorepo/deps/libsignal-protocol-test/gradle/wrapper",
+									SimHashNames:   "9753eac8a64833b2",
+									SimHashContent: "c7d9ffbffbffbf7d",
+								},
+							},
 						},
 						{
 							PathId:         "/monorepo/deps/libsignal-protocol-test/java",
-							SimHashNames:   "8b53dc6dde6b4b52",
-							SimHashContent: "fbabc3f6a8f03ce0",
+							SimHashNames:   "8653d84ddc6b4952",
+							SimHashContent: "fbafcbf6aaf87ce4",
+							Children: []*dtos.HFHScanInputChildren{
+								{
+									PathId:         "/monorepo/deps/libsignal-protocol-test/java/src",
+									SimHashNames:   "8b53dc6dde6b4b52",
+									SimHashContent: "fbabc3f6a8f03ce0",
+								},
+							},
 						},
 						{
 							PathId:         "/monorepo/deps/libsignal-protocol-test/protobuf",
@@ -36,28 +62,82 @@ var Monorepo_root = &pb.HFHRequest_Children{
 						},
 						{
 							PathId:         "/monorepo/deps/libsignal-protocol-test/tests",
-							SimHashNames:   "7d11957bd77a3dcc",
-							SimHashContent: "9bda46797ac28afa",
+							SimHashNames:   "8831917b976abdcc",
+							SimHashContent: "1b5a42496ac08aea",
+							Children: []*dtos.HFHScanInputChildren{
+								{
+									PathId:         "/monorepo/deps/libsignal-protocol-test/tests/src",
+									SimHashNames:   "7d11957bd77a3dcc",
+									SimHashContent: "9bda46797ac28afa",
+								},
+							},
 						},
 					},
 				},
 				{
 					PathId:         "/monorepo/deps/other",
-					SimHashNames:   "60f56d190b871b42",
-					SimHashContent: "7c3b5bd6a67a7458",
-					Children: []*pb.HFHRequest_Children{
+					SimHashNames:   "5f3dcd05ab272b52",
+					SimHashContent: "643a57d3b6f27064",
+					Children: []*dtos.HFHScanInputChildren{
 						{
 							PathId:         "/monorepo/deps/other/recastnavigation-1.6.0",
-							SimHashNames:   "60f56d190b871b42",
-							SimHashContent: "7c3b5bd6a67a7458",
+							SimHashNames:   "5f3dcd05ab272b52",
+							SimHashContent: "643a57d3b6f27064",
+							Children: []*dtos.HFHScanInputChildren{
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/DebugUtils",
+									SimHashNames:   "8d73dfec7e9fb727",
+									SimHashContent: "4ab27756da7bec6c",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/Detour",
+									SimHashNames:   "9be5af29fa0f73eb",
+									SimHashContent: "4fabf920800f6dc",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/DetourCrowd",
+									SimHashNames:   "74243ddda8de2b73",
+									SimHashContent: "2911da93a57c7240",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/DetourTileCache",
+									SimHashNames:   "b76adee84ecaf4bf",
+									SimHashContent: "8b4b99f0a9a4c7ed",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/Docs",
+									SimHashNames:   "775c095780b58a42",
+									SimHashContent: "645ad6b1beb7f129",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/Recast",
+									SimHashNames:   "83adaf31ef486e4c",
+									SimHashContent: "5b746920d8ff3538",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/RecastDemo",
+									SimHashNames:   "c39cfe996bb7ffce",
+									SimHashContent: "f5b312feb65b5044",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/Tests",
+									SimHashNames:   "a2e75b78ebcbef39",
+									SimHashContent: "e401292794923095",
+								},
+								{
+									PathId:         "/monorepo/deps/other/recastnavigation-1.6.0/.github",
+									SimHashNames:   "ffffffffffffffff",
+									SimHashContent: "ffffffffffffffff",
+								},
+							},
 						},
 					},
 				},
 				{
 					PathId:         "/monorepo/deps/zlib-1.2.13",
-					SimHashNames:   "841b7c7791ea27e8",
-					SimHashContent: "808ec3a921ada497",
-					Children: []*pb.HFHRequest_Children{
+					SimHashNames:   "9592d05593ca25e8",
+					SimHashContent: "808cd3f839ad8497",
+					Children: []*dtos.HFHScanInputChildren{
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/amiga",
 							SimHashNames:   "80dfed122852b8ac",
@@ -65,13 +145,18 @@ var Monorepo_root = &pb.HFHRequest_Children{
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/contrib",
-							SimHashNames:   "7f1b785295ca866a",
-							SimHashContent: "c0cfdbe84d897497",
+							SimHashNames:   "9b9e585395ca84e8",
+							SimHashContent: "c0cdd2e84d892087",
+						},
+						{
+							PathId:         "/monorepo/deps/zlib-1.2.13/doc",
+							SimHashNames:   "c5ea999de7a197eb",
+							SimHashContent: "e6b02ffdff9f77eb",
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/examples",
-							SimHashNames:   "b6e7b445e7cea4bf",
-							SimHashContent: "f69eec852175f7d1",
+							SimHashNames:   "c2e7b557ffaef5bf",
+							SimHashContent: "369ecc852175b7d0",
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/msdos",
@@ -80,18 +165,18 @@ var Monorepo_root = &pb.HFHRequest_Children{
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/nintendods",
-							SimHashNames:   "82f56db23c448aa9",
-							SimHashContent: "6f830d8e90ebd5d3",
+							SimHashNames:   "84ac2dfa5c886133",
+							SimHashContent: "ffa7bfbfbafbffd7",
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/old",
-							SimHashNames:   "c7f4ed75bccf8eef",
-							SimHashContent: "911893bd20479514",
+							SimHashNames:   "b472edf0ba96ae9d",
+							SimHashContent: "809892bde0c79704",
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/os400",
-							SimHashNames:   "b9fef7cfb6ef3f3d",
-							SimHashContent: "3ddf81f356752eb3",
+							SimHashNames:   "a2d8e3986ba8a037",
+							SimHashContent: "fddfd3f3577f6ef3",
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/qnx",
@@ -110,8 +195,8 @@ var Monorepo_root = &pb.HFHRequest_Children{
 						},
 						{
 							PathId:         "/monorepo/deps/zlib-1.2.13/win32",
-							SimHashNames:   "84ff7f27b4649ace",
-							SimHashContent: "9ceed789b1349654",
+							SimHashNames:   "99b6669cb47637de",
+							SimHashContent: "bcffff89f9329fde",
 						},
 					},
 				},
@@ -119,35 +204,40 @@ var Monorepo_root = &pb.HFHRequest_Children{
 		},
 		{
 			PathId:         "/monorepo/other",
-			SimHashNames:   "91cf9a9c892c17fe",
-			SimHashContent: "bba7faff6c8abfbf",
-			Children: []*pb.HFHRequest_Children{
+			SimHashNames:   "59bc10814f6d0e86",
+			SimHashContent: "9a837baf7c427aae",
+			Children: []*dtos.HFHScanInputChildren{
 				{
 					PathId:         "/monorepo/other/CSerial-0.3_test",
-					SimHashNames:   "99db919561663ef0",
-					SimHashContent: "b7c278af951aec17",
-					Children: []*pb.HFHRequest_Children{
+					SimHashNames:   "a37299a5ebe30eba",
+					SimHashContent: "b7c378ab851bec97",
+					Children: []*dtos.HFHScanInputChildren{
 						{
 							PathId:         "/monorepo/other/CSerial-0.3_test/debian",
-							SimHashNames:   "8ed3991d6ba20ed0",
-							SimHashContent: "3bcbf8efb716ee37",
+							SimHashNames:   "8cc39b1d6b228ed2",
+							SimHashContent: "23c8e8eb1412ce17",
 						},
 						{
 							PathId:         "/monorepo/other/CSerial-0.3_test/examples",
-							SimHashNames:   "c1e3fdcd8fa5bfbf",
-							SimHashContent: "86eb0475e01d55b5",
+							SimHashNames:   "66433be9e6087739",
+							SimHashContent: "f7efdc75f21f77ff",
 						},
 					},
 				},
 				{
 					PathId:         "/monorepo/other/rapidjson-1.1.0-test",
-					SimHashNames:   "788dae1ddd6b737f",
-					SimHashContent: "3937f3d66ca89ffc",
-					Children: []*pb.HFHRequest_Children{
+					SimHashNames:   "52bd16810f6d0e84",
+					SimHashContent: "9ab33b8d7ce25aae",
+					Children: []*dtos.HFHScanInputChildren{
+						{
+							PathId:         "/monorepo/other/rapidjson-1.1.0-test/CMakeModules",
+							SimHashNames:   "d9fe9bf3ddd7bfdf",
+							SimHashContent: "fa4253ba414ada99",
+						},
 						{
 							PathId:         "/monorepo/other/rapidjson-1.1.0-test/bin",
-							SimHashNames:   "606b1d4755a08512",
-							SimHashContent: "fbfdf6f7eaf9fffc",
+							SimHashNames:   "59bd10814f6d0e84",
+							SimHashContent: "9aab3b897ce2688e",
 						},
 						{
 							PathId:         "/monorepo/other/rapidjson-1.1.0-test/docker",
