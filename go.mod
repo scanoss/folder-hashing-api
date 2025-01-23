@@ -6,6 +6,7 @@ toolchain go1.22.6
 
 require (
 	github.com/golobby/config/v3 v3.4.2
+	github.com/google/go-cmp v0.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/mfonda/simhash v0.0.0-20151007195837-79f94a1100d6
 	github.com/scanoss/go-grpc-helper v0.8.0
@@ -13,6 +14,7 @@ require (
 	github.com/scanoss/zap-logging-helper v0.3.2
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/metric v1.33.0
+	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.31.0
 	google.golang.org/grpc v1.69.2
 )
@@ -44,7 +46,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect

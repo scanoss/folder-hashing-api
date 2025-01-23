@@ -72,6 +72,7 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	}
 	dtoResults, err := d.scanner.Scan(&dtoRequest)
 	if err != nil {
+		s.Errorf("error during hfh scanning: %v", err)
 		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}
 		return &pb.HFHResponse{Status: &statusResp}, err
 	}
