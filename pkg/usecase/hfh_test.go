@@ -344,12 +344,19 @@ func TestHFHScan(t *testing.T) {
 		t.Fatal(err)
 		return
 	}
-	scanInput := dtos.HFHscanInput{Threshold: 0.50, BestMatch: false, Root: test.Monorepo_root}
+	scanInput := dtos.HFHscanInput{Threshold: 1, BestMatch: false, Root: test.Monorepo_root}
 	response, err := scanner.Scan(&scanInput)
 	if err != nil {
 		t.Errorf("scannning fails %v", err)
 		return
 	}
+	for _, r := range response.Results {
+		scanner.s.Debugf("<<<%s:>>>", r.PathId)
+		for _, c := range r.Components {
+			scanner.s.Debugf("prob: %.1f - %s", c.Confidence, c.Purl)
+		}
+	}
 
-	t.Log(response)
+	t.Errorf("test enda")
+
 }

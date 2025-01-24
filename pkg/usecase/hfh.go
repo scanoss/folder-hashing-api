@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 
+	"time"
+
 	"go.uber.org/zap"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
@@ -28,8 +30,10 @@ type HFHscan struct {
 }
 
 type HFHscanResultItem struct {
-	Purl     string
-	Versions []string
+	Purl       string
+	Versions   []string
+	Confidence float32
+	Date       time.Time
 }
 
 type HFHscanResult struct {
@@ -209,7 +213,7 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultItem {
 	uniquePurlVersions := make(map[string]bool)
 	purlVersionMap := make(map[string][]string)
-
+	purlReleaseDate := make(map[string]time.Time)
 	for _, urlKey := range urls {
 		urls, err := table.QueryKey(urlKey)
 		if err != nil {
@@ -220,12 +224,22 @@ func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultIte
 			purl := url[6]
 			//extract the version
 			version := url[3]
+			//exctract the release date
+			date, err := time.Parse("2006-01-02", url[4])
+			if err != nil {
+				fmt.Printf("error parsing date: %s", err)
+				continue
+			}
 			//use purl+version to track unique components
 			if _, exist := uniquePurlVersions[purl+version]; exist {
 				continue
 			}
 			uniquePurlVersions[purl+version] = true
 			purlVersionMap[purl] = append(purlVersionMap[purl], version)
+			existingDate, exists := purlReleaseDate[purl]
+			if !exists || date.Before(existingDate) {
+				purlReleaseDate[purl] = date
+			}
 		}
 	}
 	components := make([]HFHscanResultItem, len(purlVersionMap))
@@ -233,8 +247,14 @@ func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultIte
 	for purl := range purlVersionMap {
 		components[i].Purl = purl
 		components[i].Versions = purlVersionMap[purl]
+		components[i].Confidence = 100
+		components[i].Date = purlReleaseDate[purl]
 		i++
 	}
+	//sort by date
+	sort.Slice(components, func(i, j int) bool {
+		return components[i].Date.Before(components[j].Date)
+	})
 	return components
 }
 
@@ -367,6 +387,10 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 	if len(components) == 0 {
 		s.s.Debugf("no matched components for secHash %x", hash)
 	}
+	/*if len(components) > 1000 {
+		s.s.Debugf("Ignore too popular hash, set prob to 0")
+		probability = 0
+	}*/
 
 	return &HFHscanResult{components: components, probability: probability, stage: 2}, nil
 }
@@ -374,7 +398,7 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 
 	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability > s.thStage2 {
-		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %d/%d", s.resultsMap[node.PathId].probability, s.thStage2)
+		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].probability, s.thStage2)
 		return nil
 	}
 
@@ -382,7 +406,7 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 	if err != nil {
 		return err
 	}
-	if result.probability >= s.thStage2 && result.components != nil {
+	if result.probability >= s.thStage2 && len(result.components) > 0 {
 		s.resultsMap[node.PathId] = *result
 	}
 
@@ -401,15 +425,16 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	}
 	// If the matching probability is major than the TH we don't need to continue
 	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability >= s.thStage3 {
-		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %d/%d", s.resultsMap[node.PathId].probability, s.thStage3)
+		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].probability, s.thStage3)
 		return nil
 	}
 
 	// Go to the leaves first
 	for _, child := range node.Children {
+		s.s.Debugf("looking for leaves: %s -> %s", node.PathId, child.PathId)
 		s.scanTreeThirdStage(child)
 	}
-
+	childPurlDate := make(map[string]time.Time)
 	childPurlHits := make(map[string]int)
 	childPurlProb := make(map[string]float32)
 	allVersions := make(map[string]map[string]bool)
@@ -426,7 +451,13 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 		for _, p := range s.resultsMap[child.PathId].components {
 			childWithHits++
 			childPurlHits[p.Purl]++
-			if s.resultsMap[child.PathId].stage > 0 {
+			existingDate, exists := childPurlDate[p.Purl]
+			if !exists || p.Date.Before(existingDate) {
+				childPurlDate[p.Purl] = p.Date
+			}
+			if s.resultsMap[child.PathId].stage == 3 {
+				childPurlProb[p.Purl] += p.Confidence * (1 / float32(len(node.Children)))
+			} else if s.resultsMap[child.PathId].stage > 0 {
 				childPurlProb[p.Purl] += s.resultsMap[child.PathId].probability * (1 / float32(len(node.Children)))
 			} else {
 				childPurlProb[p.Purl] = -1
@@ -445,44 +476,50 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 		return nil
 	}
 
-	sortedPurls := make([]string, 0, len(childPurlProb))
-	for purl := range childPurlProb {
+	sortedPurls := make([]string, 0, len(childPurlHits))
+	for purl := range childPurlHits {
 		sortedPurls = append(sortedPurls, purl)
 	}
 
 	// Ordenar el slice de purls basado en sus probabilidades en orden descendente
 	sort.Slice(sortedPurls, func(i, j int) bool {
-		return childPurlProb[sortedPurls[i]] > childPurlProb[sortedPurls[j]]
+		if childPurlHits[sortedPurls[i]] != childPurlHits[sortedPurls[j]] {
+			return childPurlHits[sortedPurls[i]] > childPurlHits[sortedPurls[j]]
+		} else {
+			return childPurlDate[sortedPurls[i]].Before(childPurlDate[sortedPurls[j]])
+		}
 	})
+
+	s.s.Debugf("Sorted purls for %s: %s", node.PathId, sortedPurls[:])
 
 	// Update the now results
 	if len(sortedPurls) > 0 {
 		eqprob := childPurlProb[sortedPurls[0]] // * float32(childPurlHits[sortedPurls[0]]) / float32(childWithHits) * (1 / float32(len(node.Children)))
-		if eqprob > s.thStage3 {
-			//s.resultsMap[node.PathId].components
-			var newCOmponents []HFHscanResultItem
-			for _, purl := range sortedPurls {
-				var versions []string
-				for v := range allVersions {
-					versions = append(versions, v)
-				}
-				newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions}
-				newCOmponents = append(newCOmponents, newCOmponent)
+		//if eqprob > s.thStage3 {
+		//s.resultsMap[node.PathId].components
+		var newCOmponents []HFHscanResultItem
+		for _, purl := range sortedPurls {
+			var versions []string
+			for v := range allVersions {
+				versions = append(versions, v)
 			}
-			nodeResults := s.resultsMap[node.PathId]
-			nodeResults.components = newCOmponents
-			nodeResults.probability = eqprob
-
-			if s.resultsMap[node.PathId].probability > 100.0 {
-				s.s.Debugf("Warning prob %f bigger than 100.0%%\n", s.resultsMap[node.PathId].probability)
-				nodeResults.probability = 100.0
-			}
-			nodeResults.stage = 3
-			s.resultsMap[node.PathId] = nodeResults
-
-		} else {
-			s.s.Debugf("%s: %s prob %f lower than threshold %.1f\n", node.PathId, sortedPurls, childPurlProb[sortedPurls[0]], s.thStage3)
+			newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Confidence: float32(childPurlHits[purl]) * 100 / float32(len(childPurlHits))}
+			newCOmponents = append(newCOmponents, newCOmponent)
 		}
+		nodeResults := s.resultsMap[node.PathId]
+		nodeResults.components = newCOmponents
+		nodeResults.probability = eqprob
+
+		if s.resultsMap[node.PathId].probability > 100.0 {
+			s.s.Debugf("Warning prob %f bigger than 100.0%%\n", s.resultsMap[node.PathId].probability)
+			nodeResults.probability = 100.0
+		}
+		nodeResults.stage = 3
+		s.resultsMap[node.PathId] = nodeResults
+
+		//} else {
+		//	s.s.Debugf("%s: %s prob %f lower than threshold %.1f\n", node.PathId, sortedPurls, childPurlProb[sortedPurls[0]], s.thStage3)
+		//}
 	}
 	return nil
 }
@@ -492,7 +529,7 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 	if result.probability > s.thStage3 && len(result.components) > 0 {
 		var components []*dtos.HFHComponent
 		for _, c := range result.components {
-			components = append(components, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Confidence: result.probability})
+			components = append(components, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Confidence: c.Confidence})
 		}
 
 		*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: components})

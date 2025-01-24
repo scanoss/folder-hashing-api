@@ -352,14 +352,19 @@ func (t *TableDefinition) QueryKey(keyHex string) ([][]string, error) {
 	}
 
 	outputChan := make(chan []string, 1024)
-	_, err = t.FetchRecordset(nil, key, false, outputChan, true)
-	if err != nil {
-		return nil, fmt.Errorf("fetchRecordset has vailed with error %v", err)
-	}
-
+	queryError := false
+	go func() {
+		_, err = t.FetchRecordset(nil, key, false, outputChan, true)
+		if err != nil {
+			queryError = true
+		}
+	}()
 	result := make([][]string, 0)
 	for r := range outputChan {
 		result = append(result, r)
+	}
+	if queryError {
+		return result, fmt.Errorf("fetchRecordset has vailed with error %v", err)
 	}
 	return result, nil
 }
