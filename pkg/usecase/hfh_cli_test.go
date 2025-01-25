@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func TestLocalGRPCRequest(t *testing.T) {
 	// Crear el contexto con timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 	defer cancel()
-	requestRoot := HFHrequestFromPath("/data/mariano/test_projects/monorepo")
+	requestRoot := HFHrequestFromPath("/data/mariano/test_projects/rapidjson-1.0.2")
 	request := &pb.HFHRequest{
 		BestMatch: true,
 		Threshold: 60,
@@ -43,13 +44,8 @@ func TestLocalGRPCRequest(t *testing.T) {
 	}
 
 	// Procesar la respuesta
-	t.Logf("Response Status: %v", response.Status)
-	for _, result := range response.Results {
-		t.Logf("Path: %s", result.PathId)
-		for _, component := range result.Components {
-			t.Logf("  PURL: %s", component.Purl)
-			t.Logf("  Versions: %v", component.Versions)
-			t.Logf("  Confidence: %.2f", component.Confidence)
-		}
-	}
+	t.Logf("Response Status: %+v", response.Status)
+	jsonBytes, _ := json.Marshal(response)
+	t.Log(string(jsonBytes))
+
 }

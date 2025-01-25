@@ -90,7 +90,7 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s := NewFolderHashingServer(myConfig)
+	s := NewFolderHashingServer(myConfig, ctx)
 
 	var hfhRequestData = `{
 		"best_match": true,

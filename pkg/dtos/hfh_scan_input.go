@@ -11,7 +11,7 @@ import (
 // HFHRequest
 type HFHscanInput struct {
 	BestMatch bool                  `json:"best_match"`
-	Threshold float32               `json:"threshold"`
+	Threshold int32                 `json:"threshold"`
 	Root      *HFHScanInputChildren `json:"root,omitempty"`
 }
 

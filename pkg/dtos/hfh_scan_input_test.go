@@ -26,7 +26,7 @@ func TestParseHFHRequest(t *testing.T) {
 		{
 			input: `{
 				"best_match": true,
-				"threshold": 0.8,
+				"threshold": 80,
 				"root": {
 					"path_id": "root_1",
 					"sim_hash_names": "hash_root_1",
@@ -78,7 +78,7 @@ func TestParseHFHRequest(t *testing.T) {
 			}`,
 			want: HFHscanInput{
 				BestMatch: true,
-				Threshold: 0.8,
+				Threshold: 80,
 				Root: &HFHScanInputChildren{
 					PathId:         "root_1",
 					SimHashNames:   "hash_root_1",
@@ -132,7 +132,7 @@ func TestParseHFHRequest(t *testing.T) {
 		{
 			input: `{
 				"best_match": true,
-				"threshold": 0.7,
+				"threshold": 70,
 				"root": {
 					"path_id": "root_2",
 					"children": [
@@ -152,7 +152,7 @@ func TestParseHFHRequest(t *testing.T) {
 			}`,
 			want: HFHscanInput{
 				BestMatch: true,
-				Threshold: 0.7,
+				Threshold: 70,
 				Root: &HFHScanInputChildren{
 					PathId: "root_2",
 					Children: []*HFHScanInputChildren{
@@ -172,10 +172,10 @@ func TestParseHFHRequest(t *testing.T) {
 			},
 		},
 		{
-			input: `{"best_match": true, "threshold": 0.7}`,
+			input: `{"best_match": true, "threshold": 70}`,
 			want: HFHscanInput{
 				BestMatch: true,
-				Threshold: 0.7,
+				Threshold: 70,
 			},
 		},
 		{

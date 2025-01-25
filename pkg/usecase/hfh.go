@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/bits"
 	"sort"
@@ -30,16 +31,16 @@ type HFHscan struct {
 }
 
 type HFHscanResultItem struct {
-	Purl       string
-	Versions   []string
-	Confidence float32
-	Date       time.Time
+	Purl       string    `json:"purl"`
+	Versions   []string  `json:"versions"`
+	Confidence float32   `json:"confidence"`
+	Date       time.Time `json:"date"`
 }
 
 type HFHscanResult struct {
-	components  []HFHscanResultItem
-	stage       int
-	probability float32
+	Components  []HFHscanResultItem `json:"components"`
+	Stage       int                 `json:"Stage"`
+	Probability float32             `json:"probability"`
 }
 
 func HFHScanInit(s *zap.SugaredLogger, config *myconfig.ServerConfig) (*HFHscan, error) {
@@ -62,9 +63,9 @@ func HFHScanInit(s *zap.SugaredLogger, config *myconfig.ServerConfig) (*HFHscan,
 	return &HFHscan{hfhTable: hfhTable,
 		urlTable:    urlTable,
 		hfhSecTable: hfhSecTable,
-		thStage1:    config.Hfh.Th1,
-		thStage2:    config.Hfh.Th2,
-		thStage3:    config.Hfh.Th3,
+		thStage1:    config.Hfh.Threshold1,
+		thStage2:    config.Hfh.Threshold2,
+		thStage3:    config.Hfh.Threshold3,
 		dMax:        config.Hfh.Dmax,
 		sectorTol:   config.Hfh.SectorTol,
 		s:           s}, nil
@@ -75,21 +76,22 @@ func (s *HFHscan) Scan(input *dtos.HFHscanInput) (dtos.HFHResultOutput, error) {
 
 	threshold := input.Threshold
 	bestMatch := input.BestMatch
-	if threshold <= 0 {
-		threshold = 0.1
+	if threshold <= 10 {
+		threshold = 10
 	}
 
-	if threshold > 3 {
-		threshold = 3
+	if threshold > 300 {
+		threshold = 300
 	}
 	s.s.Infof("HFH threshold set: %.1f", threshold)
 
-	s.thStage1 *= threshold
-	s.thStage2 *= threshold
-	s.thStage3 *= threshold
+	s.thStage1 *= float32(threshold) / 100
+	s.thStage2 *= float32(threshold) / 100
+	s.thStage3 *= float32(threshold) / 100
 	s.bestMatch = bestMatch
 	s.resultsMap = make(map[string]HFHscanResult)
 	projectTree := input.Root
+
 	s.s.Infof("First stage starts")
 	err := s.scanTreeFirstStage(projectTree)
 	if err != nil {
@@ -103,12 +105,18 @@ func (s *HFHscan) Scan(input *dtos.HFHscanInput) (dtos.HFHResultOutput, error) {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process second stage %v", err)
 	}
 
+	jsonBytes, _ := json.Marshal(s.resultsMap)
+	s.s.Debug(string(jsonBytes))
+
 	s.s.Infof("Third stage starts")
 	err = s.scanTreeThirdStage(projectTree)
 	if err != nil {
 		s.s.Error(err)
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process third stage %v", err)
 	}
+
+	jsonBytes, _ = json.Marshal(s.resultsMap)
+	s.s.Debug(string(jsonBytes))
 
 	s.s.Infof("Generating output")
 	var results dtos.HFHResultOutput
@@ -315,7 +323,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 		}
 
 		fistStageComponents := getComponents(s.urlTable, bestUrlsKey)
-		return &HFHscanResult{components: fistStageComponents, probability: probability, stage: st}, nil
+		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: st}, nil
 	}
 	//If not, process all the filenames hash
 	s.s.Debugf("No filecontents match, using just fileNames match")
@@ -326,7 +334,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 	}
 	fistStageComponents := getComponents(s.urlTable, urls)
 
-	return &HFHscanResult{components: fistStageComponents, probability: probability, stage: 0}, nil
+	return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 0}, nil
 }
 
 func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
@@ -336,15 +344,15 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 		return err
 	}
 	//If we matched a canditate using just the names, we are going to reduce that probability by half
-	if result.probability >= s.thStage1 {
-		if result.stage == 0 {
-			result.probability /= 2
+	if result.Probability >= s.thStage1 {
+		if result.Stage == 0 {
+			result.Probability /= 2
 		}
 		s.resultsMap[node.PathId] = *result
 	}
 
-	if result.probability < s.thStage1 || result.stage == 0 {
-		s.s.Debugf("probability lower than threshold (%.1f / %.1f), procesing node %s childs", result.probability, s.thStage1, node.PathId)
+	if result.Probability < s.thStage1 || result.Stage == 0 {
+		s.s.Debugf("probability lower than threshold (%.1f / %.1f), procesing node %s childs", result.Probability, s.thStage1, node.PathId)
 		for _, child := range node.Children {
 			s.scanTreeFirstStage(child)
 		}
@@ -392,13 +400,13 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 		probability = 0
 	}*/
 
-	return &HFHscanResult{components: components, probability: probability, stage: 2}, nil
+	return &HFHscanResult{Components: components, Probability: probability, Stage: 2}, nil
 }
 
 func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 
-	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability > s.thStage2 {
-		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].probability, s.thStage2)
+	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability > s.thStage2 {
+		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].Probability, s.thStage2)
 		return nil
 	}
 
@@ -406,11 +414,11 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 	if err != nil {
 		return err
 	}
-	if result.probability >= s.thStage2 && len(result.components) > 0 {
+	if result.Probability >= s.thStage2 && len(result.Components) > 0 {
 		s.resultsMap[node.PathId] = *result
 	}
 
-	if s.resultsMap[node.PathId].probability < s.thStage2 || s.resultsMap[node.PathId].stage == 0 {
+	if s.resultsMap[node.PathId].Probability < s.thStage2 || s.resultsMap[node.PathId].Stage == 0 {
 		for _, child := range node.Children {
 			s.scanTreeSecondStage(child)
 		}
@@ -424,8 +432,8 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 		return nil
 	}
 	// If the matching probability is major than the TH we don't need to continue
-	if s.resultsMap[node.PathId].stage > 0 && s.resultsMap[node.PathId].probability >= s.thStage3 {
-		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].probability, s.thStage3)
+	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability >= s.thStage3 {
+		s.s.Debugf("skiping children. Root node probability exceeds the threshold: %.1f/%.1f", s.resultsMap[node.PathId].Probability, s.thStage3)
 		return nil
 	}
 
@@ -442,23 +450,24 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 
 	for _, child := range node.Children {
 		//ignore low prob results
-		if len(s.resultsMap[child.PathId].components) <= 0 { //|| child.Result.Prob < threshold {
+		if len(s.resultsMap[child.PathId].Components) <= 0 { //|| child.Result.Prob < threshold {
 			s.s.Debugf("ignore node without components: %s", child.PathId)
 			continue
 		}
 
 		//rank the child purls
-		for _, p := range s.resultsMap[child.PathId].components {
+		for _, p := range s.resultsMap[child.PathId].Components {
 			childWithHits++
 			childPurlHits[p.Purl]++
 			existingDate, exists := childPurlDate[p.Purl]
 			if !exists || p.Date.Before(existingDate) {
 				childPurlDate[p.Purl] = p.Date
 			}
-			if s.resultsMap[child.PathId].stage == 3 {
-				childPurlProb[p.Purl] += p.Confidence * (1 / float32(len(node.Children)))
-			} else if s.resultsMap[child.PathId].stage > 0 {
-				childPurlProb[p.Purl] += s.resultsMap[child.PathId].probability * (1 / float32(len(node.Children)))
+			if s.resultsMap[child.PathId].Stage == 3 {
+				childs := float32(len(node.Children))
+				childPurlProb[p.Purl] += p.Confidence / childs
+			} else if s.resultsMap[child.PathId].Stage > 0 {
+				childPurlProb[p.Purl] += s.resultsMap[child.PathId].Probability * (1 / float32(len(node.Children)))
 			} else {
 				childPurlProb[p.Purl] = -1
 			}
@@ -495,40 +504,39 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	// Update the now results
 	if len(sortedPurls) > 0 {
 		eqprob := childPurlProb[sortedPurls[0]] // * float32(childPurlHits[sortedPurls[0]]) / float32(childWithHits) * (1 / float32(len(node.Children)))
-		//if eqprob > s.thStage3 {
-		//s.resultsMap[node.PathId].components
-		var newCOmponents []HFHscanResultItem
-		for _, purl := range sortedPurls {
-			var versions []string
-			for v := range allVersions {
-				versions = append(versions, v)
+		if eqprob > s.thStage3 {
+			var newCOmponents []HFHscanResultItem
+			for _, purl := range sortedPurls {
+				var versions []string
+				for v := range allVersions {
+					versions = append(versions, v)
+				}
+				newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Confidence: childPurlProb[purl]}
+				newCOmponents = append(newCOmponents, newCOmponent)
 			}
-			newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Confidence: float32(childPurlHits[purl]) * 100 / float32(len(childPurlHits))}
-			newCOmponents = append(newCOmponents, newCOmponent)
-		}
-		nodeResults := s.resultsMap[node.PathId]
-		nodeResults.components = newCOmponents
-		nodeResults.probability = eqprob
+			nodeResults := s.resultsMap[node.PathId]
+			nodeResults.Components = newCOmponents
+			nodeResults.Probability = eqprob
 
-		if s.resultsMap[node.PathId].probability > 100.0 {
-			s.s.Debugf("Warning prob %f bigger than 100.0%%\n", s.resultsMap[node.PathId].probability)
-			nodeResults.probability = 100.0
-		}
-		nodeResults.stage = 3
-		s.resultsMap[node.PathId] = nodeResults
+			if s.resultsMap[node.PathId].Probability > 100.0 {
+				s.s.Debugf("Warning prob %f bigger than 100.0%%\n", s.resultsMap[node.PathId].Probability)
+				nodeResults.Probability = 100.0
+			}
+			nodeResults.Stage = 3
+			s.resultsMap[node.PathId] = nodeResults
 
-		//} else {
-		//	s.s.Debugf("%s: %s prob %f lower than threshold %.1f\n", node.PathId, sortedPurls, childPurlProb[sortedPurls[0]], s.thStage3)
-		//}
+		} else {
+			s.s.Debugf("%s: %s prob %f lower than threshold %.1f\n", node.PathId, sortedPurls, childPurlProb[sortedPurls[0]], s.thStage3)
+		}
 	}
 	return nil
 }
 
 func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dtos.HFHResult) error {
 	result := s.resultsMap[node.PathId]
-	if result.probability > s.thStage3 && len(result.components) > 0 {
+	if result.Probability > s.thStage3 && len(result.Components) > 0 {
 		var components []*dtos.HFHComponent
-		for _, c := range result.components {
+		for _, c := range result.Components {
 			components = append(components, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Confidence: c.Confidence})
 		}
 

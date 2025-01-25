@@ -61,11 +61,11 @@ type ServerConfig struct {
 		KbName string `env:"LDB_KB"`   // LDB KB name (must be inside the working path)
 	}
 	Hfh struct {
-		Dmax      int     `env:"HFH_DMIN"`       // HFH maximum distanse to consider a candidate
-		Th1       float32 `env:"HFH_TH1"`        // HFH first stafge analysis threshold
-		Th2       float32 `env:"HFH_TH2"`        // HFH second stafge analysis threshold
-		Th3       float32 `env:"HFH_TH3"`        // HFH third stafge analysis threshold
-		SectorTol int     `env:"HFH_SECTOR_TOL"` // HFH maximum distanse to consider a candidate
+		Dmax       int     `env:"HFH_DMAX"`       // HFH maximum distanse to consider a candidate
+		Threshold1 float32 `env:"HFH_TH1"`        // HFH first stafge analysis threshold
+		Threshold2 float32 `env:"HFH_TH2"`        // HFH second stafge analysis threshold
+		Threshold3 float32 `env:"HFH_TH3"`        // HFH third stafge analysis threshold
+		SectorTol  int     `env:"HFH_SECTOR_TOL"` // HFH ldb sector tolerance
 	}
 }
 
@@ -101,7 +101,7 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Ldb.KbName = "hfh_kb"
 	cfg.Hfh.Dmax = 24
 	cfg.Hfh.SectorTol = 8
-	cfg.Hfh.Th1 = 80
-	cfg.Hfh.Th2 = 70
-	cfg.Hfh.Th3 = 51
+	cfg.Hfh.Threshold1 = 80
+	cfg.Hfh.Threshold2 = 70
+	cfg.Hfh.Threshold3 = 51
 }

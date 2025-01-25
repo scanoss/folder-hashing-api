@@ -70,6 +70,7 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("error processing request")
 	}
+	s.Infof("Scan starts")
 	dtoResults, err := d.scanner.Scan(&dtoRequest)
 	if err != nil {
 		s.Errorf("error during hfh scanning: %v", err)
@@ -80,7 +81,7 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("error processing response")
 	}
-
+	s.Infof("HFH response: %+v", results)
 	telemetryHfhScanRequestTime(ctx, d.config, requestStartTime)
 	// Set the status and respond with the data
 	results.Status = &common.StatusResponse{Status: common.StatusCode_SUCCESS, Message: "Success"}
