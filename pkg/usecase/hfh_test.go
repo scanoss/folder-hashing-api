@@ -9,8 +9,10 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 
+	"github.com/golobby/config/v3"
+	"github.com/golobby/config/v3/pkg/feeder"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
-	config "scanoss.com/hfh-api/pkg/config"
+	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
 	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
 	test "scanoss.com/hfh-api/pkg/usecase/test"
@@ -24,9 +26,12 @@ func testScanInitHelper() (*HFHscan, error) {
 	defer zlog.SyncZap()
 	ctx := ctxzap.ToContext(context.Background(), zlog.L)
 	s := ctxzap.Extract(ctx).Sugar()
+	//add feeader for ldb test
+	var feeders []config.Feeder
+	feeders = append(feeders, feeder.Json{Path: "./test/test_config.json"})
 
 	//load default config
-	cfg, err := config.NewServerConfig(nil)
+	cfg, err := myconfig.NewServerConfig(feeders)
 	if err != nil {
 		return nil, fmt.Errorf("Fatal error loading default config")
 	}
