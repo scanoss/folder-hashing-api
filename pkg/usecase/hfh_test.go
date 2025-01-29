@@ -9,8 +9,6 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 
-	"github.com/golobby/config/v3"
-	"github.com/golobby/config/v3/pkg/feeder"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
@@ -27,11 +25,17 @@ func testScanInitHelper() (*HFHscan, error) {
 	ctx := ctxzap.ToContext(context.Background(), zlog.L)
 	s := ctxzap.Extract(ctx).Sugar()
 	//add feeader for ldb test
-	var feeders []config.Feeder
+	/*var feeders []config.Feeder
+
 	feeders = append(feeders, feeder.Json{Path: "./test/test_config.json"})
 
 	//load default config
 	cfg, err := myconfig.NewServerConfig(feeders)
+	if err != nil {
+		return nil, fmt.Errorf("Fatal error loading default config")
+	}*/
+
+	cfg, err := myconfig.NewServerConfig(nil)
 	if err != nil {
 		return nil, fmt.Errorf("Fatal error loading default config")
 	}
@@ -44,12 +48,12 @@ func testScanInitHelper() (*HFHscan, error) {
 }
 
 func TestHFHscanHash(t *testing.T) {
-	hfhTable, err := ldb.NewTableFromCfg("./ldb/test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"})
+	hfhTable, err := ldb.NewTableFromCfg("", "hfh_kb", "hfh", []string{"fileNames", "fileContents", "url"})
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected reading the table config", err)
 		return
 	}
-	fileNamesSimhash := "800000c9bc6bdfcd"
+	fileNamesSimhash := "8172bd3ef0ab37b4"
 	result, distance, content, err := scanHash(hfhTable, fileNamesSimhash, 0, 30)
 	t.Logf("Result: %x", result)
 	t.Log("distance:", distance)
@@ -58,7 +62,7 @@ func TestHFHscanHash(t *testing.T) {
 	if distance > 0 {
 		t.Errorf("the hashes do not match: %x vs %x", fileNamesSimhash, result[0])
 	}
-	fileNamesSimhash = "801f1fd9bc5bdfad"
+	fileNamesSimhash = "8162bd4ec1aa36b3"
 
 	result, distance, content, err = scanHash(hfhTable, fileNamesSimhash, 0, 30)
 	t.Logf("Result: %x", result)

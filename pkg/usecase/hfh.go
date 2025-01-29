@@ -180,13 +180,13 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 	//process each sector, run this process in a new thread
 	var wg sync.WaitGroup
 	wg.Add(1)
-	outputChan := make(chan []string, 2048*sectorTol)
+	outputChan := make(chan []string, 100000*sectorTol)
 
 	// Exec dump function in its own thread
 	go func() {
 		defer wg.Done()
 		//_, err = table.Dump(start, end, -1, outputChan)
-		table.DumpParallel(start, end, -1, outputChan)
+		table.DumpNative(start, end, -1, outputChan)
 	}()
 
 	// Find the closest matches for the hash
