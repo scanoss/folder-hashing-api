@@ -186,18 +186,13 @@ const LDB_MAX_PATH = 256 // Adjust this value according to your needs
 
 // GetSectorPath returns the path for a sector file
 func getSectorPath(table *TableDefinition, key []byte) (string, error) {
-	// Create table path
-	//tablePath := filepath.Join("/data/ldb/", table.KbName, table.TableName)
-
 	// Check if directory exists
 	if _, err := os.Stat(table.path); os.IsNotExist(err) {
 		fmt.Printf("E063 Table %s does not exist\n", table.path)
 		os.Exit(1)
 	}
-
 	// Create sector path
 	sectorPath := filepath.Join(table.path, fmt.Sprintf("%02x.ldb", key[0]))
-
 	// Check if file exists
 	_, err := os.Stat(sectorPath)
 

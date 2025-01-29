@@ -45,17 +45,17 @@ type HFHscanResult struct {
 
 func HFHScanInit(s *zap.SugaredLogger, config *myconfig.ServerConfig) (*HFHscan, error) {
 	//Initialize ldb tables
-	urlTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"})
+	urlTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
 	if err != nil {
 		return nil, fmt.Errorf("error creating urlTable: %v", err)
 	}
 
-	hfhTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"})
+	hfhTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
 	if err != nil {
 		return nil, fmt.Errorf("error creating HFHtable: %v", err)
 	}
 
-	hfhSecTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"})
+	hfhSecTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
 	if err != nil {
 		return nil, fmt.Errorf("error creating HFHsecTable: %v", err)
 	}
@@ -199,6 +199,7 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 			if err != nil || key == 0xffffffffffffffff {
 				continue
 			}
+
 			distance := hammingDistance(hash, key)
 			if distance < minDistance {
 				closestMatches = []uint64{key}

@@ -20,13 +20,14 @@ type TableDefinition struct {
 	Fields      map[string]int // Table fields
 	Definitions int
 	recordSize  int //0 means variable size
-	virtual     bool
+	cached      bool
 	ts_ln       uint32
 	path        string
+	cache       [256]map[string][][]string
 }
 
 // NewTable creates a new table definition with default values
-func NewTable(tablePath string, kbName string, tableName string, hashSize int, recordSize int, keysNumber int, fields []string, definitions int, virtual bool, data [][]string) *TableDefinition {
+func NewTable(tablePath string, kbName string, tableName string, hashSize int, recordSize int, keysNumber int, fields []string, definitions int, cached bool, data [][]string) *TableDefinition {
 
 	if kbName == "" {
 		kbName = "oss"
@@ -47,14 +48,14 @@ func NewTable(tablePath string, kbName string, tableName string, hashSize int, r
 		Fields:      cols,       // Default data field only
 		Definitions: definitions,
 		recordSize:  recordSize,
-		virtual:     virtual,
+		cached:      cached,
 		ts_ln:       2,
 		path:        tablePath,
 	}
 }
 
 // NewTableFromCfg creates a new table from the configuration files
-func NewTableFromCfg(ldbPath string, kbName string, tableName string, fields []string) (*TableDefinition, error) {
+func NewTableFromCfg(ldbPath string, kbName string, tableName string, fields []string, cached bool) (*TableDefinition, error) {
 	// Set the default path.
 	if ldbPath == "" {
 		ldbPath = LdbDefaultPath
@@ -108,7 +109,7 @@ func NewTableFromCfg(ldbPath string, kbName string, tableName string, fields []s
 	}
 	tablePath := filepath.Join(ldbPath, kbName, tableName)
 	//create the new table with the parsed values
-	table := NewTable(tablePath, kbName, tableName, hashSize, recordSize, keysNumber, fields, definitions, false, nil)
+	table := NewTable(tablePath, kbName, tableName, hashSize, recordSize, keysNumber, fields, definitions, cached, nil)
 	return table, nil
 }
 
@@ -172,6 +173,27 @@ func (table *TableDefinition) FetchRecordset(s *Sector, key []byte, skipSubkey b
 			}
 			data = append(data, strings.Split(string(msg), ",")...)
 		}
+		if table.cached {
+			newdata := false
+			if table.cache[s.ID] != nil && table.cache[s.ID][data[0]] != nil {
+				for _, record := range table.cache[s.ID][data[0]] {
+					for i, field := range record {
+						if field != data[i+1] {
+							newdata = true
+							break
+						}
+						if newdata {
+							break
+						}
+					}
+				}
+			} else {
+				newdata = true
+			}
+			if newdata {
+				table.cache[s.ID][data[0]] = append(table.cache[s.ID][data[0]], data[1:])
+			}
+		}
 		dataChan <- data
 		return false
 	}
@@ -191,6 +213,21 @@ func (table *TableDefinition) FetchRecordset(s *Sector, key []byte, skipSubkey b
 	subkeyLen := table.HashSize - LDB_KEY_LN
 	records := 0
 	done := false
+
+	if table.cached {
+		if table.cache[sector.ID] != nil {
+			keyHex := fmt.Sprintf("%02x", key)
+			if records := table.cache[sector.ID][keyHex]; len(records) > 0 {
+				for _, r := range records {
+					data := append([]string{keyHex}, r...)
+					dataChan <- data
+				}
+				return len(records), nil
+			}
+		} else {
+			table.cache[sector.ID] = make(map[string][][]string)
+		}
+	}
 
 	// Process nodes until we reach the end or handler signals completion
 	var nextPtr uint64
