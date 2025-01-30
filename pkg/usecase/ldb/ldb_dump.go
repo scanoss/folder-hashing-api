@@ -95,6 +95,16 @@ func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, da
 		go func(sector int) {
 			defer wg.Done()
 
+			if t.cached {
+				r, err := t.GetDataFromCache(sector, "", dataChan)
+				if r > 0 && err == nil {
+					mu.Lock()
+					count += r
+					mu.Unlock()
+					return
+				}
+			}
+
 			var cmdStr strings.Builder
 			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | ldb", t.KbName, t.TableName, sector))
 			cmd := exec.Command("bash", "-c", cmdStr.String())
@@ -132,6 +142,7 @@ func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, da
 				select {
 				case dataChan <- parts:
 					mu.Lock()
+					t.addData2Cache(parts)
 					count++
 					if limit > 0 && count >= limit {
 						mu.Unlock()

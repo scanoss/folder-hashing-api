@@ -8,7 +8,7 @@ import (
 )
 
 func TestLDBcreateTable(t *testing.T) {
-	testTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"})
+	testTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"}, false)
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected reading the table config", err)
 		return
@@ -41,7 +41,7 @@ func TestLDBdecode(t *testing.T) {
 		return
 	}
 
-	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"})
+	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
 	if err != nil {
 		t.Errorf("Error creating urlTable: %v", err)
 		return
@@ -69,7 +69,7 @@ func TestLDBfetchRecordset(t *testing.T) {
 		return
 	}
 
-	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"})
+	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
 	if err != nil {
 		t.Errorf("Error creating urlTable: %v", err)
 		return
@@ -99,7 +99,7 @@ func TestLDBfetchRecordset(t *testing.T) {
 }
 
 func TestLDBdump(t *testing.T) {
-	hfhTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"})
+	hfhTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"}, false)
 	if err != nil {
 		t.Errorf("Error creating hfhTable: %v", err)
 		return

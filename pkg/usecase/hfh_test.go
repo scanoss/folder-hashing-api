@@ -48,7 +48,7 @@ func testScanInitHelper() (*HFHscan, error) {
 }
 
 func TestHFHscanHash(t *testing.T) {
-	hfhTable, err := ldb.NewTableFromCfg("", "hfh_kb", "hfh", []string{"fileNames", "fileContents", "url"})
+	hfhTable, err := ldb.NewTableFromCfg("", "hfh_kb", "hfh", []string{"fileNames", "fileContents", "url"}, true)
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected reading the table config", err)
 		return
@@ -511,6 +511,38 @@ func TestHFHScan(t *testing.T) {
 	jsonBytes, _ := json.Marshal(response)
 	t.Log(string(jsonBytes))
 	expectedResponse := `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
+	if string(jsonBytes) != expectedResponse {
+		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
+	}
+}
+
+func TestHFHScanCache(t *testing.T) {
+	scanner, err := testScanInitHelper()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
+	response, err := scanner.Scan(&scanInput)
+	if err != nil {
+		t.Errorf("scannning fails %v", err)
+		return
+	}
+	jsonBytes, _ := json.Marshal(response)
+	t.Log(string(jsonBytes))
+	expectedResponse := `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
+	if string(jsonBytes) != expectedResponse {
+		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
+	}
+
+	response, err = scanner.Scan(&scanInput)
+	if err != nil {
+		t.Errorf("scannning fails %v", err)
+		return
+	}
+	jsonBytes, _ = json.Marshal(response)
+	t.Log(string(jsonBytes))
+	expectedResponse = `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
 	if string(jsonBytes) != expectedResponse {
 		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
 	}

@@ -173,27 +173,6 @@ func (table *TableDefinition) FetchRecordset(s *Sector, key []byte, skipSubkey b
 			}
 			data = append(data, strings.Split(string(msg), ",")...)
 		}
-		if table.cached {
-			newdata := false
-			if table.cache[s.ID] != nil && table.cache[s.ID][data[0]] != nil {
-				for _, record := range table.cache[s.ID][data[0]] {
-					for i, field := range record {
-						if field != data[i+1] {
-							newdata = true
-							break
-						}
-						if newdata {
-							break
-						}
-					}
-				}
-			} else {
-				newdata = true
-			}
-			if newdata {
-				table.cache[s.ID][data[0]] = append(table.cache[s.ID][data[0]], data[1:])
-			}
-		}
 		dataChan <- data
 		return false
 	}
@@ -213,21 +192,6 @@ func (table *TableDefinition) FetchRecordset(s *Sector, key []byte, skipSubkey b
 	subkeyLen := table.HashSize - LDB_KEY_LN
 	records := 0
 	done := false
-
-	if table.cached {
-		if table.cache[sector.ID] != nil {
-			keyHex := fmt.Sprintf("%02x", key)
-			if records := table.cache[sector.ID][keyHex]; len(records) > 0 {
-				for _, r := range records {
-					data := append([]string{keyHex}, r...)
-					dataChan <- data
-				}
-				return len(records), nil
-			}
-		} else {
-			table.cache[sector.ID] = make(map[string][][]string)
-		}
-	}
 
 	// Process nodes until we reach the end or handler signals completion
 	var nextPtr uint64
@@ -473,4 +437,102 @@ func (t *TableDefinition) DumpParallel(startingSector int, endingSector int, lim
 	case <-dataChan:
 		return nil
 	}
+}
+
+func (t *TableDefinition) addData2Cache(data []string) error {
+	if !t.cached {
+		return nil
+	}
+
+	if len(data) == 0 {
+		return fmt.Errorf("invalid data: empty slice received")
+	}
+
+	if len(data[0]) < 2 {
+		return fmt.Errorf("invalid data: first element '%s' is too short for sector extraction", data[0])
+	}
+
+	sector, err := strconv.ParseInt(data[0][:2], 16, 64)
+	if err != nil {
+		return fmt.Errorf("invalid sector format in '%s': %w", data[0][:2], err)
+	}
+
+	if t.cache[sector] == nil {
+		t.cache[sector] = make(map[string][][]string)
+	}
+
+	newdata := true
+	if records, exists := t.cache[sector][data[0]]; exists {
+
+		for _, record := range records {
+			if len(record) != len(data)-1 {
+				continue
+			}
+
+			matches := true
+			for i, field := range record {
+				if field != data[i+1] {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				newdata = false
+				break
+			}
+		}
+	}
+
+	if newdata {
+		dataCopy := make([]string, len(data)-1)
+		copy(dataCopy, data[1:])
+
+		t.cache[sector][data[0]] = append(t.cache[sector][data[0]], dataCopy)
+	}
+
+	return nil
+}
+
+func (t *TableDefinition) GetDataFromCache(sectorID int, keyHex string, dataChan chan<- []string) (int, error) {
+	if !t.cached {
+		return 0, fmt.Errorf("cache is not enabled for this table")
+	}
+	if dataChan == nil {
+		return 0, fmt.Errorf("invalid channel: nil channel received")
+	}
+	if sectorID < 0 || sectorID >= len(t.cache) {
+		return 0, fmt.Errorf("invalid sector ID: %d is out of range [0,%d]", sectorID, len(t.cache)-1)
+	}
+	if t.cache[sectorID] == nil {
+		t.cache[sectorID] = make(map[string][][]string)
+		return 0, nil
+	}
+
+	// Si keyHex está vacío, enviar todos los registros del sector
+	if keyHex == "" {
+		totalRecords := 0
+		for key, records := range t.cache[sectorID] {
+			for _, record := range records {
+				data := make([]string, len(record)+1)
+				data[0] = key
+				copy(data[1:], record)
+				dataChan <- data
+				totalRecords++
+			}
+		}
+		return totalRecords, nil
+	}
+
+	records := t.cache[sectorID][keyHex]
+	if len(records) == 0 {
+		return 0, nil
+	}
+
+	for _, record := range records {
+		data := make([]string, len(record)+1)
+		data[0] = keyHex
+		copy(data[1:], record)
+		dataChan <- data
+	}
+	return len(records), nil
 }

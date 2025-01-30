@@ -41,7 +41,7 @@ func TestHfhServer_Echo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s := NewFolderHashingServer(myConfig)
+	s := NewFolderHashingServer(myConfig, ctx)
 
 	type args struct {
 		ctx context.Context

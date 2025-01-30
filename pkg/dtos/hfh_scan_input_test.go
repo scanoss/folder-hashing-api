@@ -247,7 +247,7 @@ func TestExportParseRequest(t *testing.T) {
 			name: "Complex nested structure",
 			input: HFHscanInput{
 				BestMatch: true,
-				Threshold: 0.8,
+				Threshold: 80,
 				Root: &HFHScanInputChildren{
 					PathId:         "root",
 					SimHashNames:   "root_hash",
