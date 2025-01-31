@@ -27,12 +27,16 @@ func newDirectory(path string) *directoryNode {
 	}
 }
 
-func HFHrequestFromPath(path string) *pb.HFHRequest_Children {
+func HFHrequestFromPath(path string) (*pb.HFHRequest_Children, error) {
 	//Init CRC64 table
 	m.InitKeyHash()
-	rootNode := loadPath(path)
+	absolutePath, err := filepath.Abs(path)
+	rootNode, err := loadPath(absolutePath)
+	if err != nil {
+		return nil, err
+	}
 	tree := hashCalcFromNode(rootNode)
-	return tree
+	return tree, nil
 }
 
 func hashCalcFromNode(dirNode *directoryNode) *pb.HFHRequest_Children {
@@ -51,19 +55,17 @@ func hashCalcFromNode(dirNode *directoryNode) *pb.HFHRequest_Children {
 	return outNode
 }
 
-func loadPath(path string) *directoryNode {
+func loadPath(path string) (*directoryNode, error) {
 	files := u.GetAllFiles(path)
+	if files == nil {
+		return nil, fmt.Errorf("invalid or empty directory")
+	}
 	root := filepath.Clean(path)
 	rootParts := strings.Split(root, string(filepath.Separator))
 	rootNode := newDirectory(root)
 
 	for f := range files {
 		a := filter.EvaluateItem(files[f])
-		/*	if !a.Actions.StoreInMZ {
-			continue
-		}*/
-		//log.Printf("%x,%s\n", a.Key, files[f].Name)
-
 		dir := filepath.Dir(a.Path)
 		parts := strings.Split(dir, string(filepath.Separator))
 		rootNode.Files = append(rootNode.Files, a)
@@ -82,5 +84,5 @@ func loadPath(path string) *directoryNode {
 		}
 	}
 
-	return rootNode
+	return rootNode, nil
 }

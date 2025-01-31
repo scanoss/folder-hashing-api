@@ -3,7 +3,6 @@ package ldb
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,15 +13,12 @@ func (t *TableDefinition) Query(keyHex string, dataChan chan []string, closeChan
 
 	count := 0
 
-	// Construir el comando usando strings.Builder para mejor rendimiento
 	var cmdStr strings.Builder
 	cmdStr.WriteString(fmt.Sprintf("echo 'select from %s/%s key %s csv hex -1' | %s", t.KbName, t.TableName, keyHex, t.ldbBinaryPath))
 
 	cmd := exec.Command("bash", "-c", cmdStr.String())
-	// Log para debugging
-	log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+	//log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
-	// Usar pipe para stdout para mejor manejo de memoria
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return count, fmt.Errorf("failed to create stdout pipe: %v", err)
@@ -68,7 +64,6 @@ func (t *TableDefinition) Query(keyHex string, dataChan chan []string, closeChan
 }
 
 func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, dataChan chan []string) (int, error) {
-	// Validación de parámetros de entrada
 	if startingSector < 0 || endingSector < 0 {
 		return -1, fmt.Errorf("sectors cannot be negative: starting=%d, ending=%d", startingSector, endingSector)
 	}
@@ -94,7 +89,7 @@ func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, da
 		cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 
 		cmd := exec.Command("bash", "-c", cmdStr.String())
-		log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+		//log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -170,7 +165,7 @@ func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit
 			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 			cmd := exec.Command("bash", "-c", cmdStr.String())
 
-			log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+			//log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
