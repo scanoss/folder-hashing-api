@@ -11,8 +11,29 @@ if [[ $input =~ select[[:space:]]+from[[:space:]]+([[:alnum:]_]+/[[:alnum:]_]+)[
    # If the key matches, return the predefined result
    if [[ "$key" == "8172bd3ef0ab37b4" ]]; then
        echo "8172bd3ef0ab37b4,f98fc3f728a8b4d4,fd1dc18e1e1364bb,"
+       echo "8172bd3ef0ab37b4,862e8c6492b29efd,f0491d197565a8e6,"
        exit 0
    fi
+      if [[ "$key" == "5f3dcd05ab272b52" ]]; then
+       echo "5f3dcd05ab272b52,643a57d3b6f27064,0b44e04d55a30938,"
+       echo "5f3dcd05ab272b52,dcbad65736bef466,e05e988faaf26f25,"
+       echo "5f3dcd05ab272b52,dcbad6d736bef564,10a1de5e02e61411,"
+       echo "5f3dcd05ab272b52,dcbad6d736bef564,3c130c43938a5447,"
+       exit 0
+   fi
+      if [[ "$key" == "243d1a05246f0d12" ]]; then
+       echo "243d1a05246f0d12,1aa976edf5044c53,4bb4f66d0d9a24c7,"
+       exit 0
+   fi
+    if [[ "$key" == "253d1a01246f0d1a" ]]; then
+       echo "253d1a01246f0d1a,dab778ca7f764c03,7d03ec9913c31d83,"
+       exit 0
+   fi
+       if [[ "$key" == "8b819d34e360db39" ]]; then
+       echo "8b819d34e360db39,d20c7a2bf044affb,002cf90d0427a119,"
+       exit 0
+   fi
+
 
 # Check if input matches the dump pattern: dump KB/TABLE hex -1 sector HEX
 elif [[ $input =~ dump[[:space:]]+([[:alnum:]_]+/[[:alnum:]_]+)[[:space:]]+hex[[:space:]]+-1[[:space:]]+sector[[:space:]]+([[:xdigit:]]+) ]]; then

@@ -190,7 +190,7 @@ func TestParseHFHRequest(t *testing.T) {
 	}{
 		{
 			description: "Broken JSON, missing comma",
-			input:       `{"best_match": true "threshold": 0.8}`,
+			input:       `{"best_match": true "threshold": 80}`,
 		},
 		{
 			description: "Invalid threshold type",
@@ -198,7 +198,7 @@ func TestParseHFHRequest(t *testing.T) {
 		},
 		{
 			description: "Invalid children structure",
-			input:       `{"best_match": true, "threshold": 0.8, "root": {"children": "invalid"}}`,
+			input:       `{"best_match": true, "threshold": 80, "root": {"children": "invalid"}}`,
 		},
 		{
 			description: "Invalid nested children",

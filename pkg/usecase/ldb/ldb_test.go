@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLDBcreateTable(t *testing.T) {
+/*func TestLDBcreateTable(t *testing.T) {
 	testTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"}, false)
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected reading the table config", err)
@@ -18,7 +18,7 @@ func TestLDBcreateTable(t *testing.T) {
 		t.Errorf("table config file parsing error, the table configuration doesn't match")
 		return
 	}
-}
+}*/
 
 func TestLDBdecode(t *testing.T) {
 

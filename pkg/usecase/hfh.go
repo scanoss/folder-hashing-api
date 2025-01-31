@@ -44,31 +44,32 @@ type HFHscanResult struct {
 }
 
 func HFHScanInit(s *zap.SugaredLogger, config *myconfig.ServerConfig) (*HFHscan, error) {
+	scanner := HFHscan{
+		thStage1:  config.Hfh.Threshold1,
+		thStage2:  config.Hfh.Threshold2,
+		thStage3:  config.Hfh.Threshold3,
+		dMax:      config.Hfh.Dmax,
+		sectorTol: config.Hfh.SectorTol,
+		s:         s}
+
+	var err error
 	//Initialize ldb tables
-	urlTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
+	scanner.UrlTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
 	if err != nil {
-		return nil, fmt.Errorf("error creating urlTable: %v", err)
+		s.Errorf("error creating urlTable: %v", err)
 	}
 
-	hfhTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
+	scanner.HfhTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
 	if err != nil {
-		return nil, fmt.Errorf("error creating HFHtable: %v", err)
+		s.Errorf("error creating HFHtable: %v", err)
 	}
 
-	hfhSecTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
+	scanner.HfhSecTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
 	if err != nil {
-		return nil, fmt.Errorf("error creating HFHsecTable: %v", err)
+		s.Errorf("error creating HFHsecTable: %v", err)
 	}
 
-	return &HFHscan{HfhTable: hfhTable,
-		UrlTable:    urlTable,
-		HfhSecTable: hfhSecTable,
-		thStage1:    config.Hfh.Threshold1,
-		thStage2:    config.Hfh.Threshold2,
-		thStage3:    config.Hfh.Threshold3,
-		dMax:        config.Hfh.Dmax,
-		sectorTol:   config.Hfh.SectorTol,
-		s:           s}, nil
+	return &scanner, err
 }
 
 // Scan is the main scanning function

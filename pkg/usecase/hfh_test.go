@@ -32,7 +32,7 @@ func testScanInitHelper() (*HFHscan, error) {
 
 	scanner, _ := HFHScanInit(s, cfg)
 	scanner.HfhTable = ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
-	scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfhSec", 8, 0, 2, []string{"secHash", "mainHash"}, ldb.LdbTableDefinitionStandard, false, nil)
 	scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
 	return scanner, nil
 }
@@ -198,18 +198,18 @@ func TestHFHscanSecondStage(t *testing.T) {
 		t.Errorf("unexpected confidence result: %.1f, expected %.1f", result.Probability, expectedProb)
 	}
 
-	fileContentsSimhash = "76bdd0767d764853"
+	fileContentsSimhash = "f20bd0f12d44bb2a"
 	result, err = scanner.scanSecondStage(fileContentsSimhash)
 	if err != nil {
 		t.Errorf("scan failed with error: %v", err)
 	}
-	expectedProb = 66.7
+	expectedProb = 95.8
 	t.Logf("prob %.1f - result: %v", result.Probability, result.Components)
 	if result.Probability < expectedProb-1 || result.Probability > expectedProb+1 {
 		t.Errorf("unexpected confidence result: %.1f, expected %.1f", result.Probability, expectedProb)
 		return
 	}
-	expectedPurl := "pkg:github/tencent/rapidjson"
+	expectedPurl := "pkg:npm/swot-node"
 	if result.Components[0].Purl != expectedPurl {
 		t.Errorf("unexpected result purl: %s, expected: %s", result.Components[0].Purl, expectedPurl)
 	}
@@ -487,11 +487,26 @@ func TestHFHproduceResponse(t *testing.T) {
 	}
 }
 func TestHFHScan(t *testing.T) {
-	scanner, err := testScanInitHelper()
+	err := zlog.NewSugaredDevLogger()
 	if err != nil {
-		t.Fatal(err)
+		t.Logf("an error '%s' was not expected when opening a sugared logger", err)
+	}
+
+	defer zlog.SyncZap()
+	ctx := ctxzap.ToContext(context.Background(), zlog.L)
+	s := ctxzap.Extract(ctx).Sugar()
+
+	cfg, err := myconfig.NewServerConfig(nil)
+	if err != nil {
+		t.Errorf("Fatal error loading default config")
+	}
+
+	scanner, err := HFHScanInit(s, cfg)
+	if err != nil {
+		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb installed: %v", cfg)
 		return
 	}
+
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
 	response, err := scanner.Scan(&scanInput)
 	if err != nil {
@@ -507,9 +522,23 @@ func TestHFHScan(t *testing.T) {
 }
 
 func TestHFHScanCache(t *testing.T) {
-	scanner, err := testScanInitHelper()
+	err := zlog.NewSugaredDevLogger()
 	if err != nil {
-		t.Fatal(err)
+		t.Logf("an error '%s' was not expected when opening a sugared logger", err)
+	}
+
+	defer zlog.SyncZap()
+	ctx := ctxzap.ToContext(context.Background(), zlog.L)
+	s := ctxzap.Extract(ctx).Sugar()
+
+	cfg, err := myconfig.NewServerConfig(nil)
+	if err != nil {
+		t.Errorf("Fatal error loading default config")
+	}
+
+	scanner, err := HFHScanInit(s, cfg)
+	if err != nil {
+		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
