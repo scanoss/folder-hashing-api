@@ -40,12 +40,7 @@ func TestLDBdecode(t *testing.T) {
 		t.Errorf("Error decoding data %s - %v\n", dataStr, err)
 		return
 	}
-
-	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
-	if err != nil {
-		t.Errorf("Error creating urlTable: %v", err)
-		return
-	}
+	urlTable := NewTable("test/ldb_bin", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, LdbTableDefinitionEncrypted, false, nil)
 
 	decoded, err := DecodeTable(data, urlTable, key)
 	if err != nil {
@@ -57,28 +52,16 @@ func TestLDBdecode(t *testing.T) {
 	}
 }
 
-func TestLDBfetchRecordset(t *testing.T) {
+func TestLDBquery(t *testing.T) {
 
 	keyStr := "00075de93df18ea6"
 	resultStr := "00075de93df18ea6,Sebastian Gug,@decorfn/firebase,0.0.5,2019-07-08,,pkg:npm/%40decorfn/firebase,https://registry.npmjs.org/@decorfn/firebase/-/firebase-0.0.5.tgz,19,19,11,0,6052"
 	result := strings.Split(resultStr, ",")
-	key, err := hex.DecodeString(keyStr)
-
-	if err != nil {
-		t.Errorf("Error decoding key %s - %v\n", keyStr, err)
-		return
-	}
-
-	urlTable, err := NewTableFromCfg("./test", "test_kb", "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
-	if err != nil {
-		t.Errorf("Error creating urlTable: %v", err)
-		return
-	}
+	urlTable := NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, LdbTableDefinitionEncrypted, false, nil)
 	outputChan := make(chan []string, 10)
-	records, err := urlTable.FetchRecordset(nil, key, false, outputChan, true)
+	records, err := urlTable.Query(keyStr, outputChan, true)
 	if err != nil {
 		t.Errorf("fetchRecordset has vailed with error %v", err)
-		return
 	}
 	receivedRecords := 0
 	for r := range outputChan {
@@ -99,11 +82,7 @@ func TestLDBfetchRecordset(t *testing.T) {
 }
 
 func TestLDBdump(t *testing.T) {
-	hfhTable, err := NewTableFromCfg("./test", "test_kb", "hfh", []string{"fileNames", "fileContents", "url"}, false)
-	if err != nil {
-		t.Errorf("Error creating hfhTable: %v", err)
-		return
-	}
+	hfhTable := NewTable("./test/ldb_mock_dump_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, LdbTableDefinitionStandard, false, nil)
 	outputChan := make(chan []string, 1024)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -114,7 +93,7 @@ func TestLDBdump(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		var err error
-		recordsNumber, err = hfhTable.Dump(0x80, 0, 1023, outputChan)
+		recordsNumber, err = hfhTable.DumpNative(0x6a, 0x6a, 5, outputChan)
 		if err != nil {
 			t.Errorf("Unexpected error during dump: %v", err)
 			return
@@ -133,8 +112,8 @@ func TestLDBdump(t *testing.T) {
 		t.Errorf("Received records and fetchRecorset returned value do not match: %d / %d \n", receivedRecords, recordsNumber)
 	}
 
-	expectedRecord_0 := []string{"800000c9bc6bdfcd", "ffebfbdffeff5679", "b7df54874a01b857"}
-	expectedRecord_last := []string{"8000a17597c207c2", "df9d796cca0c4e5e", "6cb1ac93ca8e7fae"}
+	expectedRecord_0 := []string{"6a00168a94ae6238", "6b0a6c14734147e0", "0134f476e2548425"}
+	expectedRecord_last := []string{"6a003ced058a4181", "c47f36226ca32e11", "009427157386242a"}
 
 	for i, field := range records[0] {
 		if field == "" {

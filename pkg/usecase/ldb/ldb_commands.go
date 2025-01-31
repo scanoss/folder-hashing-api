@@ -4,12 +4,64 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 )
 
-/*func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, dataChan chan []string) (int, error) {
+func (t *TableDefinition) Query(keyHex string, dataChan chan []string, closeChan bool) (int, error) {
+
+	count := 0
+
+	// Construir el comando usando strings.Builder para mejor rendimiento
+	var cmdStr strings.Builder
+	cmdStr.WriteString(fmt.Sprintf("echo 'select from %s/%s key %s csv hex -1' | %s", t.KbName, t.TableName, keyHex, t.ldbBinaryPath))
+
+	cmd := exec.Command("bash", "-c", cmdStr.String())
+	// Log para debugging
+	log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+
+	// Usar pipe para stdout para mejor manejo de memoria
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return count, fmt.Errorf("failed to create stdout pipe: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return count, fmt.Errorf("failed to start command: %v", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" {
+			continue
+		}
+
+		result, err := DecodeString(line, t)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error decoding %v", err)
+		}
+		dataChan <- result
+		count++
+	}
+
+	if err := scanner.Err(); err != nil {
+		return count, fmt.Errorf("error reading output: %v", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return count, fmt.Errorf("command failed: %v", err)
+	}
+	if closeChan {
+		close(dataChan)
+	}
+	return count, nil
+}
+
+func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, dataChan chan []string) (int, error) {
 	// Validación de parámetros de entrada
 	if startingSector < 0 || endingSector < 0 {
 		return -1, fmt.Errorf("sectors cannot be negative: starting=%d, ending=%d", startingSector, endingSector)
@@ -25,15 +77,19 @@ import (
 	count := 0
 
 	for sector := startingSector; sector <= endingSector; sector++ {
-		// Construir el comando usando strings.Builder para mejor rendimiento
+		if t.cached {
+			r, err := t.GetDataFromCache(sector, "", dataChan)
+			if r > 0 && err == nil {
+				count += r
+			}
+		}
+
 		var cmdStr strings.Builder
-		cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | ldb", t.KbName, t.TableName, sector))
+		cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 
 		cmd := exec.Command("bash", "-c", cmdStr.String())
-		// Log para debugging
 		log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
-		// Usar pipe para stdout para mejor manejo de memoria
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return count, fmt.Errorf("failed to create stdout pipe: %v", err)
@@ -51,12 +107,12 @@ import (
 			}
 
 			parts := strings.Split(line, ",")
-			select {
-			case dataChan <- parts:
-				count++
-				if limit > 0 && count >= limit {
-					return count, nil
-				}
+			dataChan <- parts
+			t.addData2Cache(parts)
+			count++
+			if limit > 0 && count >= limit {
+				close(dataChan)
+				return count, nil
 			}
 		}
 
@@ -70,10 +126,9 @@ import (
 	}
 	close(dataChan)
 	return count, nil
-}*/
+}
 
-func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, dataChan chan []string) (int, error) {
-	// Validación de parámetros de entrada
+func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit int, dataChan chan []string) (int, error) {
 	if startingSector < 0 || endingSector < 0 {
 		return -1, fmt.Errorf("sectors cannot be negative: starting=%d, ending=%d", startingSector, endingSector)
 	}
@@ -139,17 +194,17 @@ func (t *TableDefinition) DumpNative(startingSector, endingSector, limit int, da
 				}
 
 				parts := strings.Split(line, ",")
-				select {
-				case dataChan <- parts:
-					mu.Lock()
-					t.addData2Cache(parts)
-					count++
-					if limit > 0 && count >= limit {
-						mu.Unlock()
-						return
-					}
+				dataChan <- parts
+				mu.Lock()
+				t.addData2Cache(parts)
+				count++
+				if limit > 0 && count >= limit {
+					close(dataChan)
 					mu.Unlock()
+					return
 				}
+				mu.Unlock()
+
 			}
 
 			if err := scanner.Err(); err != nil {

@@ -11,62 +11,77 @@ import (
 	"sync"
 )
 
+const (
+	ldbBinaryPathDefault = "/usr/bin/ldb"
+	kbDefaultPath        = "/var/lib/ldb/"
+	ldbDefaultKb         = "oss"
+)
+
 // TableDefinition defines the base structure of a table
 type TableDefinition struct {
-	KbName      string
-	TableName   string
-	HashSize    int            // Hash size in bytes
-	KeysNumber  int            // Number of keys (1 primary + N secondary)
-	Fields      map[string]int // Table fields
-	Definitions int
-	recordSize  int //0 means variable size
-	cached      bool
-	ts_ln       uint32
-	path        string
-	cache       [256]map[string][][]string
+	KbName        string
+	TableName     string
+	HashSize      int            // Hash size in bytes
+	KeysNumber    int            // Number of keys (1 primary + N secondary)
+	Fields        map[string]int // Table fields
+	Definitions   int
+	recordSize    int //0 means variable size
+	cached        bool
+	ts_ln         uint32
+	path          string
+	ldbBinaryPath string
+	cache         [256]map[string][][]string
 }
 
 // NewTable creates a new table definition with default values
-func NewTable(tablePath string, kbName string, tableName string, hashSize int, recordSize int, keysNumber int, fields []string, definitions int, cached bool, data [][]string) *TableDefinition {
+func NewTable(binaryPath string, kbName string, tableName string, hashSize int, recordSize int, keysNumber int, fields []string, definitions int, cached bool, data [][]string) *TableDefinition {
+
+	if binaryPath == "" {
+		binaryPath = ldbBinaryPathDefault
+	}
 
 	if kbName == "" {
-		kbName = "oss"
+		kbName = ldbDefaultKb
 	}
 
-	if tablePath == "" {
-		tablePath = LdbDefaultPath + "/" + kbName + "/" + tableName
-	}
+	tablePath := LdbDefaultPath + "/" + kbName + "/" + tableName
+
 	cols := make(map[string]int)
 	for i, f := range fields {
 		cols[f] = i
 	}
 	return &TableDefinition{
-		KbName:      kbName,
-		TableName:   tableName,
-		HashSize:    hashSize,   // Default 16 bytes
-		KeysNumber:  keysNumber, // Default 1 key
-		Fields:      cols,       // Default data field only
-		Definitions: definitions,
-		recordSize:  recordSize,
-		cached:      cached,
-		ts_ln:       2,
-		path:        tablePath,
+		KbName:        kbName,
+		TableName:     tableName,
+		HashSize:      hashSize,   // Default 16 bytes
+		KeysNumber:    keysNumber, // Default 1 key
+		Fields:        cols,       // Default data field only
+		Definitions:   definitions,
+		recordSize:    recordSize,
+		cached:        cached,
+		ts_ln:         2,
+		path:          tablePath,
+		ldbBinaryPath: binaryPath,
 	}
 }
 
 // NewTableFromCfg creates a new table from the configuration files
-func NewTableFromCfg(ldbPath string, kbName string, tableName string, fields []string, cached bool) (*TableDefinition, error) {
-	// Set the default path.
-	if ldbPath == "" {
-		ldbPath = LdbDefaultPath
+func NewTableFromCfg(binaryPath string, kbName string, tableName string, fields []string, cached bool) (*TableDefinition, error) {
+
+	if binaryPath == "" {
+		binaryPath = ldbBinaryPathDefault
 	}
-	//Set the default kbname
+
 	if kbName == "" {
-		kbName = LdbDeFaultKbName
+		kbName = ldbDefaultKb
+	}
+
+	if tableName == "" {
+		return nil, fmt.Errorf("must provide a table name")
 	}
 
 	//Build the path to the configuration file
-	configPath := filepath.Join(ldbPath, kbName, tableName+".cfg")
+	configPath := filepath.Join(kbDefaultPath, kbName, tableName+".cfg")
 
 	//Check if the config file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -107,9 +122,8 @@ func NewTableFromCfg(ldbPath string, kbName string, tableName string, fields []s
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert definitions: %v", err)
 	}
-	tablePath := filepath.Join(ldbPath, kbName, tableName)
 	//create the new table with the parsed values
-	table := NewTable(tablePath, kbName, tableName, hashSize, recordSize, keysNumber, fields, definitions, cached, nil)
+	table := NewTable(binaryPath, kbName, tableName, hashSize, recordSize, keysNumber, fields, definitions, cached, nil)
 	return table, nil
 }
 
