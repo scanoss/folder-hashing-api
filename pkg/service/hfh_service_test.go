@@ -27,6 +27,7 @@ import (
 	pb "github.com/scanoss/papi/api/scanningv2"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 	myconfig "scanoss.com/hfh-api/pkg/config"
+	"scanoss.com/hfh-api/pkg/usecase/ldb"
 )
 
 func TestHfhServer_Echo(t *testing.T) {
@@ -41,7 +42,7 @@ func TestHfhServer_Echo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s := NewFolderHashingServer(myConfig, ctx)
+	s, _ := NewFolderHashingServer(myConfig, ctx)
 
 	type args struct {
 		ctx context.Context
@@ -90,13 +91,17 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s := NewFolderHashingServer(myConfig, ctx)
-
+	s, _ := NewFolderHashingServer(myConfig, ctx)
+	s.scanner.HfhTable = ldb.NewTable("./test/ldb_mock_query_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	s.scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_dump_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	s.scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
 	var hfhRequestData = `{
 		"best_match": true,
   		"threshold": 60,
   		"root": {
-    		"path_id": "root_folder"
+    		"path_id": "root_folder",
+			"sim_hash_names": "6a00168a94ae6238",
+    		"sim_hash_content": "6b0a6c14734147e0"
   		}
 	}`
 

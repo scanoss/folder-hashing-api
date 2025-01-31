@@ -49,10 +49,16 @@ func (t *TableDefinition) Query(keyHex string, dataChan chan []string, closeChan
 	}
 
 	if err := scanner.Err(); err != nil {
+		if closeChan {
+			close(dataChan)
+		}
 		return count, fmt.Errorf("error reading output: %v", err)
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if closeChan {
+			close(dataChan)
+		}
 		return count, fmt.Errorf("command failed: %v", err)
 	}
 	if closeChan {
@@ -161,9 +167,8 @@ func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit
 			}
 
 			var cmdStr strings.Builder
-			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | ldb", t.KbName, t.TableName, sector))
+			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 			cmd := exec.Command("bash", "-c", cmdStr.String())
-			cmd.Dir = "/data/mariano/engine/"
 
 			log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 

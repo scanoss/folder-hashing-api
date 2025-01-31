@@ -57,8 +57,8 @@ type ServerConfig struct {
 		TrustProxy     bool   `env:"COMP_TRUST_PROXY"`      // Trust the interim proxy or not (causes the source IP to be validated instead of the proxy)
 	}
 	Ldb struct {
-		Path   string `env:"LDB_PATH"` // LDB working path
-		KbName string `env:"LDB_KB"`   // LDB KB name (must be inside the working path)
+		BinaryPath string `env:"LDB_PATH"` // LDB working path
+		KbName     string `env:"LDB_KB"`   // LDB KB name (must be inside the working path)
 	}
 	Hfh struct {
 		Dmax       int     `env:"HFH_DMAX"`       // HFH maximum distanse to consider a candidate
@@ -97,7 +97,7 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Logging.DynamicPort = "localhost:60061"
 	cfg.Telemetry.Enabled = false
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
-	cfg.Ldb.Path = "/var/lib/ldb"
+	cfg.Ldb.BinaryPath = "/usr/bin/ldb"
 	cfg.Ldb.KbName = "hfh_kb"
 	cfg.Hfh.Dmax = 24
 	cfg.Hfh.SectorTol = 8

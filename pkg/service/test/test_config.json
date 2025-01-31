@@ -1,0 +1,7 @@
+{
+    "Ldb": {
+      "BinaryPath": "./test/",
+      "KbName": "test_kb"
+    }
+}
+  

@@ -1,4 +1,4 @@
-package usecase
+package hfh_cli
 
 import (
 	"fmt"
@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	pb "github.com/scanoss/papi/api/scanningv2"
-	m "scanoss.com/hfh-api/pkg/usecase/go-minr-deps/model"
-	"scanoss.com/hfh-api/pkg/usecase/go-minr-deps/pkg/filter"
-	u "scanoss.com/hfh-api/pkg/usecase/go-minr-deps/utils"
+	m "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
+	"scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/pkg/filter"
+	u "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/utils"
 )
 
 type directoryNode struct {

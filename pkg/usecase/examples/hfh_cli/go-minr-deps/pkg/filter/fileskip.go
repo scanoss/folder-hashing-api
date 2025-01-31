@@ -7,8 +7,8 @@ import (
 	"path"
 	"strings"
 
-	m "scanoss.com/hfh-api/pkg/usecase/go-minr-deps/model"
-	u "scanoss.com/hfh-api/pkg/usecase/go-minr-deps/utils"
+	m "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
+	u "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/utils"
 )
 
 const MIN_FILE_SIZE int = 256

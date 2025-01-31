@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -37,15 +36,11 @@ type hfhServer struct {
 	scanner *u.HFHscan
 }
 
-func NewFolderHashingServer(config *myconfig.ServerConfig, ctx context.Context) pb.ScanningServer {
+func NewFolderHashingServer(config *myconfig.ServerConfig, ctx context.Context) (*hfhServer, error) {
 	setupMetrics()
 	s := ctxzap.Extract(ctx).Sugar()
 	scanner, err := u.HFHScanInit(s, config)
-	if err != nil {
-		fmt.Printf("HFH ldb module critial error %v", err)
-		os.Exit(1)
-	}
-	return &hfhServer{config: config, scanner: scanner}
+	return &hfhServer{config: config, scanner: scanner}, err
 }
 
 // Echo sends back the same message received.

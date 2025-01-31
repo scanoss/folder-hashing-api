@@ -17,9 +17,9 @@ import (
 )
 
 type HFHscan struct {
-	hfhTable    *ldb.TableDefinition
-	hfhSecTable *ldb.TableDefinition
-	urlTable    *ldb.TableDefinition
+	HfhTable    *ldb.TableDefinition
+	HfhSecTable *ldb.TableDefinition
+	UrlTable    *ldb.TableDefinition
 	thStage1    float32
 	thStage2    float32
 	thStage3    float32
@@ -45,24 +45,24 @@ type HFHscanResult struct {
 
 func HFHScanInit(s *zap.SugaredLogger, config *myconfig.ServerConfig) (*HFHscan, error) {
 	//Initialize ldb tables
-	urlTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
+	urlTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
 	if err != nil {
 		return nil, fmt.Errorf("error creating urlTable: %v", err)
 	}
 
-	hfhTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
+	hfhTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
 	if err != nil {
 		return nil, fmt.Errorf("error creating HFHtable: %v", err)
 	}
 
-	hfhSecTable, err := ldb.NewTableFromCfg(config.Ldb.Path, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
+	hfhSecTable, err := ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
 	if err != nil {
 		return nil, fmt.Errorf("error creating HFHsecTable: %v", err)
 	}
 
-	return &HFHscan{hfhTable: hfhTable,
-		urlTable:    urlTable,
-		hfhSecTable: hfhSecTable,
+	return &HFHscan{HfhTable: hfhTable,
+		UrlTable:    urlTable,
+		HfhSecTable: hfhSecTable,
 		thStage1:    config.Hfh.Threshold1,
 		thStage2:    config.Hfh.Threshold2,
 		thStage3:    config.Hfh.Threshold3,
@@ -83,7 +83,7 @@ func (s *HFHscan) Scan(input *dtos.HFHscanInput) (dtos.HFHResultOutput, error) {
 	if threshold > 300 {
 		threshold = 300
 	}
-	s.s.Infof("HFH threshold set: %.1f", threshold)
+	s.s.Infof("HFH threshold set: %d%%", threshold)
 
 	s.thStage1 *= float32(threshold) / 100
 	s.thStage2 *= float32(threshold) / 100
@@ -185,8 +185,7 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 	// Exec dump function in its own thread
 	go func() {
 		defer wg.Done()
-		//_, err = table.Dump(start, end, -1, outputChan)
-		table.DumpNative(start, end, -1, outputChan)
+		table.DumpNativeParallel(start, end, -1, outputChan)
 	}()
 
 	// Find the closest matches for the hash
@@ -270,7 +269,7 @@ func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultIte
 func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash string) (*HFHscanResult, error) {
 
 	//get the matching candidates from the HFH table based on the file names hash
-	result, distance, content, err := scanHash(s.hfhTable, fileNamesSimhash, s.sectorTol, s.dMax)
+	result, distance, content, err := scanHash(s.HfhTable, fileNamesSimhash, s.sectorTol, s.dMax)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +322,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 			st = 0
 		}
 
-		fistStageComponents := getComponents(s.urlTable, bestUrlsKey)
+		fistStageComponents := getComponents(s.UrlTable, bestUrlsKey)
 		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: st}, nil
 	}
 	//If not, process all the filenames hash
@@ -333,7 +332,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 	for i, c := range content {
 		urls[i] = c[1]
 	}
-	fistStageComponents := getComponents(s.urlTable, urls)
+	fistStageComponents := getComponents(s.UrlTable, urls)
 
 	return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 0}, nil
 }
@@ -361,6 +360,16 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	return nil
 }
 
+/* Calc hash head */
+func headCalc(simHash uint64) byte {
+	var sum int
+	for i := 0; i < 8; i++ {
+		b := byte((simHash >> (i * 8)) & 0xFF)
+		sum += int(b) * 2
+	}
+	return byte(sum >> 4 & 0xFF)
+}
+
 func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, error) {
 
 	hash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
@@ -371,7 +380,7 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 	//Overwrite the MS byte with the head to keep the hash size total
 	key := (hash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
 	keyHex := fmt.Sprintf("%02x", key)
-	match, distance, content, err := scanHash(s.hfhSecTable, keyHex, s.sectorTol/4, s.dMax/3)
+	match, distance, content, err := scanHash(s.HfhSecTable, keyHex, s.sectorTol/4, s.dMax/3)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +390,7 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 	for _, c := range content {
 		//go to the main hfh table to look for the url hash
 		key := c[0]
-		records, err := s.hfhTable.QueryKey(key)
+		records, err := s.HfhTable.QueryKey(key)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -392,7 +401,7 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 	}
 
 	probability := (1 - float32(distance)/float32(s.dMax)) * 100
-	components := getComponents(s.urlTable, urlKeys)
+	components := getComponents(s.UrlTable, urlKeys)
 	if len(components) == 0 {
 		s.s.Debugf("no matched components for secHash %x", hash)
 	}

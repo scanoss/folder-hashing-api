@@ -1,4 +1,4 @@
-package usecase
+package hfh_cli
 
 import (
 	"path/filepath"

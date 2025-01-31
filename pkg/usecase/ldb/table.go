@@ -2,7 +2,6 @@ package ldb
 
 import (
 	"encoding/csv"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -361,15 +360,12 @@ func (t *TableDefinition) Dump(startingSector int, endingSector int, limit int, 
 }
 
 func (t *TableDefinition) QueryKey(keyHex string) ([][]string, error) {
-	key, err := hex.DecodeString(keyHex)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding key %s - %v", keyHex, err)
-	}
 
 	outputChan := make(chan []string, 1024)
 	queryError := false
+	var err error
 	go func() {
-		_, err = t.FetchRecordset(nil, key, false, outputChan, true)
+		_, err = t.Query(keyHex, outputChan, true)
 		if err != nil {
 			queryError = true
 		}

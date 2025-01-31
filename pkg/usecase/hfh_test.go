@@ -24,26 +24,16 @@ func testScanInitHelper() (*HFHscan, error) {
 	defer zlog.SyncZap()
 	ctx := ctxzap.ToContext(context.Background(), zlog.L)
 	s := ctxzap.Extract(ctx).Sugar()
-	//add feeader for ldb test
-	/*var feeders []config.Feeder
-
-	feeders = append(feeders, feeder.Json{Path: "./test/test_config.json"})
-
-	//load default config
-	cfg, err := myconfig.NewServerConfig(feeders)
-	if err != nil {
-		return nil, fmt.Errorf("Fatal error loading default config")
-	}*/
 
 	cfg, err := myconfig.NewServerConfig(nil)
 	if err != nil {
 		return nil, fmt.Errorf("Fatal error loading default config")
 	}
 
-	scanner, err := HFHScanInit(s, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("error during scanner initialization")
-	}
+	scanner, _ := HFHScanInit(s, cfg)
+	scanner.HfhTable = ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
 	return scanner, nil
 }
 
@@ -93,12 +83,12 @@ func TestHFHscanFirstStage(t *testing.T) {
 	if result.Probability < expectedProb {
 		t.Errorf("unexpected confidence result: %.1f, expected %.1f", result.Probability, expectedProb)
 	}
-	expectedPurl := "pkg:github/mirror/busybox"
+	expectedPurl := "pkg:github/android-ide/busybox"
 	if result.Components[0].Purl != expectedPurl {
 		t.Errorf("unexpected purl result: %s, expected %s", result.Components[0].Purl, expectedPurl)
 	}
 
-	fileNamesSimhash = "8172bd3ef1ab37b1"
+	fileNamesSimhash = "8162bd4ec1aa36b3"
 	fileContentsSimhash = "f98fc3f728a8b4d5"
 	result, err = scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
 	if err != nil {

@@ -100,7 +100,11 @@ func RunServer() error {
 	zlog.SetupAppDynamicLogging(cfg.Logging.DynamicPort, cfg.Logging.DynamicLogging)
 	// Register the hfh service
 	ctx := context.Background()
-	v2API := service.NewFolderHashingServer(cfg, ctx)
+	v2API, err := service.NewFolderHashingServer(cfg, ctx)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 	// Start the REST grpc-gateway if requested
 	var srv *http.Server
 	if len(cfg.App.RESTPort) > 0 {
