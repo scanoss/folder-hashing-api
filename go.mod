@@ -12,7 +12,7 @@ require (
 	github.com/scanoss/zap-logging-helper v0.3.2
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/metric v1.33.0
-	google.golang.org/grpc v1.69.2
+	google.golang.org/grpc v1.70.0
 )
 
 replace github.com/scanoss/papi => ../papi
