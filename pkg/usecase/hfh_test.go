@@ -30,10 +30,11 @@ func testScanInitHelper() (*HFHscan, error) {
 		return nil, fmt.Errorf("Fatal error loading default config")
 	}
 
-	scanner, _ := HFHScanInit(s, cfg)
+	scanner := HFHScanInit(cfg)
 	scanner.HfhTable = ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
 	scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfhSec", 8, 0, 2, []string{"secHash", "mainHash"}, ldb.LdbTableDefinitionStandard, false, nil)
 	scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
+	scanner.s = s
 	return scanner, nil
 }
 
@@ -501,16 +502,16 @@ func TestHFHScan(t *testing.T) {
 		t.Errorf("Fatal error loading default config")
 	}
 
-	scanner, err := HFHScanInit(s, cfg)
-	if err != nil {
-		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb installed: %v", cfg)
+	scanner := HFHScanInit(cfg)
+	if scanner == nil {
+		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
 
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
-	response, err := scanner.Scan(&scanInput)
+	response, err := scanner.Scan(s, &scanInput)
 	if err != nil {
-		t.Errorf("scannning fails %v", err)
+		t.Errorf("scanning fails %v", err)
 		return
 	}
 	jsonBytes, _ := json.Marshal(response)
@@ -536,13 +537,13 @@ func TestHFHScanCache(t *testing.T) {
 		t.Errorf("Fatal error loading default config")
 	}
 
-	scanner, err := HFHScanInit(s, cfg)
-	if err != nil {
+	scanner := HFHScanInit(cfg)
+	if scanner == nil {
 		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
-	response, err := scanner.Scan(&scanInput)
+	response, err := scanner.Scan(s, &scanInput)
 	if err != nil {
 		t.Errorf("scannning fails %v", err)
 		return
@@ -554,7 +555,7 @@ func TestHFHScanCache(t *testing.T) {
 		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
 	}
 
-	response, err = scanner.Scan(&scanInput)
+	response, err = scanner.Scan(s, &scanInput)
 	if err != nil {
 		t.Errorf("scannning fails %v", err)
 		return
@@ -597,8 +598,13 @@ func TestHFHScanBusyBox(t *testing.T) {
 		t.Fatal(err)
 		return
 	}
+	zlog.NewSugaredDevLogger()
+	zlog.SyncZap()
+	ctx := ctxzap.ToContext(context.Background(), zlog.L)
+	s := ctxzap.Extract(ctx).Sugar()
+
 	scanInput := dtos.HFHscanInput{Threshold: 1, BestMatch: false, Root: node}
-	response, err := scanner.Scan(&scanInput)
+	response, err := scanner.Scan(s, &scanInput)
 	if err != nil {
 		t.Errorf("scannning fails %v", err)
 		return

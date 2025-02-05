@@ -42,7 +42,7 @@ func TestHfhServer_Echo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s, _ := NewFolderHashingServer(myConfig, ctx)
+	s, _ := NewFolderHashingServer(myConfig)
 
 	type args struct {
 		ctx context.Context
@@ -91,7 +91,7 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Config: %v", err)
 	}
-	s, _ := NewFolderHashingServer(myConfig, ctx)
+	s, _ := NewFolderHashingServer(myConfig)
 	s.scanner.HfhTable = ldb.NewTable("./test/ldb_mock_query_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
 	s.scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_dump_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
 	s.scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)

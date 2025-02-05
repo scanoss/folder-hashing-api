@@ -100,7 +100,7 @@ func RunServer() error {
 	zlog.SetupAppDynamicLogging(cfg.Logging.DynamicPort, cfg.Logging.DynamicLogging)
 	// Register the hfh service
 	ctx := context.Background()
-	v2API, err := service.NewFolderHashingServer(cfg, ctx)
+	v2API, err := service.NewFolderHashingServer(cfg)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

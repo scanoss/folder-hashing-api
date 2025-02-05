@@ -3,6 +3,7 @@ package ldb
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,10 +22,16 @@ func (t *TableDefinition) Query(keyHex string, dataChan chan []string, closeChan
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		if closeChan {
+			close(dataChan)
+		}
 		return count, fmt.Errorf("failed to create stdout pipe: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
+		if closeChan {
+			close(dataChan)
+		}
 		return count, fmt.Errorf("failed to start command: %v", err)
 	}
 
@@ -165,7 +172,7 @@ func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit
 			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 			cmd := exec.Command("bash", "-c", cmdStr.String())
 
-			//log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+			log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
@@ -195,8 +202,8 @@ func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit
 
 				parts := strings.Split(line, ",")
 				dataChan <- parts
-				mu.Lock()
 				t.addData2Cache(parts)
+				mu.Lock()
 				count++
 				if limit > 0 && count >= limit {
 					close(dataChan)

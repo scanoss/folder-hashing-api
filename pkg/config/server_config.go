@@ -100,7 +100,7 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Ldb.BinaryPath = "/usr/bin/ldb"
 	cfg.Ldb.KbName = "hfh_kb"
 	cfg.Hfh.Dmax = 24
-	cfg.Hfh.SectorTol = 8
+	cfg.Hfh.SectorTol = 4
 	cfg.Hfh.Threshold1 = 80
 	cfg.Hfh.Threshold2 = 70
 	cfg.Hfh.Threshold3 = 51

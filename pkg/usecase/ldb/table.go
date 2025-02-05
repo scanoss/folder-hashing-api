@@ -472,7 +472,7 @@ func (t *TableDefinition) addData2Cache(data []string) error {
 	}
 
 	newdata := true
-	if records, exists := t.cache[sector][data[0]]; exists {
+	/*if records, exists := t.cache[sector][data[0]]; exists {
 
 		for _, record := range records {
 			if len(record) != len(data)-1 {
@@ -491,7 +491,7 @@ func (t *TableDefinition) addData2Cache(data []string) error {
 				break
 			}
 		}
-	}
+	}*/
 
 	if newdata {
 		dataCopy := make([]string, len(data)-1)
