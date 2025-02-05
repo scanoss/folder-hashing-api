@@ -113,13 +113,6 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
 	}
 
-	/*	s.s.Infof("Second stage starts")
-		err = s.scanTreeSecondStage(projectTree)
-		if err != nil {
-			s.s.Error(err)
-			return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process second stage %v", err)
-		}*/
-
 	jsonBytes, _ := json.Marshal(s.resultsMap)
 	s.s.Debug(string(jsonBytes))
 
@@ -292,7 +285,7 @@ func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHsc
 			return components[i].Date.Before(components[j].Date)
 		})
 		if len(components) > 10 {
-			return components[:10]
+			return components[:limit/10]
 		}
 		return components
 	}
@@ -498,7 +491,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 				resultMatrix[i] = append(resultMatrix[i], candidates...)
 			}
 		}
-		ranking := RankHashesByColumns(resultMatrix, 20)
+		ranking := RankHashesByColumns(resultMatrix, s.Config.dMax*85/100)
 		eqProb := float32(0)
 		if len(ranking) > 0 {
 			eqProb = float32(ranking[0].Count) / float32(len(node.Children)) * 100
@@ -534,7 +527,9 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 				s.scanTreeFirstStage(child)
 			}
 		}
+		return nil
 	}
+	s.resultsMap[node.PathId] = *result
 	return nil
 }
 
