@@ -26,6 +26,7 @@ func directoryExists(path string) bool {
 	return info.IsDir()
 }
 func main() {
+	detailed := flag.Bool("detailed", false, "request a detailed scan")
 	flag.Parse()
 	path := flag.Arg(0)
 
@@ -41,7 +42,7 @@ func main() {
 	fmt.Println(err)
 
 	request := &pb.HFHRequest{
-		BestMatch: false,
+		BestMatch: *detailed,
 		Threshold: 100,
 		Root:      requestRoot,
 	}

@@ -32,17 +32,17 @@ import (
 
 type hfhServer struct {
 	pb.ScanningServer
-	config  *myconfig.ServerConfig
-	scanner *u.HFHscan
+	config        *myconfig.ServerConfig
+	scannerConfig *u.HFHscanConfig
 }
 
 func NewFolderHashingServer(config *myconfig.ServerConfig) (*hfhServer, error) {
 	setupMetrics()
-	scanner := u.HFHScanInit(config)
-	if scanner == nil {
+	scannerConfig := u.HFHScanInit(config)
+	if scannerConfig == nil {
 		return nil, fmt.Errorf("error creating scanning instance")
 	}
-	return &hfhServer{config: config, scanner: scanner}, nil
+	return &hfhServer{config: config, scannerConfig: scannerConfig}, nil
 }
 
 // Echo sends back the same message received.
@@ -67,8 +67,9 @@ func (d hfhServer) FolderHashScan(ctx context.Context, request *pb.HFHRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("error processing request")
 	}
+	scanner := u.HFHScanNew(s, d.scannerConfig, &dtoRequest)
 	s.Infof("Scan starts")
-	dtoResults, err := d.scanner.Scan(s, &dtoRequest)
+	dtoResults, err := scanner.Scan(dtoRequest.Root)
 	if err != nil {
 		s.Errorf("error during hfh scanning: %v", err)
 		statusResp := common.StatusResponse{Status: common.StatusCode_FAILED, Message: "Failure"}

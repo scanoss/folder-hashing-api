@@ -66,6 +66,7 @@ type ServerConfig struct {
 		Threshold2 float32 `env:"HFH_TH2"`        // HFH second stafge analysis threshold
 		Threshold3 float32 `env:"HFH_TH3"`        // HFH third stafge analysis threshold
 		SectorTol  int     `env:"HFH_SECTOR_TOL"` // HFH ldb sector tolerance
+		UrlsLimit  int     `env:"HFH_URL_LIM"`    // HFH maximum urls to be processed
 	}
 }
 
@@ -99,9 +100,10 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
 	cfg.Ldb.BinaryPath = "/usr/bin/ldb"
 	cfg.Ldb.KbName = "hfh_kb"
-	cfg.Hfh.Dmax = 24
+	cfg.Hfh.Dmax = 30
 	cfg.Hfh.SectorTol = 4
-	cfg.Hfh.Threshold1 = 80
-	cfg.Hfh.Threshold2 = 70
+	cfg.Hfh.Threshold1 = 75
+	cfg.Hfh.Threshold2 = 65
 	cfg.Hfh.Threshold3 = 51
+	cfg.Hfh.UrlsLimit = 100
 }

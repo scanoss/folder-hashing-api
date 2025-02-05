@@ -17,17 +17,25 @@ import (
 )
 
 type HFHscan struct {
+	Config     *HFHscanConfig
+	resultsMap map[string]HFHscanResult
+	s          *zap.SugaredLogger
+	thStage1   float32
+	thStage2   float32
+	thStage3   float32
+	bestMatch  bool
+}
+
+type HFHscanConfig struct {
 	HfhTable    *ldb.TableDefinition
 	HfhSecTable *ldb.TableDefinition
 	UrlTable    *ldb.TableDefinition
+	dMax        int
+	sectorTol   int
+	urlsLimit   int
 	thStage1    float32
 	thStage2    float32
 	thStage3    float32
-	bestMatch   bool
-	dMax        int
-	sectorTol   int
-	resultsMap  map[string]HFHscanResult
-	s           *zap.SugaredLogger
 }
 
 type HFHscanResultItem struct {
@@ -43,13 +51,19 @@ type HFHscanResult struct {
 	Probability float32             `json:"probability"`
 }
 
-func HFHScanInit(config *myconfig.ServerConfig) *HFHscan {
-	scanner := HFHscan{
+const (
+	reportedVersionsNumber = 5
+)
+
+func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
+	scanner := HFHscanConfig{
 		thStage1:  config.Hfh.Threshold1,
 		thStage2:  config.Hfh.Threshold2,
 		thStage3:  config.Hfh.Threshold3,
 		dMax:      config.Hfh.Dmax,
-		sectorTol: config.Hfh.SectorTol}
+		sectorTol: config.Hfh.SectorTol,
+		urlsLimit: config.Hfh.UrlsLimit,
+	}
 
 	var err error
 	//Initialize ldb tables
@@ -69,9 +83,8 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscan {
 	return &scanner
 }
 
-// Scan is the main scanning function
-func (s *HFHscan) Scan(log *zap.SugaredLogger, input *dtos.HFHscanInput) (dtos.HFHResultOutput, error) {
-	s.s = log
+func HFHScanNew(log *zap.SugaredLogger, config *HFHscanConfig, input *dtos.HFHscanInput) *HFHscan {
+	scanner := HFHscan{s: log, resultsMap: make(map[string]HFHscanResult), Config: config}
 	threshold := input.Threshold
 	bestMatch := input.BestMatch
 	if threshold <= 10 {
@@ -81,15 +94,19 @@ func (s *HFHscan) Scan(log *zap.SugaredLogger, input *dtos.HFHscanInput) (dtos.H
 	if threshold > 300 {
 		threshold = 300
 	}
-	s.s.Infof("HFH threshold set: %d%%", threshold)
+	scanner.s.Infof("HFH threshold set: %d%%", threshold)
 
-	s.thStage1 *= float32(threshold) / 100
-	s.thStage2 *= float32(threshold) / 100
-	s.thStage3 *= float32(threshold) / 100
-	s.bestMatch = bestMatch
-	s.resultsMap = make(map[string]HFHscanResult)
-	projectTree := input.Root
+	scanner.thStage1 = scanner.Config.thStage1 * float32(threshold) / 100
+	scanner.thStage2 = scanner.Config.thStage2 * float32(threshold) / 100
+	scanner.thStage3 = scanner.Config.thStage3 * float32(threshold) / 100
+	scanner.bestMatch = bestMatch
 
+	return &scanner
+}
+
+// Scan is the main scanning function
+func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, error) {
+	projectTree := root
 	s.s.Infof("First stage starts")
 	err := s.scanTreeFirstStage(projectTree)
 	if err != nil {
@@ -133,7 +150,7 @@ func hammingDistance(x, y uint64) int {
 }
 
 // scanHash queries the ldb tables and get the proximity candidates
-func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDistance int) ([]uint64, int, [][]string, error) {
+func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDistance int, deep bool) ([]uint64, int, [][]string, error) {
 
 	hash, err := strconv.ParseUint(hashHex, 16, 64)
 	if err != nil {
@@ -161,7 +178,7 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 			contents = append(contents, r[1:])
 		}
 		return closestMatches, 0, contents, nil
-	} else {
+	} else if !deep {
 		return nil, 100, nil, nil
 	}
 
@@ -218,12 +235,12 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 }
 
 // retrieves purl information from the url table
-func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultItem {
+func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHscanResultItem {
 	uniquePurls := make(map[string]bool)
 	uniquePurlVersions := make(map[string]bool)
 	purlVersionMap := make(map[string][]string)
 	purlReleaseDate := make(map[string]time.Time)
-	uniquePurlsLimit := 100
+	uniquePurlsLimit := limit
 	for _, urlKey := range urls {
 		urlRecords, err := table.QueryKey(urlKey)
 		if err != nil {
@@ -264,9 +281,9 @@ func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultIte
 			components[i].Purl = purl
 			components[i].Versions = purlVersionMap[purl]
 			if len(components[i].Versions) > 5 {
-				components[i].Versions = components[i].Versions[:5]
+				components[i].Versions = components[i].Versions[:reportedVersionsNumber]
 			}
-			components[i].Confidence = 100
+			components[i].Confidence = 100.0 / float32(len(uniquePurls))
 			components[i].Date = purlReleaseDate[purl]
 			i++
 		}
@@ -284,7 +301,7 @@ func getComponents(table *ldb.TableDefinition, urls []string) []HFHscanResultIte
 
 func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash string) (*HFHscanResult, error) {
 	//get the matching candidates from the HFH table based on the file names hash
-	result, distance, content, err := scanHash(s.HfhTable, fileNamesSimhash, s.sectorTol, s.dMax)
+	result, distance, content, err := scanHash(s.Config.HfhTable, fileNamesSimhash, s.Config.sectorTol, s.Config.dMax, s.bestMatch)
 	if err != nil {
 		return nil, err
 	}
@@ -293,8 +310,8 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 		s.s.Debugf("FileNamesHash %s mathed with: %x with distance %d", fileNamesSimhash, result[0], distance)
 	}
 	//select the best based on the file contents hash
-	minFilesContentdistance := s.dMax * 3 / 4
-	if distance > s.dMax {
+	minFilesContentdistance := s.Config.dMax * 3 / 4
+	if distance > s.Config.dMax {
 		return nil, nil
 	}
 
@@ -330,26 +347,138 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 	//If we were able to find a good filecontent match we prefer it
 	if len(bestUrlsKey) > 0 {
 		s.s.Debugf("Filename Hash %s filecontent hash %s distance: %d - assigned URL: %s", fileNamesSimhash, fileContentsSimhash, minFilesContentdistance, bestUrlsKey)
-		probability := (1 - float32(minFilesContentdistance)/float32(s.dMax)) * 100
+		probability := (1 - float32(minFilesContentdistance)/float32(s.Config.dMax)) * 100
 		st := 1
 		if probability < 0 {
-			probability = (1 - float32(distance)/float32(s.dMax)) * 100
+			probability = (1 - float32(distance)/float32(s.Config.dMax)) * 100
+			//if we are looking for the best match decrease the probability to force to evaluate other items
+			if s.bestMatch {
+				probability /= 2
+			}
 			st = 0
 		}
 
-		fistStageComponents := getComponents(s.UrlTable, bestUrlsKey)
+		fistStageComponents := getComponents(s.Config.UrlTable, bestUrlsKey, s.Config.urlsLimit)
 		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: st}, nil
 	}
 	//If not, process all the filenames hash
 	s.s.Debugf("No filecontents match, using just fileNames match")
-	probability := (1 - float32(distance)/float32(s.dMax)) * 100
+	probability := (1 - float32(distance)/float32(s.Config.dMax)) * 100
 	urls := make([]string, len(content))
 	for i, c := range content {
 		urls[i] = c[1]
 	}
-	fistStageComponents := getComponents(s.UrlTable, urls)
+	fistStageComponents := getComponents(s.Config.UrlTable, urls, s.Config.urlsLimit)
 
 	return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 0}, nil
+}
+
+type HashCount struct {
+	Hash  string
+	Count int
+}
+
+func hammingDistanceString(hash1, hash2 string) int {
+	x, _ := strconv.ParseUint(hash1, 16, 64)
+	y, _ := strconv.ParseUint(hash2, 16, 64)
+	xor := x ^ y
+	return bits.OnesCount64(xor)
+}
+
+// RankHashesByColumns takes a matrix of strings (hashes) and returns a sorted slice
+// of HashCount where Count represents the number of different columns where each hash appears
+func RankHashesByColumns(matrix [][]string, threshold int) []HashCount {
+	if len(matrix) == 0 {
+		return []HashCount{}
+	}
+
+	// Map to store the count for each hash
+	hashCounts := make(map[string]int)
+
+	// Add existent hashes with count 1
+	for i := 0; i < len(matrix); i++ {
+		if matrix[i] == nil {
+			continue
+		}
+		for j := 0; j < len(matrix[i]); j++ {
+			hash := matrix[i][j]
+			if hash == "" {
+				continue
+			}
+			if _, exists := hashCounts[hash]; !exists {
+				hashCounts[hash] = 1
+			}
+		}
+	}
+
+	// Compare hashes only with elements from different rows
+	for row := 0; row < len(matrix); row++ {
+		if matrix[row] == nil {
+			continue
+		}
+
+		// For each hash in current row
+		for j := 0; j < len(matrix[row]); j++ {
+			hash := matrix[row][j]
+			if hash == "" {
+				continue
+			}
+
+			// Compare only with subsequent rows
+			for otherRow := row + 1; otherRow < len(matrix); otherRow++ {
+				if matrix[otherRow] == nil {
+					continue
+				}
+
+				foundMatch := false
+				// Compare with all elements in the other row
+				for l := 0; l < len(matrix[otherRow]); l++ {
+					otherHash := matrix[otherRow][l]
+					if otherHash == "" {
+						continue
+					}
+
+					distance := hammingDistanceString(hash, otherHash)
+					if distance <= threshold {
+						if hash == otherHash {
+							// If exact match, increment only one
+							hashCounts[hash]++
+						} else {
+							// If different but within threshold, increment both
+							hashCounts[hash]++
+							hashCounts[otherHash]++
+						}
+						foundMatch = true
+						break
+					}
+				}
+
+				// If match found in this row, skip to next row
+				if foundMatch {
+					break
+				}
+			}
+		}
+	}
+
+	// Convert to ranking slice
+	ranking := make([]HashCount, 0, len(hashCounts))
+	for hash, count := range hashCounts {
+		ranking = append(ranking, HashCount{
+			Hash:  hash,
+			Count: count,
+		})
+	}
+
+	// Sort by count (highest to lowest) and then by hash (alphabetically)
+	sort.Slice(ranking, func(i, j int) bool {
+		if ranking[i].Count == ranking[j].Count {
+			return ranking[i].Hash < ranking[j].Hash
+		}
+		return ranking[i].Count > ranking[j].Count
+	})
+
+	return ranking
 }
 
 func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
@@ -358,27 +487,52 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	if err != nil {
 		return err
 	}
-	//If we matched a canditate using just the names, we are going to reduce that probability by half
-	if result != nil && result.Probability >= s.thStage1 {
-		if result.Stage == 0 {
-			result.Probability /= 2
-		}
-		s.resultsMap[node.PathId] = *result
-	}
 
-	if result == nil || (result.Probability < s.thStage1 || result.Stage == 0) {
+	if result == nil || (result.Probability < s.thStage1 || (result.Stage == 0 && s.bestMatch)) {
 
-		result2, err := s.scanSecondStage(node.SimHashContent)
-		if err != nil {
-			return err
+		resultMatrix := make([][]string, len(node.Children))
+		for i, child := range node.Children {
+			s.s.Debugf(child.PathId)
+			candidates, err := s.scanSecondStage(child.SimHashContent)
+			if err == nil {
+				resultMatrix[i] = append(resultMatrix[i], candidates...)
+			}
 		}
-		if result2.Probability >= s.thStage2 && len(result2.Components) > 0 {
-			s.resultsMap[node.PathId] = *result2
+		ranking := RankHashesByColumns(resultMatrix, 20)
+		eqProb := float32(0)
+		if len(ranking) > 0 {
+			eqProb = float32(ranking[0].Count) / float32(len(node.Children)) * 100
+		}
+		if eqProb >= s.thStage2 {
+			var urlKeys []string
+			urlsLimit := s.Config.urlsLimit
+			for i, r := range ranking {
+				//go to the main hfh table to look for the url hash
+				if i > 0 && r.Count < ranking[i-1].Count {
+					break
+				}
+				key := r.Hash
+				records, err := s.Config.HfhTable.QueryKey(key)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				for _, r := range records {
+					urlKeys = append(urlKeys, r[2])
+				}
+				if len(urlKeys) > urlsLimit {
+					break
+				}
+			}
+
+			components := getComponents(s.Config.UrlTable, urlKeys, s.Config.urlsLimit)
+
+			s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: eqProb, Stage: 2}
 			return nil
-		}
-
-		for _, child := range node.Children {
-			s.scanTreeFirstStage(child)
+		} else {
+			for _, child := range node.Children {
+				s.scanTreeFirstStage(child)
+			}
 		}
 	}
 	return nil
@@ -394,7 +548,7 @@ func headCalc(simHash uint64) byte {
 	return byte(sum >> 4 & 0xFF)
 }
 
-func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, error) {
+func (s *HFHscan) scanSecondStage(fileContentsSimhash string) ([]string, error) {
 
 	hash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
 	if err != nil {
@@ -404,66 +558,87 @@ func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, e
 	//Overwrite the MS byte with the head to keep the hash size total
 	key := (hash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
 	keyHex := fmt.Sprintf("%02x", key)
-	match, distance, content, err := scanHash(s.HfhSecTable, keyHex, s.sectorTol/4, s.dMax/3)
+	match, distance, content, err := scanHash(s.Config.HfhSecTable, keyHex, s.Config.sectorTol/4, s.Config.dMax, s.bestMatch)
 	if err != nil {
 		return nil, err
 	}
-
+	if content == nil {
+		return nil, nil
+	}
 	s.s.Debugf("secHash: %x - matched: %x- distance %d\n", key, match, distance)
-	var urlKeys []string
-	urlsLimit := 100
-	for _, c := range content {
-		//go to the main hfh table to look for the url hash
-		key := c[0]
-		records, err := s.HfhTable.QueryKey(key)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		for _, r := range records {
-			urlKeys = append(urlKeys, r[2])
-		}
-		if len(urlKeys) > urlsLimit {
-			break
-		}
-	}
-
-	probability := (1 - float32(distance)/float32(s.dMax)) * 100
-	components := getComponents(s.UrlTable, urlKeys)
-	if len(components) == 0 {
-		s.s.Debugf("no matched components for secHash %x", hash)
-	}
-	/*if len(components) > 1000 {
-		s.s.Debugf("Ignore too popular hash, set prob to 0")
-		probability = 0
-	}*/
-
-	return &HFHscanResult{Components: components, Probability: probability, Stage: 2}, nil
+	return content[0], nil
 }
 
-func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
+// func (s *HFHscan) scanSecondStage(fileContentsSimhash string) (*HFHscanResult, error) {
 
-	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability > s.thStage2 {
-		s.s.Debugf("skiping childrens. Root node %s probability exceeds the threshold: %.1f/%.1f", node.PathId, s.resultsMap[node.PathId].Probability, s.thStage2)
-		return nil
-	}
+// 	hash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("error decoding key %s - %v", fileContentsSimhash, err)
+// 	}
+// 	head := headCalc(hash)
+// 	//Overwrite the MS byte with the head to keep the hash size total
+// 	key := (hash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
+// 	keyHex := fmt.Sprintf("%02x", key)
+// 	match, distance, content, err := scanHash(s.Config.HfhSecTable, keyHex, s.Config.sectorTol/4, s.Config.dMax/3, s.bestMatch)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	result, err := s.scanSecondStage(node.SimHashContent)
-	if err != nil {
-		return err
-	}
-	if result.Probability >= s.thStage2 && len(result.Components) > 0 {
-		s.resultsMap[node.PathId] = *result
-	}
+// 	s.s.Debugf("secHash: %x - matched: %x- distance %d\n", key, match, distance)
+// 	var urlKeys []string
+// 	urlsLimit := 100
+// 	for _, c := range content {
+// 		//go to the main hfh table to look for the url hash
+// 		key := c[0]
+// 		records, err := s.Config.HfhTable.QueryKey(key)
+// 		if err != nil {
+// 			fmt.Println(err)
+// 			continue
+// 		}
+// 		for _, r := range records {
+// 			urlKeys = append(urlKeys, r[2])
+// 		}
+// 		if len(urlKeys) > urlsLimit {
+// 			break
+// 		}
+// 	}
 
-	if s.resultsMap[node.PathId].Probability < s.thStage2 || s.resultsMap[node.PathId].Stage == 0 {
-		for _, child := range node.Children {
-			s.scanTreeSecondStage(child)
-		}
-	}
+// 	probability := (1 - float32(distance)/float32(s.Config.dMax)) * 100
+// 	components := getComponents(s.Config.UrlTable, urlKeys, s.Config.urlsLimit)
+// 	if len(components) == 0 {
+// 		s.s.Debugf("no matched components for secHash %x", hash)
+// 	}
+// 	/*if len(components) > 1000 {
+// 		s.s.Debugf("Ignore too popular hash, set prob to 0")
+// 		probability = 0
+// 	}*/
 
-	return nil
-}
+// 	return &HFHscanResult{Components: components, Probability: probability, Stage: 2}, nil
+// }
+
+// func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
+
+// 	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability > s.thStage2 {
+// 		s.s.Debugf("skiping childrens. Root node %s probability exceeds the threshold: %.1f/%.1f", node.PathId, s.resultsMap[node.PathId].Probability, s.thStage2)
+// 		return nil
+// 	}
+
+// 	result, err := s.scanSecondStage(node.SimHashContent)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if result.Probability >= s.thStage2 && len(result.Components) > 0 {
+// 		s.resultsMap[node.PathId] = *result
+// 	}
+
+// 	if s.resultsMap[node.PathId].Probability < s.thStage2 || s.resultsMap[node.PathId].Stage == 0 {
+// 		for _, child := range node.Children {
+// 			s.scanTreeSecondStage(child)
+// 		}
+// 	}
+
+// 	return nil
+// }
 
 func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	if node.Children == nil {
@@ -552,7 +727,7 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 						versions = append(versions, v)
 						versionNumber++
 					}
-					if versionNumber > 5 {
+					if versionNumber > reportedVersionsNumber {
 						break
 					}
 				}
