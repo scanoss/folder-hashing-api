@@ -27,6 +27,7 @@ import (
 	pb "github.com/scanoss/papi/api/scanningv2"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 	myconfig "scanoss.com/hfh-api/pkg/config"
+	u "scanoss.com/hfh-api/pkg/usecase"
 	"scanoss.com/hfh-api/pkg/usecase/ldb"
 )
 
@@ -92,9 +93,19 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 		t.Fatalf("failed to load Config: %v", err)
 	}
 	s, _ := NewFolderHashingServer(myConfig)
-	s.scanner.HfhTable = ldb.NewTable("./test/ldb_mock_query_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
-	s.scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_dump_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
-	s.scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
+	scannerConfig := u.HFHscanConfig{
+		ThStage1:    myConfig.Hfh.Threshold1,
+		ThStage2:    myConfig.Hfh.Threshold2,
+		ThStage3:    myConfig.Hfh.Threshold3,
+		Dmax:        myConfig.Hfh.Dmax,
+		SectorTol:   myConfig.Hfh.SectorTol,
+		UrlsLimit:   myConfig.Hfh.UrlsLimit,
+		HfhTable:    ldb.NewTable("./test/ldb_mock_query_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
+		HfhSecTable: ldb.NewTable("./test/ldb_mock_dump_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
+		UrlTable:    ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil),
+	}
+	s.scannerConfig = &scannerConfig
+
 	var hfhRequestData = `{
 		"best_match": true,
   		"threshold": 60,

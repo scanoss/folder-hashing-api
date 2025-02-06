@@ -40,7 +40,7 @@ func NewFolderHashingServer(config *myconfig.ServerConfig) (*hfhServer, error) {
 	setupMetrics()
 	scannerConfig := u.HFHScanInit(config)
 	if scannerConfig == nil {
-		return nil, fmt.Errorf("error creating scanning instance")
+		return &hfhServer{config: config, scannerConfig: scannerConfig}, fmt.Errorf("error creating scanning instance")
 	}
 	return &hfhServer{config: config, scannerConfig: scannerConfig}, nil
 }

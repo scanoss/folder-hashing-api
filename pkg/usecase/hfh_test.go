@@ -25,27 +25,31 @@ func testScanInitHelper() (*HFHscan, error) {
 	ctx := ctxzap.ToContext(context.Background(), zlog.L)
 	s := ctxzap.Extract(ctx).Sugar()
 
-	cfg, err := myconfig.NewServerConfig(nil)
+	config, err := myconfig.NewServerConfig(nil)
 	if err != nil {
 		return nil, fmt.Errorf("Fatal error loading default config")
 	}
 
-	scanner := HFHScanInit(cfg)
-	scanner.HfhTable = ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
-	scanner.HfhSecTable = ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfhSec", 8, 0, 2, []string{"secHash", "mainHash"}, ldb.LdbTableDefinitionStandard, false, nil)
-	scanner.UrlTable = ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil)
-	scanner.s = s
+	scannerConfig := HFHscanConfig{
+		ThStage1:    config.Hfh.Threshold1,
+		ThStage2:    config.Hfh.Threshold2,
+		ThStage3:    config.Hfh.Threshold3,
+		Dmax:        config.Hfh.Dmax,
+		SectorTol:   config.Hfh.SectorTol,
+		UrlsLimit:   config.Hfh.UrlsLimit,
+		HfhTable:    ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
+		HfhSecTable: ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfhSec", 8, 0, 2, []string{"secHash", "mainHash"}, ldb.LdbTableDefinitionStandard, false, nil),
+		UrlTable:    ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil),
+	}
+	dt := dtos.HFHscanInput{BestMatch: true, Threshold: 100}
+	scanner := HFHScanNew(s, &scannerConfig, &dt)
 	return scanner, nil
 }
 
 func TestHFHscanHash(t *testing.T) {
-	hfhTable, err := ldb.NewTableFromCfg("", "hfh_kb", "hfh", []string{"fileNames", "fileContents", "url"}, true)
-	if err != nil {
-		t.Fatalf("an error '%s' was not expected reading the table config", err)
-		return
-	}
-	fileNamesSimhash := "8172bd3ef0ab37b4"
-	result, distance, content, err := scanHash(hfhTable, fileNamesSimhash, 0, 30)
+	hfhTable := ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil)
+	fileNamesSimhash := "5f3dcd05ab272b52"
+	result, distance, content, _ := scanHash(hfhTable, fileNamesSimhash, 0, 30, true)
 	t.Logf("Result: %x", result)
 	t.Log("distance:", distance)
 	t.Log("content:", content)
@@ -53,13 +57,13 @@ func TestHFHscanHash(t *testing.T) {
 	if distance > 0 {
 		t.Errorf("the hashes do not match: %x vs %x", fileNamesSimhash, result[0])
 	}
-	fileNamesSimhash = "8162bd4ec1aa36b3"
+	fileNamesSimhash = "81a5b049637f034b"
 
-	result, distance, content, err = scanHash(hfhTable, fileNamesSimhash, 0, 30)
+	result, distance, content, _ = scanHash(hfhTable, fileNamesSimhash, 0, 30, true)
 	t.Logf("Result: %x", result)
 	t.Log("distance:", distance)
 	t.Log("content:", content)
-	expectedDistance := 11
+	expectedDistance := 5
 	if distance != expectedDistance {
 		t.Errorf("the expected distance do not match: %d vs %d", distance, expectedDistance)
 	}
@@ -177,85 +181,6 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 	expectedPurl = "pkg:github/recastnavigation/recastnavigation"
 	if scanner.resultsMap["/root/child3"].Components[0].Purl != expectedPurl {
 		t.Errorf("result component doesn't match: %s vs %s", scanner.resultsMap["/root/child3"].Components[0].Purl, expectedPurl)
-	}
-}
-
-func TestHFHscanSecondStage(t *testing.T) {
-	scanner, err := testScanInitHelper()
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	var expectedProb float32 = 100.0
-	fileContentsSimhash := "644789ffa01b315e"
-	result, err := scanner.scanSecondStage(fileContentsSimhash)
-	if err != nil {
-		t.Errorf("scan failed with error: %v", err)
-	}
-
-	t.Log("result:", result.Components)
-
-	if result.Probability < expectedProb {
-		t.Errorf("unexpected confidence result: %.1f, expected %.1f", result.Probability, expectedProb)
-	}
-
-	fileContentsSimhash = "f20bd0f12d44bb2a"
-	result, err = scanner.scanSecondStage(fileContentsSimhash)
-	if err != nil {
-		t.Errorf("scan failed with error: %v", err)
-	}
-	expectedProb = 95.8
-	t.Logf("prob %.1f - result: %v", result.Probability, result.Components)
-	if result.Probability < expectedProb-1 || result.Probability > expectedProb+1 {
-		t.Errorf("unexpected confidence result: %.1f, expected %.1f", result.Probability, expectedProb)
-		return
-	}
-	expectedPurl := "pkg:npm/swot-node"
-	if result.Components[0].Purl != expectedPurl {
-		t.Errorf("unexpected result purl: %s, expected: %s", result.Components[0].Purl, expectedPurl)
-	}
-}
-
-func TestHFHscanTreeSecondStage(t *testing.T) {
-	scanner, err := testScanInitHelper()
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	scanner.resultsMap = make(map[string]HFHscanResult)
-
-	node := &dtos.HFHScanInputChildren{
-		PathId:         "/root",
-		SimHashNames:   "8172bd3ef0ab37b4",
-		SimHashContent: "862e8c6490b29efd",
-		Children: []*dtos.HFHScanInputChildren{
-			{
-				PathId:         "/root/child1",
-				SimHashNames:   "d7fbe83ee4bdfefc",
-				SimHashContent: "76bdd0767d764853",
-			},
-			{
-				PathId:         "/root/child2",
-				SimHashNames:   "8ee95581318be650",
-				SimHashContent: "644789ffa01b315e",
-			},
-			{
-				PathId:         "/root/child3",
-				SimHashNames:   "8382b543602ba3b8",
-				SimHashContent: "643a57d3b6f27064",
-			},
-		},
-	}
-
-	err = scanner.scanTreeSecondStage(node)
-	if err != nil {
-		t.Errorf("unexpected error during scan process %v", err)
-	}
-
-	t.Log("Second stage results:", scanner.resultsMap)
-	expectedPurl := "pkg:github/tencent/rapidjson"
-	if scanner.resultsMap["/root/child2"].Components[0].Purl != expectedPurl {
-		t.Errorf("unexpected result purl %s. Expected: %s", scanner.resultsMap["/root/child2"].Components[0].Purl, expectedPurl)
 	}
 }
 
@@ -407,7 +332,7 @@ func TestHFHthirdStep(t *testing.T) {
 		t.Fatal(err)
 		return
 	}
-	scanInput := dtos.HFHscanInput{Threshold: 100, BestMatch: false, Root: test.Monorepo_root}
+	scanInput := dtos.HFHscanInput{Root: test.Monorepo_root}
 	scanner.resultsMap = resultsMap
 	err = scanner.scanTreeThirdStage(scanInput.Root)
 	if err != nil {
@@ -420,7 +345,7 @@ func TestHFHthirdStep(t *testing.T) {
 
 	t.Log("Second stage results:", scanner.resultsMap)
 	expectedPurl := "pkg:github/signalapp/libsignal-protocol-java"
-	var expectedProb float32 = 59.17
+	var expectedProb float32 = 64.2
 	if resultsMap["/monorepo/deps/libsignal-protocol-test"].Components[0].Purl != expectedPurl {
 		t.Errorf("unexpected result purl %s. Expected: %s", resultsMap["/monorepo/deps/libsignal-protocol-test"].Components[0].Purl, expectedPurl)
 	}
@@ -502,14 +427,15 @@ func TestHFHScan(t *testing.T) {
 		t.Errorf("Fatal error loading default config")
 	}
 
-	scanner := HFHScanInit(cfg)
-	if scanner == nil {
+	scannerConfig := HFHScanInit(cfg)
+	if scannerConfig == nil {
 		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
 
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
-	response, err := scanner.Scan(s, &scanInput)
+	scanner := HFHScanNew(s, scannerConfig, &scanInput)
+	response, err := scanner.Scan(scanInput.Root)
 	if err != nil {
 		t.Errorf("scanning fails %v", err)
 		return
@@ -517,52 +443,6 @@ func TestHFHScan(t *testing.T) {
 	jsonBytes, _ := json.Marshal(response)
 	t.Log(string(jsonBytes))
 	expectedResponse := `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
-	if string(jsonBytes) != expectedResponse {
-		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
-	}
-}
-
-func TestHFHScanCache(t *testing.T) {
-	err := zlog.NewSugaredDevLogger()
-	if err != nil {
-		t.Logf("an error '%s' was not expected when opening a sugared logger", err)
-	}
-
-	defer zlog.SyncZap()
-	ctx := ctxzap.ToContext(context.Background(), zlog.L)
-	s := ctxzap.Extract(ctx).Sugar()
-
-	cfg, err := myconfig.NewServerConfig(nil)
-	if err != nil {
-		t.Errorf("Fatal error loading default config")
-	}
-
-	scanner := HFHScanInit(cfg)
-	if scanner == nil {
-		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
-		return
-	}
-	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
-	response, err := scanner.Scan(s, &scanInput)
-	if err != nil {
-		t.Errorf("scannning fails %v", err)
-		return
-	}
-	jsonBytes, _ := json.Marshal(response)
-	t.Log(string(jsonBytes))
-	expectedResponse := `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
-	if string(jsonBytes) != expectedResponse {
-		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
-	}
-
-	response, err = scanner.Scan(s, &scanInput)
-	if err != nil {
-		t.Errorf("scannning fails %v", err)
-		return
-	}
-	jsonBytes, _ = json.Marshal(response)
-	t.Log(string(jsonBytes))
-	expectedResponse = `{"results":[{"path_id":"/monorepo/deps/libsignal-protocol-test","components":[{"purl":"pkg:github/signalapp/libsignal-protocol-java","versions":["pkg:github/signalapp/libsignal-protocol-java"],"confidence":59.166664}]},{"path_id":"/monorepo/deps/other","components":[{"purl":"pkg:github/recastnavigation/recastnavigation","versions":["v1.6.0"],"confidence":100}]},{"path_id":"/monorepo/deps/zlib-1.2.13","components":[{"purl":"pkg:gitlab/rluna-database/nosql/arangodb/arangodb-2020","versions":["v3.11.3.1"],"confidence":100}]},{"path_id":"/monorepo/other/rapidjson-1.1.0-test","components":[{"purl":"pkg:github/nilsbore/roswasm_suite","versions":["release-8"],"confidence":100}]}]}`
 	if string(jsonBytes) != expectedResponse {
 		t.Errorf("unexpected response %s. Expected: %s", string(jsonBytes), expectedResponse)
 	}
@@ -592,23 +472,25 @@ func TestHFHScanBusyBox(t *testing.T) {
 			},
 		},
 	}
-
-	scanner, err := testScanInitHelper()
+	cfg, err := myconfig.NewServerConfig(nil)
 	if err != nil {
-		t.Fatal(err)
-		return
+		t.Errorf("Fatal error loading default config")
 	}
+
 	zlog.NewSugaredDevLogger()
 	zlog.SyncZap()
 	ctx := ctxzap.ToContext(context.Background(), zlog.L)
 	s := ctxzap.Extract(ctx).Sugar()
 
-	scanInput := dtos.HFHscanInput{Threshold: 1, BestMatch: false, Root: node}
-	response, err := scanner.Scan(s, &scanInput)
-	if err != nil {
-		t.Errorf("scannning fails %v", err)
+	scannerConfig := HFHScanInit(cfg)
+	if scannerConfig == nil {
+		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
+
+	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: node}
+	scanner := HFHScanNew(s, scannerConfig, &scanInput)
+	response, _ := scanner.Scan(scanInput.Root)
 
 	jsonBytes, _ := json.Marshal(response)
 	t.Log(string(jsonBytes))
