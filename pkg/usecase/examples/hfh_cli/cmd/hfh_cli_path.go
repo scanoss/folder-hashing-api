@@ -70,7 +70,7 @@ func main() {
 
 	log.Printf("Processing response...")
 	log.Printf("Response Status: %+v", response.Status)
-	jsonBytes, _ := json.Marshal(response)
-	log.Printf(string(jsonBytes))
+	jsonBytes, _ := json.MarshalIndent(response, "", "\t")
+	fmt.Println(string(jsonBytes))
 
 }

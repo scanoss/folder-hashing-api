@@ -3,7 +3,6 @@ package ldb
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -172,7 +171,7 @@ func (t *TableDefinition) DumpNativeParallel(startingSector, endingSector, limit
 			cmdStr.WriteString(fmt.Sprintf("echo 'dump %s/%s hex -1 sector %x' | %s", t.KbName, t.TableName, sector, t.ldbBinaryPath))
 			cmd := exec.Command("bash", "-c", cmdStr.String())
 
-			log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
+			//log.Printf("Executing in directory %s: %s", cmd.Dir, cmdStr.String())
 
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {

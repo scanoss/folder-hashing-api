@@ -66,6 +66,9 @@ func loadPath(path string) (*directoryNode, error) {
 
 	for f := range files {
 		a := filter.EvaluateItem(files[f])
+		if !a.Actions.StoreInFile || a.Actions.CompletelyIgnore {
+			continue
+		}
 		dir := filepath.Dir(a.Path)
 		parts := strings.Split(dir, string(filepath.Separator))
 		rootNode.Files = append(rootNode.Files, a)

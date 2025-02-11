@@ -61,12 +61,13 @@ type ServerConfig struct {
 		KbName     string `env:"LDB_KB"`   // LDB KB name (must be inside the working path)
 	}
 	Hfh struct {
-		Dmax       int     `env:"HFH_DMAX"`       // HFH maximum distanse to consider a candidate
-		Threshold1 float32 `env:"HFH_TH1"`        // HFH first stafge analysis threshold
-		Threshold2 float32 `env:"HFH_TH2"`        // HFH second stafge analysis threshold
-		Threshold3 float32 `env:"HFH_TH3"`        // HFH third stafge analysis threshold
-		SectorTol  int     `env:"HFH_SECTOR_TOL"` // HFH ldb sector tolerance
-		UrlsLimit  int     `env:"HFH_URL_LIM"`    // HFH maximum urls to be processed
+		Dmax                int     `env:"HFH_DMAX"`               // HFH maximum distanse to consider a candidate
+		Threshold1          float32 `env:"HFH_TH1"`                // HFH first stafge analysis threshold
+		Threshold2          float32 `env:"HFH_TH2"`                // HFH second stafge analysis threshold
+		Threshold3          float32 `env:"HFH_TH3"`                // HFH third stafge analysis threshold
+		SectorTol           int     `env:"HFH_SECTOR_TOL"`         // HFH ldb sector tolerance
+		UrlsLimit           int     `env:"HFH_URL_LIM"`            // HFH maximum urls to be processed
+		CuratedPurlListPath string  `env:"CURATED_PURL_LIST_PATH"` // path to the curated purl list file
 	}
 }
 
@@ -100,10 +101,11 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
 	cfg.Ldb.BinaryPath = "/usr/bin/ldb"
 	cfg.Ldb.KbName = "hfh_kb"
-	cfg.Hfh.Dmax = 30
-	cfg.Hfh.SectorTol = 4
-	cfg.Hfh.Threshold1 = 75
+	cfg.Hfh.Dmax = 35
+	cfg.Hfh.SectorTol = 8
+	cfg.Hfh.Threshold1 = 70
 	cfg.Hfh.Threshold2 = 65
 	cfg.Hfh.Threshold3 = 51
-	cfg.Hfh.UrlsLimit = 100
+	cfg.Hfh.UrlsLimit = 1000
+	cfg.Hfh.CuratedPurlListPath = "/usr/local/etc/scanoss/prefered_purl_list.txt"
 }
