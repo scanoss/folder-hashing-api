@@ -103,7 +103,7 @@ func DecodeString(in string, table *TableDefinition) ([]string, error) {
 
 	//If the table is not encrypte just return a copy of the message
 	if (table.Definitions & LdbTableDefinitionEncrypted) == 0 {
-		parts := strings.Split(touple[table.KeysNumber], ",")
+		parts := strings.Split(string(inputData), ",")
 		result := append(touple[:table.KeysNumber], parts...)
 		return result, err
 	}

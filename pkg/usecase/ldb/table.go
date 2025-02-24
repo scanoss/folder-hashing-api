@@ -30,6 +30,7 @@ type TableDefinition struct {
 	path          string
 	ldbBinaryPath string
 	cache         [256]map[string][][]string
+	cacheMutexes  [256]sync.Mutex
 }
 
 // NewTable creates a new table definition with default values
@@ -453,11 +454,9 @@ func (t *TableDefinition) addData2Cache(data []string) error {
 	if !t.cached {
 		return nil
 	}
-
 	if len(data) == 0 {
 		return fmt.Errorf("invalid data: empty slice received")
 	}
-
 	if len(data[0]) < 2 {
 		return fmt.Errorf("invalid data: first element '%s' is too short for sector extraction", data[0])
 	}
@@ -467,39 +466,39 @@ func (t *TableDefinition) addData2Cache(data []string) error {
 		return fmt.Errorf("invalid sector format in '%s': %w", data[0][:2], err)
 	}
 
+	// Lock el mutex del sector específico
+	t.cacheMutexes[sector].Lock()
+	defer t.cacheMutexes[sector].Unlock()
+
 	if t.cache[sector] == nil {
 		t.cache[sector] = make(map[string][][]string)
 	}
 
 	newdata := true
 	/*if records, exists := t.cache[sector][data[0]]; exists {
-
-		for _, record := range records {
-			if len(record) != len(data)-1 {
-				continue
-			}
-
-			matches := true
-			for i, field := range record {
-				if field != data[i+1] {
-					matches = false
-					break
-				}
-			}
-			if matches {
-				newdata = false
-				break
-			}
-		}
+	    for _, record := range records {
+	        if len(record) != len(data)-1 {
+	            continue
+	        }
+	        matches := true
+	        for i, field := range record {
+	            if field != data[i+1] {
+	                matches = false
+	                break
+	            }
+	        }
+	        if matches {
+	            newdata = false
+	            break
+	        }
+	    }
 	}*/
 
 	if newdata {
 		dataCopy := make([]string, len(data)-1)
 		copy(dataCopy, data[1:])
-
 		t.cache[sector][data[0]] = append(t.cache[sector][data[0]], dataCopy)
 	}
-
 	return nil
 }
 

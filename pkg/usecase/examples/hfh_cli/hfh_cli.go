@@ -41,16 +41,20 @@ func HFHrequestFromPath(path string) (*pb.HFHRequest_Children, error) {
 
 func hashCalcFromNode(dirNode *directoryNode) *pb.HFHRequest_Children {
 	hash := HashCalc(dirNode)
+	if hash == nil {
+		return nil
+	}
 	outNode := &pb.HFHRequest_Children{PathId: dirNode.Path,
 		SimHashNames:   fmt.Sprintf("%02x", hash.NameHash),
 		SimHashContent: fmt.Sprintf("%02x", hash.ContentHash),
-		Children:       make([]*pb.HFHRequest_Children, len(dirNode.Children))}
+		Children:       make([]*pb.HFHRequest_Children, 0)}
 
-	childNumber := 0
 	for _, childNode := range dirNode.Children {
 		childHashNode := hashCalcFromNode(childNode)
-		outNode.Children[childNumber] = childHashNode
-		childNumber++
+		if childHashNode == nil {
+			continue
+		}
+		outNode.Children = append(outNode.Children, childHashNode)
 	}
 	return outNode
 }
@@ -67,6 +71,9 @@ func loadPath(path string) (*directoryNode, error) {
 	for f := range files {
 		a := filter.EvaluateItem(files[f])
 		if !a.Actions.StoreInFile || a.Actions.CompletelyIgnore {
+			continue
+		}
+		if !ShouldAcceptPath(a.Path) {
 			continue
 		}
 		dir := filepath.Dir(a.Path)
