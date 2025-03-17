@@ -95,6 +95,7 @@ func TestHFHscanFirstStage(t *testing.T) {
 
 	fileNamesSimhash = "8162bd4ec1aa36b3"
 	fileContentsSimhash = "f98fc3f728a8b4d5"
+	scanner.deepSearch = true
 	result, err = scanner.scanFirstStage(fileNamesSimhash, fileContentsSimhash)
 	if err != nil {
 		t.Errorf("scan failed with error: %v", err)

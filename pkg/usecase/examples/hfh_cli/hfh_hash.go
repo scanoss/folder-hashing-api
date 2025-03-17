@@ -70,7 +70,7 @@ func HashCalc(node *directoryNode) *HFHhash {
 
 	/*Overwrite the MS byte with the head to keep the hash size total */
 	FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
-	log.Printf("%x\n", FilesNameSimhash)
+	log.Printf("%x - %x\n", FilesNameSimhash, FilesContentSimhash)
 
 	return &HFHhash{
 		NameHash:    FilesNameSimhash,

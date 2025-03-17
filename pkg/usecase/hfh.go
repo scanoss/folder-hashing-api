@@ -240,7 +240,7 @@ func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDist
 				closestMatches = []uint64{key}
 				minDistance = distance
 				contents = [][]string{record[1:]}
-			} else if distance < minDistance {
+			} else if distance <= minDistance {
 				if len(closestMatches) > 0 && key == closestMatches[len(closestMatches)-1] {
 					continue
 				}
@@ -359,7 +359,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 			bestMatches = []uint64{key}
 			minFilesContentdistance = filesContentdistance
 			bestUrlsKey = []string{content[i][1]}
-		} else if filesContentdistance < minFilesContentdistance {
+		} else if filesContentdistance <= minFilesContentdistance {
 			bestMatches = append(bestMatches, key)
 			bestUrlsKey = append(bestUrlsKey, content[i][1])
 		}
@@ -518,53 +518,55 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 
 	if result != nil {
 		s.resultsMap[node.PathId] = *result
+		s.s.Infof("Fist stage match for %s: %s, prob %.1f\n", node.PathId, result.Components[0].Purl, result.Probability)
 	}
 
 	if result == nil || (result.Probability < s.thStage1 || s.bestMatch) {
+		if len(node.Children) > 1 {
 
-		resultMatrix := make([][]string, len(node.Children))
-		for i, child := range node.Children {
-			s.s.Debugf(child.PathId)
-			candidates, err := s.scanSecondStage(child.SimHashContent)
-			if err == nil {
-				resultMatrix[i] = append(resultMatrix[i], candidates...)
+			resultMatrix := make([][]string, len(node.Children))
+			for i, child := range node.Children {
+				s.s.Debugf(child.PathId)
+				candidates, err := s.scanSecondStage(child.SimHashContent)
+				if err == nil {
+					resultMatrix[i] = append(resultMatrix[i], candidates...)
+				}
+			}
+			ranking := RankHashesByColumns(resultMatrix, s.Config.Dmax*45/100)
+			eqProb := float32(0)
+			if len(ranking) > 0 {
+				eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children))
+			}
+			if eqProb >= s.thStage2 {
+				var urlKeys []string
+				urlsLimit := s.Config.UrlsLimit
+				for i, r := range ranking {
+					//go to the main hfh table to look for the url hash
+					if i > 0 && r.Count < ranking[i-1].Count {
+						break
+					}
+					key := r.Hash
+					records, err := s.Config.HfhTable.QueryKey(key)
+					if err != nil {
+						fmt.Println(err)
+						continue
+					}
+					for _, r := range records {
+						urlKeys = append(urlKeys, r[2])
+					}
+					if len(urlKeys) > urlsLimit {
+						break
+					}
+				}
+
+				components := getComponents(s.Config.UrlTable, urlKeys, s.Config.UrlsLimit)
+
+				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: eqProb, Stage: 2}
+				return nil
 			}
 		}
-		ranking := RankHashesByColumns(resultMatrix, s.Config.Dmax*85/100)
-		eqProb := float32(0)
-		if len(ranking) > 0 {
-			eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children))
-		}
-		if eqProb >= s.thStage2 {
-			var urlKeys []string
-			urlsLimit := s.Config.UrlsLimit
-			for i, r := range ranking {
-				//go to the main hfh table to look for the url hash
-				if i > 0 && r.Count < ranking[i-1].Count {
-					break
-				}
-				key := r.Hash
-				records, err := s.Config.HfhTable.QueryKey(key)
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
-				for _, r := range records {
-					urlKeys = append(urlKeys, r[2])
-				}
-				if len(urlKeys) > urlsLimit {
-					break
-				}
-			}
-
-			components := getComponents(s.Config.UrlTable, urlKeys, s.Config.UrlsLimit)
-
-			s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: eqProb, Stage: 2}
-			return nil
-		} else {
-			for _, child := range node.Children {
-				s.scanTreeFirstStage(child)
-			}
+		for _, child := range node.Children {
+			s.scanTreeFirstStage(child)
 		}
 	}
 	return nil
@@ -815,7 +817,7 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 		}
 		if len(preferedcomponents) > 0 {
 			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: preferedcomponents})
-		} else {
+		} else if components[0].Confidence > s.thStage3/2 {
 			limit := 10
 			if len(components) < limit {
 				limit = len(components)
