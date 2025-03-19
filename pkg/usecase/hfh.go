@@ -3,6 +3,7 @@ package usecase
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/bits"
 	"sort"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
 	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
+	mv "scanoss.com/hfh-api/pkg/usecase/milvus"
 	pp "scanoss.com/hfh-api/pkg/usecase/prefered_purls"
 )
 
@@ -32,6 +34,7 @@ type HFHscanConfig struct {
 	HfhTable         *ldb.TableDefinition
 	HfhSecTable      *ldb.TableDefinition
 	UrlTable         *ldb.TableDefinition
+	mvDb             *mv.MilvusDb
 	Dmax             int
 	SectorTol        int
 	UrlsLimit        int
@@ -83,7 +86,10 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	if err != nil {
 		return nil
 	}
+
 	scanner.preferedPurlList, _ = pp.InitPurlMap(config.Hfh.CuratedPurlListPath)
+
+	scanner.mvDb = mv.NewMilvusDb()
 
 	return &scanner
 }
@@ -319,83 +325,84 @@ func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHsc
 }
 
 func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash string) (*HFHscanResult, error) {
-	//get the matching candidates from the HFH table based on the file names hash
-	result, distance, content, err := scanHash(s.Config.HfhTable, fileNamesSimhash, s.Config.SectorTol, s.Config.Dmax, s.deepSearch)
+
+	NamesHash, _ := strconv.ParseUint(fileNamesSimhash, 16, 64)
+	contentHash, _ := strconv.ParseUint(fileContentsSimhash, 16, 64)
+	d, urls, err := s.Config.mvDb.Mainsearch([]uint64{NamesHash}, []uint64{contentHash})
+
 	if err != nil {
-		return nil, err
+		log.Println(err)
+	}
+	// //get the matching candidates from the HFH table based on the file names hash
+	// result, distance, content, err := scanHash(s.Config.HfhTable, fileNamesSimhash, s.Config.SectorTol, s.Config.Dmax, s.deepSearch)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// if len(result) > 0 {
+	// 	s.s.Debugf("FileNamesHash %s mathed with: %x with distance %d", fileNamesSimhash, result[0], distance)
+	// }
+	// //select the best based on the file contents hash
+	// minFilesContentdistance := s.Config.Dmax * 3 / 4
+	// if distance > s.Config.Dmax {
+	// 	return nil, nil
+	// }
+
+	// var lastKey uint64 = 0
+	// var bestMatches []uint64
+	// var bestUrlsKey []string
+	// //use the filecontents hash to select the best results
+	// for i, r := range result {
+	// 	if r == lastKey {
+	// 		s.s.Debugf("Skiping repeated key %x\n", r)
+	// 		continue
+	// 	}
+	// 	key, err := strconv.ParseUint(content[i][0], 16, 64)
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	lastKey = key
+	// 	contentsHash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
+	// 	if err != nil {
+	// 		continue
+	// 	}
+
+	// 	filesContentdistance := hammingDistance(contentsHash, key)
+	// 	//if the match is not exact with accept a range of valid distances
+	// 	if (filesContentdistance < minFilesContentdistance-8) || (minFilesContentdistance > 0 && filesContentdistance == 0) {
+	// 		bestMatches = []uint64{key}
+	// 		minFilesContentdistance = filesContentdistance
+	// 		bestUrlsKey = []string{content[i][1]}
+	// 	} else if filesContentdistance <= minFilesContentdistance {
+	// 		bestMatches = append(bestMatches, key)
+	// 		bestUrlsKey = append(bestUrlsKey, content[i][1])
+	// 	}
+	// }
+	// //If we were able to find a good filecontent match we prefer it
+	// if len(bestUrlsKey) > 0 {
+	// 	//s.s.Debugf("Filename Hash %s filecontent hash %s distance: %d - assigned URL: %s", fileNamesSimhash, fileContentsSimhash, minFilesContentdistance, bestUrlsKey)
+	// 	probability := (1 - float32(minFilesContentdistance)/float32(s.Config.Dmax)) * 100
+	// 	st := 1
+	// 	if probability < 0 {
+	// 		probability = (1 - float32(distance)/float32(s.Config.Dmax)) * 100
+	// 		//if we are looking for the best match decrease the probability to force to evaluate other items
+	// 		if s.bestMatch {
+	// 			probability /= 2
+	// 		}
+	// 		st = 0
+	// 	}
+
+	// 	limit := s.Config.UrlsLimit
+	// 	if len(bestUrlsKey) < limit {
+	// 		limit = len(bestUrlsKey)
+	// 	}
+	if len(urls) > 0 && len(urls[0]) > 0 {
+		fistStageComponents := getComponents(s.Config.UrlTable, urls[0], s.Config.UrlsLimit)
+		probability := (1 - float32(d[0])/float32(s.Config.Dmax)) * 100
+		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 1}, nil
 	}
 
-	if len(result) > 0 {
-		s.s.Debugf("FileNamesHash %s mathed with: %x with distance %d", fileNamesSimhash, result[0], distance)
-	}
-	//select the best based on the file contents hash
-	minFilesContentdistance := s.Config.Dmax * 3 / 4
-	if distance > s.Config.Dmax {
-		return nil, nil
-	}
-
-	var lastKey uint64 = 0
-	var bestMatches []uint64
-	var bestUrlsKey []string
-	//use the filecontents hash to select the best results
-	for i, r := range result {
-		if r == lastKey {
-			s.s.Debugf("Skiping repeated key %x\n", r)
-			continue
-		}
-		key, err := strconv.ParseUint(content[i][0], 16, 64)
-		if err != nil {
-			continue
-		}
-		lastKey = key
-		contentsHash, err := strconv.ParseUint(fileContentsSimhash, 16, 64)
-		if err != nil {
-			continue
-		}
-
-		filesContentdistance := hammingDistance(contentsHash, key)
-		//if the match is not exact with accept a range of valid distances
-		if (filesContentdistance < minFilesContentdistance-8) || (minFilesContentdistance > 0 && filesContentdistance == 0) {
-			bestMatches = []uint64{key}
-			minFilesContentdistance = filesContentdistance
-			bestUrlsKey = []string{content[i][1]}
-		} else if filesContentdistance <= minFilesContentdistance {
-			bestMatches = append(bestMatches, key)
-			bestUrlsKey = append(bestUrlsKey, content[i][1])
-		}
-	}
-	//If we were able to find a good filecontent match we prefer it
-	if len(bestUrlsKey) > 0 {
-		//s.s.Debugf("Filename Hash %s filecontent hash %s distance: %d - assigned URL: %s", fileNamesSimhash, fileContentsSimhash, minFilesContentdistance, bestUrlsKey)
-		probability := (1 - float32(minFilesContentdistance)/float32(s.Config.Dmax)) * 100
-		st := 1
-		if probability < 0 {
-			probability = (1 - float32(distance)/float32(s.Config.Dmax)) * 100
-			//if we are looking for the best match decrease the probability to force to evaluate other items
-			if s.bestMatch {
-				probability /= 2
-			}
-			st = 0
-		}
-
-		limit := s.Config.UrlsLimit
-		if len(bestUrlsKey) < limit {
-			limit = len(bestUrlsKey)
-		}
-
-		fistStageComponents := getComponents(s.Config.UrlTable, bestUrlsKey[:limit], s.Config.UrlsLimit)
-		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: st}, nil
-	}
-	//If not, process all the filenames hash
-	s.s.Debugf("No filecontents match, using just fileNames match")
-	probability := (1 - float32(distance)/float32(s.Config.Dmax)) * 100
-	urls := make([]string, len(content))
-	for i, c := range content {
-		urls[i] = c[1]
-	}
-	fistStageComponents := getComponents(s.Config.UrlTable, urls, s.Config.UrlsLimit)
-
-	return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 0}, nil
+	return nil, nil
 }
 
 type HashCount struct {
@@ -511,6 +518,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 		return nil
 	}
 	s.s.Debugf("Procesing node %s\n", node.PathId)
+
 	result, err := s.scanFirstStage(node.SimHashNames, node.SimHashContent)
 	if err != nil {
 		return err
@@ -523,12 +531,11 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 
 	if result == nil || (result.Probability < s.thStage1 || s.bestMatch) {
 		if len(node.Children) > 1 {
-
 			resultMatrix := make([][]string, len(node.Children))
 			for i, child := range node.Children {
 				s.s.Debugf(child.PathId)
 				candidates, err := s.scanSecondStage(child.SimHashContent)
-				if err == nil {
+				if err == nil && len(candidates) > 0 {
 					resultMatrix[i] = append(resultMatrix[i], candidates...)
 				}
 			}
