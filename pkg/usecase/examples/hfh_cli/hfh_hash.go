@@ -28,7 +28,9 @@ func HashCalc(node *directoryNode) *HFHhash {
 	processedHashes := make(map[string]bool)
 	var fileHashesList [][]byte
 	var selectedNames []string
-
+	if len(node.Files) < 10 {
+		return nil
+	}
 	for _, file := range node.Files {
 		if _, processed := processedHashes[file.KeyStr]; processed {
 			continue
@@ -89,19 +91,11 @@ var (
 		"maven-wrapper.jar":  true,
 		"thumbs.db":          true,
 		"babel.config.js":    true,
-		"license.txt":        true,
-		"license.md":         true,
-		"copying.lib":        true,
-		"makefile":           true,
 	}
 
 	skippedDirs = map[string]bool{
 		"example":        true,
 		"examples":       true,
-		"docs":           true,
-		"tests":          true,
-		"doc":            true,
-		"test":           true,
 		"nbproject":      true,
 		"nbbuild":        true,
 		"nbdist":         true,
@@ -117,35 +111,158 @@ var (
 	skippedDirExt = []string{".egg-info"}
 
 	skippedExt = []string{
-		".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9",
-		".ac", ".adoc", ".am", ".asciidoc", ".bmp", ".build",
-		".cfg", ".chm", ".class", ".cmake", ".cnf", ".conf",
-		".config", ".contributors", ".copying", ".crt", ".csproj",
-		".css", ".csv", ".dat", ".data", ".doc", ".docx", ".dtd",
-		".dts", ".iws", ".c9", ".c9revisions", ".dtsi", ".dump",
-		".eot", ".eps", ".geojson", ".gdoc", ".gif", ".glif",
-		".gmo", ".gradle", ".guess", ".hex", ".htm", ".html",
-		".ico", ".iml", ".in", ".inc", ".info", ".ini", ".ipynb",
-		".jpeg", ".jpg", ".json", ".jsonld", ".lock", ".log",
-		".m4", ".map", ".markdown", ".md", ".md5", ".meta", ".mk",
-		".mxml", ".o", ".otf", ".out", ".pbtxt", ".pdf", ".pem",
-		".phtml", ".plist", ".png", ".po", ".ppt", ".prefs",
-		".properties", ".pyc", ".qdoc", ".result", ".rgb", ".rst",
-		".scss", ".sha", ".sha1", ".sha2", ".sha256", ".sln",
-		".spec", ".sql", ".sub", ".svg", ".svn-base", ".tab",
-		".template", ".test", ".tex", ".tiff", ".toml", ".ttf",
-		".txt", ".utf-8", ".vim", ".wav", ".woff", ".woff2",
-		".xht", ".xhtml", ".xls", ".xlsx", ".xml", ".xpm",
-		".xsd", ".xul", ".yaml", ".yml", ".wfp", ".editorconfig",
-		".dotcover", ".pid", ".lcov", ".egg", ".manifest",
-		".cache", ".coverage", ".cover", ".gem", ".lst",
-		".pickle", ".pdb", ".gml", ".pot", ".plt", ".whml",
-		".pom", ".smtml", ".min.js", ".mf", ".base64", ".s", ".diff", ".patch", ".rules",
+		".1",
+		".2",
+		".3",
+		".4",
+		".5",
+		".6",
+		".7",
+		".8",
+		".9",
+		".ac",
+		".adoc",
+		".am",
+		".asciidoc",
+		".bmp",
+		".build",
+		".cfg",
+		".chm",
+		".class",
+		".cmake",
+		".cnf",
+		".conf",
+		".config",
+		".contributors",
+		".copying",
+		".crt",
+		".csproj",
+		".css",
+		".csv",
+		".dat",
+		".data",
+		".dtd",
+		".dts",
+		".iws",
+		".c9",
+		".c9revisions",
+		".dtsi",
+		".dump",
+		".eot",
+		".eps",
+		".geojson",
+		".gif",
+		".glif",
+		".gmo",
+		".guess",
+		".hex",
+		".htm",
+		".html",
+		".ico",
+		".iml",
+		".in",
+		".inc",
+		".info",
+		".ini",
+		".ipynb",
+		".jpeg",
+		".jpg",
+		".json",
+		".jsonld",
+		".lock",
+		".log",
+		".m4",
+		".map",
+		".md5",
+		".meta",
+		".mk",
+		".mxml",
+		".o",
+		".otf",
+		".out",
+		".pbtxt",
+		".pdf",
+		".pem",
+		".phtml",
+		".plist",
+		".png",
+		".prefs",
+		".properties",
+		".pyc",
+		".qdoc",
+		".result",
+		".rgb",
+		".rst",
+		".scss",
+		".sha",
+		".sha1",
+		".sha2",
+		".sha256",
+		".sln",
+		".spec",
+		".sub",
+		".svg",
+		".svn-base",
+		".tab",
+		".template",
+		".test",
+		".tex",
+		".tiff",
+		".ttf",
+		".txt",
+		".utf-8",
+		".vim",
+		".wav",
+		".woff",
+		".woff2",
+		".xht",
+		".xhtml",
+		".xml",
+		".xpm",
+		".xsd",
+		".xul",
+		".yaml",
+		".yml",
+		".wfp",
+		".editorconfig",
+		".dotcover",
+		".pid",
+		".lcov",
+		".egg",
+		".manifest",
+		".cache",
+		".coverage",
+		".cover",
+		".gem",
+		".lst",
+		".pickle",
+		".pdb",
+		".gml",
+		".pot",
+		".plt",
+		".whml",
+		".pom",
+		".smtml",
+		".min.js",
+		".mf",
+		".base64",
+		".s",
+		".diff",
+		".patch",
+		".rules",
 		// File endings
-		"-doc", "changelog", "config", "copying", "license",
-		"authors", "news", "licenses", "notice", "readme",
-		"swiftdoc", "texidoc", "todo", "version", "ignore",
-		"manifest", "sqlite", "sqlite3",
+		"-doc",
+		"config",
+		"news",
+		"readme",
+		"swiftdoc",
+		"texidoc",
+		"todo",
+		"version",
+		"ignore",
+		"manifest",
+		"sqlite",
+		"sqlite3",
 	}
 )
 
@@ -164,36 +281,35 @@ func ShouldAcceptPath(path string) bool {
 	}
 
 	// Get the base name (last component of path)
-	base := filepath.Base(path)
-	baseLower := strings.ToLower(base)
+	dirLower := strings.ToLower(filepath.Dir(path))
+	fileLower := strings.ToLower(filepath.Base(path))
 
-	// Check if it looks like a directory (ends with path separator)
-	isDir := strings.HasSuffix(path, string(filepath.Separator))
+	normalizedPath := filepath.ToSlash(dirLower)
+	pathComponents := strings.Split(normalizedPath, "/")
 
-	if isDir {
+	for _, subFolder := range pathComponents {
 		// Check default skipped directories
-		if skippedDirs[baseLower] {
+		if skippedDirs[subFolder] {
 			return false
 		}
 
 		// Check directory extensions to skip
 		for _, ext := range skippedDirExt {
-			if strings.HasSuffix(baseLower, ext) {
+			if strings.HasSuffix(subFolder, ext) {
+				log.Printf("Dir skipped: %s\n", dirLower)
 				return false
 			}
 		}
-
-		return true
 	}
 
 	// Check if file should be skipped
-	if skippedFiles[baseLower] {
+	if skippedFiles[fileLower] {
 		return false
 	}
 
 	// Check file extensions and endings
 	for _, ext := range skippedExt {
-		if strings.HasSuffix(baseLower, ext) {
+		if strings.HasSuffix(fileLower, ext) {
 			return false
 		}
 	}

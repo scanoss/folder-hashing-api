@@ -101,7 +101,7 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
 	cfg.Ldb.BinaryPath = "/usr/bin/ldb"
 	cfg.Ldb.KbName = "hfh_kb"
-	cfg.Hfh.Dmax = 45
+	cfg.Hfh.Dmax = 40
 	cfg.Hfh.SectorTol = 13
 	cfg.Hfh.Threshold1 = 65
 	cfg.Hfh.Threshold2 = 60
