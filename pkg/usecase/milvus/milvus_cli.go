@@ -83,7 +83,7 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults}, nil
 }
 
-func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64) ([]int, [][]string, error) {
+func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDistance int) ([]int, [][]string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -189,7 +189,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64) ([]int, 
 				}
 			}
 
-			distance, urls := selectClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i])
+			distance, urls := selectClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i], minDistance*3/4)
 			matchedDistances[originalIndex] = distance
 			matchedUrls[originalIndex] = urls
 		}
@@ -316,11 +316,11 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	return searchResults, err
 }
 
-func selectClosest(candidates []uint64, urls []string, contentsHash uint64) (int, []string) {
+func selectClosest(candidates []uint64, urls []string, contentsHash uint64, minDistance int) (int, []string) {
 	var bestMatches []uint64
 	var bestUrlsKey []string
 
-	minFilesContentdistance := 30
+	minFilesContentdistance := minDistance
 	//use the filecontents hash to select the best results
 	for i, key := range candidates {
 

@@ -14,8 +14,10 @@ type HFHResultOutput struct {
 
 // HFHResult represents a result item that links a path with a list of components
 type HFHResult struct {
-	PathId     string          `json:"path_id,omitempty"`
-	Components []*HFHComponent `json:"components,omitempty"`
+	PathId      string          `json:"path_id,omitempty"`
+	Components  []*HFHComponent `json:"components,omitempty"`
+	Stage       int             `json:"stage,omitempty"`
+	Probability float32         `json:"probability,omitempty"`
 }
 
 // HFHComponent represents a matched component with its details

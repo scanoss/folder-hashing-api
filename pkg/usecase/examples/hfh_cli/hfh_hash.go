@@ -67,11 +67,10 @@ func HashCalc(node *directoryNode) *HFHhash {
 	FilesContentSimhash := simhash.Fingerprint(simhash.VectorizeBytes(fileHashesList))
 
 	/* Calc hash head to group close hashes by sector */
-	head := headCalc(FilesNameSimhash)
-	//log.Printf("Main hash head: %02x\n", head)
-
-	/*Overwrite the MS byte with the head to keep the hash size total */
-	FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
+	/*	head := headCalc(FilesNameSimhash)
+		//log.Printf("Main hash head: %02x\n", head)
+		//Overwrite the MS byte with the head to keep the hash size total
+		FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)*/
 	log.Printf("%x - %x\n", FilesNameSimhash, FilesContentSimhash)
 
 	return &HFHhash{

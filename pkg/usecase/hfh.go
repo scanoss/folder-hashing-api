@@ -3,13 +3,11 @@ package usecase
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"math/bits"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"sync"
 
 	"time"
 
@@ -172,92 +170,6 @@ func hammingDistance(x, y uint64) int {
 	return bits.OnesCount64(xor)
 }
 
-// scanHash queries the ldb tables and get the proximity candidates
-func scanHash(table *ldb.TableDefinition, hashHex string, sectorTol int, minDistance int, deep bool) ([]uint64, int, [][]string, error) {
-
-	hash, err := strconv.ParseUint(hashHex, 16, 64)
-	if err != nil {
-		return nil, -1, nil, fmt.Errorf("error decoding key %s - %v", hashHex, err)
-	}
-
-	if hash == 0xffffffffffffffff {
-		return nil, -1, nil, fmt.Errorf("scan aborted, the path is empty")
-	}
-	//Try an exact match with the filenames key
-
-	records, err := table.QueryKey(hashHex)
-	if err != nil {
-		return nil, -1, nil, fmt.Errorf("error quering key %s - %v", hashHex, err)
-	}
-	if len(records) > 0 {
-		var closestMatches []uint64
-		var contents [][]string
-		for _, r := range records {
-			key, err := strconv.ParseUint(r[0], 16, 64)
-			if err != nil || key == 0xffffffffffffffff {
-				continue
-			}
-			closestMatches = append(closestMatches, key)
-			contents = append(contents, r[1:])
-		}
-		return closestMatches, 0, contents, nil
-	} else if !deep {
-		return nil, 255, nil, nil
-	}
-
-	//Look for approximity matches
-
-	//Define the sectors to be dumped
-	head := (hash & 0xFF00000000000000) >> 56
-	start := int(head) - sectorTol
-	if start < 0 {
-		start = 0
-	}
-	end := int(head) + sectorTol
-	if end > 255 {
-		end = 255
-	}
-	//process each sector, run this process in a new thread
-	var wg sync.WaitGroup
-	wg.Add(1)
-	outputChan := make(chan []string, 100000*sectorTol)
-
-	// Exec dump function in its own thread
-	go func() {
-		defer wg.Done()
-		table.DumpNativeParallel(start, end, -1, outputChan)
-	}()
-
-	// Find the closest matches for the hash
-	var closestMatches []uint64
-	var contents [][]string
-
-	for record := range outputChan {
-		if len(record) > 0 {
-			key, err := strconv.ParseUint(record[0], 16, 64)
-			if err != nil || key == 0xffffffffffffffff {
-				continue
-			}
-
-			distance := hammingDistance(hash, key)
-			//if the match is not exact we accepta a range of distances
-			if (distance < minDistance-8) || (minDistance > 0 && distance == 0) {
-				closestMatches = []uint64{key}
-				minDistance = distance
-				contents = [][]string{record[1:]}
-			} else if distance <= minDistance {
-				if len(closestMatches) > 0 && key == closestMatches[len(closestMatches)-1] {
-					continue
-				}
-				closestMatches = append(closestMatches, key)
-				contents = append(contents, record[1:])
-			}
-		}
-	}
-
-	return closestMatches, minDistance, contents, nil
-}
-
 // retrieves purl information from the url table
 func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHscanResultItem {
 	uniquePurls := make(map[string]bool)
@@ -323,11 +235,12 @@ func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHsc
 	return nil
 }
 
+/*
 func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash string) (*HFHscanResult, error) {
 
 	NamesHash, _ := strconv.ParseUint(fileNamesSimhash, 16, 64)
 	contentHash, _ := strconv.ParseUint(fileContentsSimhash, 16, 64)
-	d, urls, err := s.Config.mvDb.Mainsearch([]uint64{NamesHash}, []uint64{contentHash})
+	d, urls, err := s.Config.mvDb.Mainsearch([]uint64{NamesHash}, []uint64{contentHash}, s.Config.Dmax)
 
 	if err != nil {
 		log.Println(err)
@@ -340,7 +253,7 @@ func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash st
 	}
 
 	return nil, nil
-}
+}*/
 
 type HashCount struct {
 	Hash  uint64
@@ -456,10 +369,12 @@ func (s *HFHscan) initMap(node *dtos.HFHScanInputChildren, level *int) error {
 	mLevel := *level
 	namesHash, _ := strconv.ParseUint(node.SimHashNames, 16, 64)
 	contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
+	if s.nameHashPath[namesHash] == "" {
+		s.nameHashPath[namesHash] = node.PathId
+		s.namesContents[namesHash] = contentHash
+		s.nameHashLevels[mLevel] = append(s.nameHashLevels[mLevel], namesHash)
+	}
 
-	s.nameHashPath[namesHash] = node.PathId
-	s.namesContents[namesHash] = contentHash
-	s.nameHashLevels[mLevel] = append(s.nameHashLevels[mLevel], namesHash)
 	mLevel++
 	for _, child := range node.Children {
 		s.initMap(child, &mLevel)
@@ -505,7 +420,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 			contentHashes = append(contentHashes, s.namesContents[h])
 		}
 		//look for coincidences
-		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes)
+		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, s.Config.Dmax)
 		if err != nil {
 			return err
 		}
@@ -559,9 +474,9 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 		for _, child := range node.Children {
 			s.s.Debugf(child.PathId)
 			contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
-			head := headCalc(contentHash)
-			//Overwrite the MS byte with the head to keep the hash size total
-			contentHash = (contentHash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)
+			/*			head := headCalc(contentHash)
+						//Overwrite the MS byte with the head to keep the hash size total
+						contentHash = (contentHash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)*/
 			contentHashes = append(contentHashes, contentHash)
 		}
 		resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, s.Config.Dmax/5)
@@ -575,35 +490,24 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 		}
 		if eqProb >= s.thStage2 {
 			var urlKeys []string
-			urlsLimit := s.Config.UrlsLimit
-			minDistance := s.Config.Dmax
 			for i, r := range ranking {
 				//go to the main hfh table to look for the url hash
 				if i > 0 && r.Count < ranking[i-1].Count {
 					break
 				}
-				key := fmt.Sprintf("%x", r.Hash)
-				records, err := s.Config.HfhTable.QueryKey(key)
+				contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
+				_, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, s.Config.Dmax*2)
+				urlKeys = urls[0]
 				if err != nil {
 					fmt.Println(err)
 					continue
 				}
-				for _, r := range records {
-					d := hammingDistanceString(node.SimHashContent, r[1])
-					if d < minDistance {
-						minDistance = d
-						urlKeys = []string{r[2]}
-					} else if d < minDistance+4 {
-						urlKeys = append(urlKeys, r[2])
-					}
-				}
-
-				if len(urlKeys) > urlsLimit {
-					break
-				}
 			}
 			if len(urlKeys) > 0 {
 				components := getComponents(s.Config.UrlTable, urlKeys, s.Config.UrlsLimit)
+				if eqProb > 100.0 {
+					eqProb = 100.0
+				}
 				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: eqProb, Stage: 2}
 				return nil
 			}
@@ -757,13 +661,13 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 			}
 		}
 		if len(preferedcomponents) > 0 {
-			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: preferedcomponents})
+			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: preferedcomponents, Probability: result.Probability, Stage: result.Stage})
 		} else if components[0].Confidence > s.thStage3/3 {
 			limit := 10
 			if len(components) < limit {
 				limit = len(components)
 			}
-			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: components[:limit]})
+			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: components[:limit], Probability: result.Probability, Stage: result.Stage})
 		}
 
 		if len(node.Children) == 0 {
