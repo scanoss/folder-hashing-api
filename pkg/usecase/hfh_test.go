@@ -12,7 +12,6 @@ import (
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
-	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
 	test "scanoss.com/hfh-api/pkg/usecase/test"
 )
 
@@ -31,15 +30,12 @@ func testScanInitHelper() (*HFHscan, error) {
 	}
 
 	scannerConfig := HFHscanConfig{
-		ThStage1:    config.Hfh.Threshold1,
-		ThStage2:    config.Hfh.Threshold2,
-		ThStage3:    config.Hfh.Threshold3,
-		Dmax:        config.Hfh.Dmax,
-		SectorTol:   config.Hfh.SectorTol,
-		UrlsLimit:   config.Hfh.UrlsLimit,
-		HfhTable:    ldb.NewTable("./test/ldb_mock_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
-		HfhSecTable: ldb.NewTable("./test/ldb_mock_hfhSec.sh", "test_kb", "hfhSec", 8, 0, 2, []string{"secHash", "mainHash"}, ldb.LdbTableDefinitionStandard, false, nil),
-		UrlTable:    ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil),
+		ThStage1:  config.Hfh.Threshold1,
+		ThStage2:  config.Hfh.Threshold2,
+		ThStage3:  config.Hfh.Threshold3,
+		Dmax:      config.Hfh.Dmax,
+		SectorTol: config.Hfh.SectorTol,
+		UrlsLimit: config.Hfh.UrlsLimit,
 	}
 	dt := dtos.HFHscanInput{BestMatch: true, Threshold: 100}
 	scanner := HFHScanNew(s, &scannerConfig, &dt)

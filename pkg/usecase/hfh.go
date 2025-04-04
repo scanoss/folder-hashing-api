@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"time"
 
 	"go.uber.org/zap"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
-	ldb "scanoss.com/hfh-api/pkg/usecase/ldb"
 	mv "scanoss.com/hfh-api/pkg/usecase/milvus"
 	pp "scanoss.com/hfh-api/pkg/usecase/prefered_purls"
 )
@@ -34,9 +34,6 @@ type HFHscan struct {
 }
 
 type HFHscanConfig struct {
-	HfhTable         *ldb.TableDefinition
-	HfhSecTable      *ldb.TableDefinition
-	UrlTable         *ldb.TableDefinition
 	mvDb             *mv.MilvusDb
 	Dmax             int
 	SectorTol        int
@@ -75,20 +72,6 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	}
 
 	var err error
-	//Initialize ldb tables
-	scanner.UrlTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "url", []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, false)
-	if err != nil {
-		return nil
-	}
-
-	scanner.HfhTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfh", []string{"fileNames", "fileContents", "url"}, true)
-	if err != nil {
-		return nil
-	}
-	scanner.HfhSecTable, err = ldb.NewTableFromCfg(config.Ldb.BinaryPath, config.Ldb.KbName, "hfhSec", []string{"partialFileContents", "fileNames"}, true)
-	if err != nil {
-		return nil
-	}
 
 	scanner.preferedPurlList, _ = pp.InitPurlMap(config.Hfh.CuratedPurlListPath)
 	//new milvus db with default config
@@ -171,44 +154,48 @@ func hammingDistance(x, y uint64) int {
 }
 
 // retrieves purl information from the url table
-func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHscanResultItem {
+func (s *HFHscan) getComponents(urls []uint64, limit int) []HFHscanResultItem {
 	uniquePurls := make(map[string]bool)
 	uniquePurlVersions := make(map[string]bool)
 	purlVersionMap := make(map[string][]string)
+	purlUrlMap := make(map[string]string)
 	purlReleaseDate := make(map[string]time.Time)
 	uniquePurlsLimit := limit
 	for _, urlKey := range urls {
-		urlRecords, err := table.QueryKey(urlKey)
+		urlRecord, err := s.Config.mvDb.GetComponent(urlKey)
 		if err != nil {
 			continue
 		}
 		if len(uniquePurls) > uniquePurlsLimit {
 			break
 		}
-		for _, url := range urlRecords {
-			//extract the purl
-			purl := url[6]
-			//extract the version
-			version := url[3]
-			//exctract the release date
-			date, err := time.Parse("2006-01-02", url[4])
-			if err != nil {
-				fmt.Printf("error parsing date: %s", err)
-				continue
-			}
-			//use purl+version to track unique components
-			if _, exist := uniquePurlVersions[purl+version]; exist {
-				continue
-			}
-			uniquePurls[purl] = true
-			uniquePurlVersions[purl+version] = true
-			purlVersionMap[purl] = append(purlVersionMap[purl], version)
-			existingDate, exists := purlReleaseDate[purl]
-			if !exists || date.Before(existingDate) {
-				purlReleaseDate[purl] = date
-			}
-			uniquePurlsLimit--
+		//extract the purl
+		purl := urlRecord[0]
+		//extract the version
+		version := urlRecord[1]
+		//exctract the release date
+		date, err := time.Parse("2006-01-02", urlRecord[2])
+		if err != nil {
+			s.s.Errorf("error parsing date: %s", err)
+			continue
 		}
+		//use purl+version to track unique components
+		if _, exist := uniquePurlVersions[purl+version]; exist {
+			continue
+		}
+
+		url := urlRecord[3]
+
+		uniquePurls[purl] = true
+		uniquePurlVersions[purl+version] = true
+		purlVersionMap[purl] = append(purlVersionMap[purl], version)
+		purlUrlMap[purl] = url
+		existingDate, exists := purlReleaseDate[purl]
+		if !exists || date.Before(existingDate) {
+			purlReleaseDate[purl] = date
+		}
+		uniquePurlsLimit--
+
 	}
 	if len(purlVersionMap) > 0 {
 		components := make([]HFHscanResultItem, len(purlVersionMap))
@@ -220,6 +207,9 @@ func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHsc
 				components[i].Versions = components[i].Versions[:reportedVersionsNumber]
 			}
 			components[i].Confidence = 100.0 / float32(len(uniquePurls))
+			if !strings.HasSuffix(purlUrlMap[purl], ".zip") || !strings.HasSuffix(purlUrlMap[purl], ".tar.gz") {
+				components[i].Confidence /= 2
+			}
 			components[i].Date = purlReleaseDate[purl]
 			i++
 		}
@@ -234,26 +224,6 @@ func getComponents(table *ldb.TableDefinition, urls []string, limit int) []HFHsc
 	}
 	return nil
 }
-
-/*
-func (s *HFHscan) scanFirstStage(fileNamesSimhash string, fileContentsSimhash string) (*HFHscanResult, error) {
-
-	NamesHash, _ := strconv.ParseUint(fileNamesSimhash, 16, 64)
-	contentHash, _ := strconv.ParseUint(fileContentsSimhash, 16, 64)
-	d, urls, err := s.Config.mvDb.Mainsearch([]uint64{NamesHash}, []uint64{contentHash}, s.Config.Dmax)
-
-	if err != nil {
-		log.Println(err)
-	}
-
-	if len(urls) > 0 && len(urls[0]) > 0 {
-		fistStageComponents := getComponents(s.Config.UrlTable, urls[0], s.Config.UrlsLimit)
-		probability := (1 - float32(d[0])/float32(s.Config.Dmax)) * 100
-		return &HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 1}, nil
-	}
-
-	return nil, nil
-}*/
 
 type HashCount struct {
 	Hash  uint64
@@ -420,35 +390,17 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 			contentHashes = append(contentHashes, s.namesContents[h])
 		}
 		//look for coincidences
-		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, s.Config.Dmax)
+		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, s.Config.Dmax, 0)
 		if err != nil {
 			return err
 		}
 		//process results
 		for i, d := range distances {
 			probability := (1 - float32(d)/float32(s.Config.Dmax)) * 100
-			fistStageComponents := getComponents(s.Config.UrlTable, urls[i], s.Config.UrlsLimit)
+			fistStageComponents := s.getComponents(urls[i], s.Config.UrlsLimit)
 			s.resultsMap[s.nameHashPath[nameHashes[i]]] = HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 1}
 		}
 	}
-	return nil
-
-	/*for n, c := range s.namesContents {
-		nameHashes = append(nameHashes, n)
-		contentHashes = append(contentHashes, c)
-	}
-
-	distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes)
-	if err != nil {
-		return err
-	}
-	for i, d := range distances {
-		probability := (1 - float32(d)/float32(s.Config.Dmax)) * 100
-		if probability > s.thStage1 {
-			fistStageComponents := getComponents(s.Config.UrlTable, urls[i], s.Config.UrlsLimit)
-			s.resultsMap[s.nameHashPath[nameHashes[i]]] = HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 1}
-		}
-	}*/
 	return nil
 }
 
@@ -483,32 +435,37 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 		if err != nil {
 			return err
 		}
-		ranking := RankHashesByColumns(resultMatrix, s.Config.Dmax*25/100)
+		ranking := RankHashesByColumns(resultMatrix, s.Config.Dmax/5)
 		eqProb := float32(0)
 		if len(ranking) > 0 {
 			eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children)*ranking[len(ranking)-1].Count)
 		}
 		if eqProb >= s.thStage2 {
-			var urlKeys []string
+			var urlKeys []uint64
+			distance := 0
 			for i, r := range ranking {
 				//go to the main hfh table to look for the url hash
 				if i > 0 && r.Count < ranking[i-1].Count {
 					break
 				}
 				contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
-				_, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, s.Config.Dmax*2)
+				d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, s.Config.Dmax*2, 0)
 				urlKeys = urls[0]
+				distance = d[0]
 				if err != nil {
 					fmt.Println(err)
 					continue
 				}
 			}
 			if len(urlKeys) > 0 {
-				components := getComponents(s.Config.UrlTable, urlKeys, s.Config.UrlsLimit)
+				s.s.Infof("%s matched distance: %d\n", distance)
+				components := s.getComponents(urlKeys, s.Config.UrlsLimit)
 				if eqProb > 100.0 {
 					eqProb = 100.0
 				}
-				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: eqProb, Stage: 2}
+				probability := (1 - float32(distance)/float32(s.Config.Dmax)) * 100
+				probability = (probability + eqProb) / 2
+				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: probability, Stage: 2}
 				return nil
 			}
 		}

@@ -15,12 +15,12 @@ import (
 )
 
 var (
-	mainColletionName      = "main"
+	mainColletionName      = "url"
 	secondaryColletionName = "secondary"
 	defaultTopResults      = 10000
 
-	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "url"} // Campos a devolver
-	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}        // Campos a devolver
+	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "urlHash"} // Campos a devolver
+	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}            // Campos a devolver
 	defaultHost          = "localhost"
 	defaultPort          = "19530"
 )
@@ -83,7 +83,11 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults}, nil
 }
 
-func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDistance int) ([]int, [][]string, error) {
+func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, maxDistance int, topResults int) ([]int, [][]uint64, error) {
+
+	if topResults <= 0 {
+		topResults = db.TopMainResult
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -100,7 +104,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 
 	// Initialize result slices
 	matchedDistances := make([]int, len(mainHashes))
-	matchedUrls := make([][]string, len(mainHashes))
+	matchedUrls := make([][]uint64, len(mainHashes))
 
 	// Default all distances to 999 (indicating no match)
 	for i := range matchedDistances {
@@ -121,8 +125,8 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 		currentSecHashes := secHashes[start:end]
 
 		// Search for the current block
-		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, db.TopMainResult,
-			mainColletionName, "hfhNames", []string{"hfhContents", "url"}, nil)
+		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults,
+			mainColletionName, "hfhNames", []string{"hfhContents", "urlHash"}, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -139,17 +143,8 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 				continue
 			}
 
-			/*if len(scores) > 5000 && scores[0]+5 < scores[len(scores)/2] {
-				searchResultsb, err := searchSimilarHashes(ctx, c, []uint64{secHashes[i]}, db.TopMainResult,
-					mainColletionName, "hfhContents", []string{"hfhContents", "url"}, nil)
-
-				if err == nil && len(searchResultsb[0].Scores) > 0 {
-					result = searchResultsb[0]
-				}
-			}*/
-
 			var fileContentsCandidates []uint64
-			var urlsCandidates []string
+			var urlsCandidates []uint64
 
 			// Procesar cada resultado basándonos en el índice de los scores
 			for j := 0; j < len(scores); j++ {
@@ -175,12 +170,12 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 									}
 								}
 							}
-						} else if strCol, ok := field.(*entity.ColumnVarChar); ok && strCol != nil {
+						} else if strCol, ok := field.(*entity.ColumnInt64); ok && strCol != nil {
 							if dataMethod := strCol.Data; dataMethod != nil {
 								data := dataMethod()
 								if j < len(data) {
-									if fieldName == "url" {
-										urlsCandidates = append(urlsCandidates, string(data[j]))
+									if fieldName == "urlHash" {
+										urlsCandidates = append(urlsCandidates, uint64(data[j]))
 									}
 								}
 							}
@@ -189,7 +184,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 				}
 			}
 
-			distance, urls := selectClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i], minDistance*3/4)
+			distance, urls := selectClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i], maxDistance*3/4)
 			matchedDistances[originalIndex] = distance
 			matchedUrls[originalIndex] = urls
 		}
@@ -200,7 +195,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, minDista
 
 func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]uint64, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
 	c, err := client.NewGrpcClient(ctx, db.address)
@@ -266,6 +261,55 @@ func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]ui
 	return matchedHashNames, nil
 }
 
+func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
+	outputFields := []string{"purl", "version", "release_date", "url"}
+	hashInt64 := int64(urlKey)
+	expr := fmt.Sprintf("urlHash == %d", hashInt64)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	c, err := client.NewGrpcClient(ctx, db.address)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+
+	// Ejecutar la consulta
+	queryResult, err := c.Query(ctx, mainColletionName, nil, expr, outputFields)
+	if err != nil {
+		log.Fatalf("Error al realizar la consulta: %v", err)
+	}
+
+	// Verificar si hay resultados
+	if len(queryResult) == 0 || queryResult[0].Len() == 0 {
+		return nil, nil
+	}
+
+	numResults := queryResult[0].Len()
+	if numResults > 0 {
+		for i := 0; i < numResults; i++ {
+			result := make([]string, len(outputFields))
+			// Procesar cada campo utilizando los métodos de acceso correctos
+			for i, fieldName := range outputFields {
+				// Obtener el campo correspondiente del resultado
+				columnData := queryResult.GetColumn(fieldName)
+				if columnData == nil {
+					continue
+				}
+
+				// Obtener el valor según el tipo de campo
+				switch data := columnData.(type) {
+				case *entity.ColumnVarChar:
+					result[i] = string(data.Data()[0])
+				}
+			}
+			return result, nil
+		}
+	}
+	return nil, nil
+}
+
 // searchSimilarHashes busca hashes similares en Milvus usando entity.BinaryVector
 func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []uint64, topK int, collectionName string, fieldName string, outputFieldNames []string, partitions []string) ([]client.SearchResult, error) {
 	// Cargar la colección
@@ -316,9 +360,9 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	return searchResults, err
 }
 
-func selectClosest(candidates []uint64, urls []string, contentsHash uint64, minDistance int) (int, []string) {
+func selectClosest(candidates []uint64, urls []uint64, contentsHash uint64, minDistance int) (int, []uint64) {
 	var bestMatches []uint64
-	var bestUrlsKey []string
+	var bestUrlsKey []uint64
 
 	minFilesContentdistance := minDistance
 	//use the filecontents hash to select the best results
@@ -326,10 +370,10 @@ func selectClosest(candidates []uint64, urls []string, contentsHash uint64, minD
 
 		filesContentdistance := hammingDistance(contentsHash, key)
 		//if the match is not exact with accept a range of valid distances
-		if (filesContentdistance < minFilesContentdistance-8) || (minFilesContentdistance > 0 && filesContentdistance == 0) {
+		if (filesContentdistance < minFilesContentdistance-4) || (minFilesContentdistance > 0 && filesContentdistance == 0) {
 			bestMatches = []uint64{key}
 			minFilesContentdistance = filesContentdistance
-			bestUrlsKey = []string{urls[i]}
+			bestUrlsKey = []uint64{urls[i]}
 		} else if filesContentdistance <= minFilesContentdistance {
 			bestMatches = append(bestMatches, key)
 			bestUrlsKey = append(bestUrlsKey, urls[i])

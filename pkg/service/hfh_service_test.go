@@ -28,7 +28,6 @@ import (
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	u "scanoss.com/hfh-api/pkg/usecase"
-	"scanoss.com/hfh-api/pkg/usecase/ldb"
 )
 
 func TestHfhServer_Echo(t *testing.T) {
@@ -94,15 +93,12 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 	}
 	s, _ := NewFolderHashingServer(myConfig)
 	scannerConfig := u.HFHscanConfig{
-		ThStage1:    myConfig.Hfh.Threshold1,
-		ThStage2:    myConfig.Hfh.Threshold2,
-		ThStage3:    myConfig.Hfh.Threshold3,
-		Dmax:        myConfig.Hfh.Dmax,
-		SectorTol:   myConfig.Hfh.SectorTol,
-		UrlsLimit:   myConfig.Hfh.UrlsLimit,
-		HfhTable:    ldb.NewTable("./test/ldb_mock_query_hfh.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
-		HfhSecTable: ldb.NewTable("./test/ldb_mock_dump_hfhSec.sh", "test_kb", "hfh", 8, 0, 3, []string{"fileNames", "fileContents", "url"}, ldb.LdbTableDefinitionStandard, false, nil),
-		UrlTable:    ldb.NewTable("./test/ldb_mock_query_url.sh", "test_kb", "url", 8, 0, 1, []string{"key", "component", "vendor", "version", "date", "license", "purl", "url", "a", "b", "c", "d", "e"}, ldb.LdbTableDefinitionEncrypted, false, nil),
+		ThStage1:  myConfig.Hfh.Threshold1,
+		ThStage2:  myConfig.Hfh.Threshold2,
+		ThStage3:  myConfig.Hfh.Threshold3,
+		Dmax:      myConfig.Hfh.Dmax,
+		SectorTol: myConfig.Hfh.SectorTol,
+		UrlsLimit: myConfig.Hfh.UrlsLimit,
 	}
 	s.scannerConfig = &scannerConfig
 
