@@ -1,8 +1,9 @@
 package usecase
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/bits"
 	"path/filepath"
@@ -45,10 +46,10 @@ type HFHscanConfig struct {
 }
 
 type HFHscanResultItem struct {
-	Purl       string    `json:"purl"`
-	Versions   []string  `json:"versions"`
-	Confidence float32   `json:"confidence"`
-	Date       time.Time `json:"date"`
+	Purl     string    `json:"purl"`
+	Versions []string  `json:"versions"`
+	Rank     int32     `json:"rank"`
+	Date     time.Time `json:"date"`
 }
 
 type HFHscanResult struct {
@@ -59,6 +60,7 @@ type HFHscanResult struct {
 
 const (
 	reportedVersionsNumber = 5
+	purlRankDefaultValue   = 5
 )
 
 func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
@@ -73,7 +75,10 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 
 	var err error
 
-	scanner.preferedPurlList, _ = pp.InitPurlMap(config.Hfh.CuratedPurlListPath)
+	scanner.preferedPurlList, err = pp.InitPurlMap(config.Hfh.CuratedPurlListPath)
+	if err != nil {
+		log.Printf("Prefered purl list couldn't be loaded: %s", err)
+	}
 	//new milvus db with default config
 	scanner.mvDb, err = mv.NewMilvusDb("", "")
 	if err != nil {
@@ -124,8 +129,8 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
 	}
 
-	jsonBytes, _ := json.Marshal(s.resultsMap)
-	s.s.Debug(string(jsonBytes))
+	/*jsonBytes, _ := json.Marshal(s.resultsMap)
+	s.s.Debug(string(jsonBytes))*/
 
 	s.s.Infof("--- Purl Grouping --- \n")
 	err = s.scanTreeThirdStage(projectTree)
@@ -134,8 +139,8 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process third stage %v", err)
 	}
 
-	jsonBytes, _ = json.Marshal(s.resultsMap)
-	s.s.Debug(string(jsonBytes))
+	/*jsonBytes, _ = json.Marshal(s.resultsMap)
+	s.s.Debug(string(jsonBytes))*/
 
 	s.s.Infof("Generating output")
 	var results dtos.HFHResultOutput
@@ -151,6 +156,54 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 func hammingDistance(x, y uint64) int {
 	xor := x ^ y
 	return bits.OnesCount64(xor)
+}
+
+func parsePurl(purl string) (string, string, string, error) {
+	// Check if the purl is empty
+	if purl == "" {
+		return "", "", "", errors.New("PURL cannot be empty")
+	}
+
+	// Check if the purl starts with "pkg:"
+	if !strings.HasPrefix(purl, "pkg:") {
+		return "", "", "", errors.New("PURL must start with \"pkg:\"")
+	}
+
+	// Remove the "pkg:" prefix and split the rest by "/"
+	parts := strings.Split(strings.TrimPrefix(purl, "pkg:"), "/")
+
+	// Check that there are exactly 3 parts (source, vendor, component)
+	if len(parts) != 3 {
+		return "", "", "", errors.New("PURL must have the format \"pkg:source/vendor/component\"")
+	}
+
+	// Extract the components
+	source := parts[0]
+	vendor := parts[1]
+	component := parts[2]
+
+	// Check that none of the components is empty
+	if source == "" || vendor == "" || component == "" {
+		return "", "", "", errors.New("source, vendor, and component cannot be empty")
+	}
+
+	// Return the three strings
+	return source, vendor, component, nil
+}
+
+func purlRank(purl string, startRank int32) int32 {
+	rank := startRank
+	source, vendor, component, err := parsePurl(purl)
+	if err == nil {
+		if source == "github" {
+			rank--
+		}
+		if vendor == component {
+			rank--
+		}
+		return rank
+	}
+	return 10
 }
 
 // retrieves purl information from the url table
@@ -203,13 +256,17 @@ func (s *HFHscan) getComponents(urls []uint64, limit int) []HFHscanResultItem {
 		for purl := range purlVersionMap {
 			components[i].Purl = purl
 			components[i].Versions = purlVersionMap[purl]
-			if len(components[i].Versions) > 5 {
+			if len(components[i].Versions) > reportedVersionsNumber {
 				components[i].Versions = components[i].Versions[:reportedVersionsNumber]
 			}
-			components[i].Confidence = 100.0 / float32(len(uniquePurls))
-			if !strings.HasSuffix(purlUrlMap[purl], ".zip") || !strings.HasSuffix(purlUrlMap[purl], ".tar.gz") {
-				components[i].Confidence /= 2
+			//rank component
+			var rank int32 = purlRankDefaultValue
+			//no source code are penalized
+			if !strings.HasSuffix(purlUrlMap[purl], ".zip") && !strings.HasSuffix(purlUrlMap[purl], ".tar.gz") {
+				rank++
 			}
+
+			components[i].Rank = purlRank(purl, rank)
 			components[i].Date = purlReleaseDate[purl]
 			i++
 		}
@@ -217,9 +274,7 @@ func (s *HFHscan) getComponents(urls []uint64, limit int) []HFHscanResultItem {
 		sort.Slice(components, func(i, j int) bool {
 			return components[i].Date.Before(components[j].Date)
 		})
-		/*if len(components) > 10 {
-			return components[:limit/10]
-		}*/
+
 		return components
 	}
 	return nil
@@ -228,13 +283,6 @@ func (s *HFHscan) getComponents(urls []uint64, limit int) []HFHscanResultItem {
 type HashCount struct {
 	Hash  uint64
 	Count int
-}
-
-func hammingDistanceString(hash1, hash2 string) int {
-	x, _ := strconv.ParseUint(hash1, 16, 64)
-	y, _ := strconv.ParseUint(hash2, 16, 64)
-	xor := x ^ y
-	return bits.OnesCount64(xor)
 }
 
 // RankHashesByColumns takes a matrix of strings (hashes) and returns a sorted slice
@@ -272,6 +320,8 @@ func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 		// For each hash in current row
 		for j := 0; j < len(matrix[row]); j++ {
 			hash := matrix[row][j]
+			foundMatch := false
+
 			if hash == 0 {
 				continue
 			}
@@ -282,7 +332,6 @@ func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 					continue
 				}
 
-				foundMatch := false
 				// Compare with all elements in the other row
 				for l := 0; l < len(matrix[otherRow]); l++ {
 					otherHash := matrix[otherRow][l]
@@ -292,14 +341,7 @@ func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 
 					distance := hammingDistance(hash, otherHash)
 					if distance <= threshold {
-						if hash == otherHash {
-							// If exact match, increment only one
-							hashCounts[hash]++
-						} else {
-							// If different but within threshold, increment both
-							hashCounts[hash]++
-							hashCounts[otherHash]++
-						}
+						hashCounts[hash]++
 						foundMatch = true
 						break
 					}
@@ -309,6 +351,9 @@ func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 				if foundMatch {
 					break
 				}
+			}
+			if foundMatch {
+				break
 			}
 		}
 	}
@@ -390,7 +435,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 			contentHashes = append(contentHashes, s.namesContents[h])
 		}
 		//look for coincidences
-		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, s.Config.Dmax, 0)
+		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, 0, s.Config.preferedPurlList)
 		if err != nil {
 			return err
 		}
@@ -404,75 +449,67 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	return nil
 }
 
-/* Calc hash head */
-func headCalc(simHash uint64) byte {
-	var sum int
-	for i := 0; i < 8; i++ {
-		b := byte((simHash >> (i * 8)) & 0xFF)
-		sum += int(b) * 2
-	}
-	return byte(sum >> 4 & 0xFF)
-}
-
 func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 
-	if s.resultsMap[node.PathId].Probability > s.thStage1 {
+	if s.resultsMap[node.PathId].Probability > s.thStage1 || len(node.Children) < 4 {
 		return nil
 	}
 	s.s.Debugf("Procesing node %s\n", node.PathId)
-	if len(node.Children) > 2 {
-		var contentHashes []uint64
+	//	if len(node.Children) > 1 {
+	var contentHashes []uint64
 
-		for _, child := range node.Children {
-			s.s.Debugf(child.PathId)
-			contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
-			/*			head := headCalc(contentHash)
-						//Overwrite the MS byte with the head to keep the hash size total
-						contentHash = (contentHash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)*/
-			contentHashes = append(contentHashes, contentHash)
-		}
-		resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, s.Config.Dmax/5)
-		if err != nil {
-			return err
-		}
-		ranking := RankHashesByColumns(resultMatrix, s.Config.Dmax/5)
-		eqProb := float32(0)
-		if len(ranking) > 0 {
-			eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children)*ranking[len(ranking)-1].Count)
-		}
-		if eqProb >= s.thStage2 {
-			var urlKeys []uint64
-			distance := 0
-			for i, r := range ranking {
-				//go to the main hfh table to look for the url hash
-				if i > 0 && r.Count < ranking[i-1].Count {
-					break
-				}
-				contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
-				d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, s.Config.Dmax*2, 0)
-				urlKeys = urls[0]
-				distance = d[0]
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
+	for _, child := range node.Children {
+		contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
+		contentHashes = append(contentHashes, contentHash)
+	}
+
+	resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, 1)
+	if err != nil {
+		return err
+	}
+	ranking := RankHashesByColumns(resultMatrix, 1)
+	eqProb := float32(0)
+	if len(ranking) > 0 {
+		eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children))
+	}
+	if eqProb >= s.thStage2 {
+		var urlKeys []uint64
+		distance := 0
+		for i, r := range ranking {
+			//go to the main hfh table to look for the url hash
+			if i > 0 && r.Count < ranking[i-1].Count {
+				break
 			}
-			if len(urlKeys) > 0 {
-				s.s.Infof("%s matched distance: %d\n", distance)
-				components := s.getComponents(urlKeys, s.Config.UrlsLimit)
-				if eqProb > 100.0 {
-					eqProb = 100.0
-				}
-				probability := (1 - float32(distance)/float32(s.Config.Dmax)) * 100
-				probability = (probability + eqProb) / 2
-				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: probability, Stage: 2}
+			contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
+			d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, 0, s.Config.preferedPurlList)
+			urlKeys = urls[0]
+			distance = d[0]
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+		}
+		if len(urlKeys) > 0 {
+			s.s.Infof("%s matched distance: %d\n", node.PathId, distance)
+			components := s.getComponents(urlKeys, s.Config.UrlsLimit)
+			if eqProb > 100.0 {
+				eqProb = 100.0
+			}
+			namesHash, _ := strconv.ParseUint(node.SimHashNames, 16, 64)
+			dist := hammingDistance(namesHash, ranking[0].Hash)
+			probability := (1 - float32(dist)/(float32(s.Config.Dmax))) * 100
+			probability /= (float32(len(components)) / 2)
+			probability = (probability + eqProb) / 2
+			s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: probability, Stage: 2}
+			if probability > s.thStage2 {
 				return nil
 			}
 		}
-		for _, child := range node.Children {
-			s.scanTreeSecondStage(child)
-		}
 	}
+	for _, child := range node.Children {
+		s.scanTreeSecondStage(child)
+	}
+	//}
 	return nil
 }
 
@@ -515,10 +552,7 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 			if !exists || p.Date.Before(existingDate) {
 				childPurlDate[p.Purl] = p.Date
 			}
-			if s.resultsMap[child.PathId].Stage == 3 {
-				childs := float32(len(node.Children))
-				childPurlProb[p.Purl] += p.Confidence / childs
-			} else if s.resultsMap[child.PathId].Stage > 0 {
+			if s.resultsMap[child.PathId].Stage > 0 {
 				childPurlProb[p.Purl] += s.resultsMap[child.PathId].Probability * (1 / float32(len(node.Children)-childWithoutComponents))
 			} else {
 				childPurlProb[p.Purl] = -1
@@ -546,13 +580,16 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	}
 
 	var sortedPurls []string
+	preferedFound := false
+
 	if len(preferedPurls) > 0 {
 		sortedPurls = preferedPurls
+		preferedFound = true
 	} else {
 		sortedPurls = normalPurls
 	}
 
-	// Ordenar el slice de purls basado en sus probabilidades en orden descendente
+	// Sort based on purls dates
 	sort.Slice(sortedPurls, func(i, j int) bool {
 		if childPurlHits[sortedPurls[i]] != childPurlHits[sortedPurls[j]] {
 			return childPurlHits[sortedPurls[i]] > childPurlHits[sortedPurls[j]]
@@ -560,8 +597,6 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 			return childPurlDate[sortedPurls[i]].Before(childPurlDate[sortedPurls[j]])
 		}
 	})
-
-	s.s.Debugf("Sorted purls for %s: %s", node.PathId, sortedPurls[:])
 
 	// Update the now results
 	if len(sortedPurls) > 0 {
@@ -580,7 +615,11 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 						break
 					}
 				}
-				newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Confidence: childPurlProb[purl]}
+				var rank int32 = 1
+				if !preferedFound {
+					rank = purlRank(purl, purlRankDefaultValue)
+				}
+				newCOmponent := HFHscanResultItem{Purl: purl, Versions: versions, Rank: rank}
 				newCOmponents = append(newCOmponents, newCOmponent)
 				if i > s.Config.UrlsLimit {
 					break
@@ -612,14 +651,15 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 
 		for _, c := range result.Components {
 			if s.Config.preferedPurlList[c.Purl] {
-				preferedcomponents = append(preferedcomponents, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Confidence: result.Probability})
+				preferedcomponents = append(preferedcomponents, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Rank: 1})
 			} else {
-				components = append(components, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Confidence: c.Confidence * result.Probability / 100})
+				rank := purlRank(c.Purl, 5)
+				components = append(components, &dtos.HFHComponent{Purl: c.Purl, Versions: c.Versions, Rank: rank})
 			}
 		}
 		if len(preferedcomponents) > 0 {
 			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: preferedcomponents, Probability: result.Probability, Stage: result.Stage})
-		} else if components[0].Confidence > s.thStage3/3 {
+		} else {
 			limit := 10
 			if len(components) < limit {
 				limit = len(components)

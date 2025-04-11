@@ -22,9 +22,9 @@ type HFHResult struct {
 
 // HFHComponent represents a matched component with its details
 type HFHComponent struct {
-	Purl       string   `json:"purl,omitempty"`
-	Versions   []string `json:"versions,omitempty"`
-	Confidence float32  `json:"confidence,omitempty"`
+	Purl     string   `json:"purl,omitempty"`
+	Versions []string `json:"versions,omitempty"`
+	Rank     int32    `json:"rank,omitempty"`
 }
 
 func ExportHFHresult(s *zap.SugaredLogger, output HFHResultOutput) ([]byte, error) {

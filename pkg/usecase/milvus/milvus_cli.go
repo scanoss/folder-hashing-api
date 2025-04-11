@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"math/bits"
+	"sort"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -17,7 +19,7 @@ import (
 var (
 	mainColletionName      = "url"
 	secondaryColletionName = "secondary"
-	defaultTopResults      = 10000
+	defaultTopResults      = 16000
 
 	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "urlHash"} // Campos a devolver
 	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}            // Campos a devolver
@@ -83,7 +85,9 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults}, nil
 }
 
-func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, maxDistance int, topResults int) ([]int, [][]uint64, error) {
+func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, error) {
+
+	outputFields := []string{"hfhContents", "urlHash", "purl"}
 
 	if topResults <= 0 {
 		topResults = db.TopMainResult
@@ -126,7 +130,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, maxDista
 
 		// Search for the current block
 		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults,
-			mainColletionName, "hfhNames", []string{"hfhContents", "urlHash"}, nil)
+			mainColletionName, "hfhNames", outputFields, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -145,21 +149,23 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, maxDista
 
 			var fileContentsCandidates []uint64
 			var urlsCandidates []uint64
-
-			// Procesar cada resultado basándonos en el índice de los scores
+			purlHashMap := make(map[uint64]string)
+			// Process results from scores
 			for j := 0; j < len(scores); j++ {
-				// Procesar campos adicionales
+				var lastPurl string
+				var lastUrlHash uint64
+				// Data filed processing
 				if result.Fields != nil {
 					for k, field := range result.Fields {
 						var fieldName string
-						// Obtener el nombre del campo
+						// Get field name
 						if namedField, ok := field.(interface{ Name() string }); ok {
 							fieldName = namedField.Name()
 						} else {
 							fieldName = fmt.Sprintf("campo_%d", k)
 						}
 
-						// Extraer valor según el tipo
+						// Field processing
 						if binaryCol, ok := field.(*entity.ColumnBinaryVector); ok && binaryCol != nil {
 							if dataMethod := binaryCol.Data; dataMethod != nil {
 								data := dataMethod()
@@ -176,26 +182,65 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, maxDista
 								if j < len(data) {
 									if fieldName == "urlHash" {
 										urlsCandidates = append(urlsCandidates, uint64(data[j]))
+										lastUrlHash = uint64(data[j])
+									}
+								}
+							}
+						} else if strCol, ok := field.(*entity.ColumnVarChar); ok && strCol != nil {
+							if dataMethod := strCol.Data; dataMethod != nil {
+								data := dataMethod()
+								if j < len(data) {
+									if fieldName == "purl" {
+										lastPurl = data[j]
 									}
 								}
 							}
 						}
 					}
+					purlHashMap[lastUrlHash] = lastPurl
+				}
+			}
+			//select closest results based on content proximity
+			distance, urls := rankClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i])
+
+			var preferedUrls []uint64
+			var preferedDistances []int
+
+			var regularDistances []int
+			var regularUrls []uint64
+
+			for i, url := range urls {
+				purl := purlHashMap[url]
+				prefered := topPurls[purl]
+				if prefered && (len(preferedDistances) == 0 || distance[i] < int(math.Ceil(float64(preferedDistances[0])*1.1))) {
+					preferedUrls = append(preferedUrls, url)
+					preferedDistances = append(preferedDistances, distance[i])
+				} else if distance[i] <= distance[0]+4 || len(regularUrls) == 0 {
+					regularUrls = append(regularUrls, url)
+					regularDistances = append(regularDistances, distance[i])
 				}
 			}
 
-			distance, urls := selectClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i], maxDistance*3/4)
-			matchedDistances[originalIndex] = distance
-			matchedUrls[originalIndex] = urls
+			if len(preferedDistances) > 0 && preferedDistances[0] < int(math.Ceil(float64(distance[0])*1.1))+1 {
+				matchedDistances[originalIndex] = preferedDistances[0]
+				matchedUrls[originalIndex] = preferedUrls
+			} else if len(preferedDistances) > 0 && preferedDistances[0] < int(math.Ceil((float64(distance[0])*1.2)))+1 {
+				matchedDistances[originalIndex] = (regularDistances[0] + preferedDistances[0]) / 2
+				matchedUrls[originalIndex] = append(regularUrls, preferedUrls...)
+			} else {
+				matchedDistances[originalIndex] = regularDistances[0]
+				matchedUrls[originalIndex] = regularUrls
+			}
 		}
 	}
 
 	return matchedDistances, matchedUrls, nil
 }
 
+// Query the secondary hash table
 func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]uint64, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
 	c, err := client.NewGrpcClient(ctx, db.address)
@@ -233,14 +278,14 @@ func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]ui
 			if result.Fields != nil {
 				for k, field := range result.Fields {
 					var fieldName string
-					// Obtener el nombre del campo
+					//get field name
 					if namedField, ok := field.(interface{ Name() string }); ok {
 						fieldName = namedField.Name()
 					} else {
 						fieldName = fmt.Sprintf("campo_%d", k)
 					}
 
-					// Extraer valor según el tipo
+					//Field processing
 					if binaryCol, ok := field.(*entity.ColumnBinaryVector); ok && binaryCol != nil {
 						if dataMethod := binaryCol.Data; dataMethod != nil {
 							data := dataMethod()
@@ -261,8 +306,10 @@ func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]ui
 	return matchedHashNames, nil
 }
 
+// Get component information from url id
 func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 	outputFields := []string{"purl", "version", "release_date", "url"}
+	//cast the url id to int64 (milvus doesn't support uint64)
 	hashInt64 := int64(urlKey)
 	expr := fmt.Sprintf("urlHash == %d", hashInt64)
 
@@ -275,13 +322,11 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 	}
 	defer c.Close()
 
-	// Ejecutar la consulta
 	queryResult, err := c.Query(ctx, mainColletionName, nil, expr, outputFields)
 	if err != nil {
 		log.Fatalf("Error al realizar la consulta: %v", err)
 	}
 
-	// Verificar si hay resultados
 	if len(queryResult) == 0 || queryResult[0].Len() == 0 {
 		return nil, nil
 	}
@@ -290,15 +335,13 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 	if numResults > 0 {
 		for i := 0; i < numResults; i++ {
 			result := make([]string, len(outputFields))
-			// Procesar cada campo utilizando los métodos de acceso correctos
+			// Process the results by field
 			for i, fieldName := range outputFields {
-				// Obtener el campo correspondiente del resultado
 				columnData := queryResult.GetColumn(fieldName)
 				if columnData == nil {
 					continue
 				}
 
-				// Obtener el valor según el tipo de campo
 				switch data := columnData.(type) {
 				case *entity.ColumnVarChar:
 					result[i] = string(data.Data()[0])
@@ -310,38 +353,23 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 	return nil, nil
 }
 
-// searchSimilarHashes busca hashes similares en Milvus usando entity.BinaryVector
+// Milvus proximity search wrapper
 func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []uint64, topK int, collectionName string, fieldName string, outputFieldNames []string, partitions []string) ([]client.SearchResult, error) {
-	// Cargar la colección
-	/*err := c.LoadCollection(ctx, collectionName, false)
-	if err != nil {
-		return nil, fmt.Errorf("error al cargar colección: %v", err)
-	}
-	defer func() {
-		releaseErr := c.ReleaseCollection(ctx, collectionName)
-		if releaseErr != nil {
-			log.Printf("Advertencia: error al liberar colección: %v", releaseErr)
-		}
-	}()*/
 
-	// Crear un slice de vectores para la búsqueda
+	// Convert each uint64 hash to a binary vector
 	var vectors []entity.Vector
 	for _, h := range searchValues {
-		// Convertir el hash uint64 a un vector binario (formato de 8 bytes)
 		hashBytes := make([]byte, 8)
 		binary.BigEndian.PutUint64(hashBytes, h)
 		var binaryVec entity.BinaryVector = hashBytes
 		vectors = append(vectors, binaryVec)
 	}
 
-	// Configurar parámetros de búsqueda para ANN
+	// ANN confing. Bigger number, more presicition more time consuming.
 	sp, err := entity.NewIndexBinFlatSearchParam(10)
 	if err != nil {
-		return nil, fmt.Errorf("error al crear parámetros de búsqueda: %v", err)
+		return nil, fmt.Errorf("failed to setup searching parameter %v", err)
 	}
-
-	// Ejecutar la búsqueda con entity.BinaryVector
-	log.Println("Ejecutando búsqueda con BinaryVector...")
 
 	// Intentar la búsqueda con la firma correcta para tu SDK
 	searchResults, err := c.Search(
@@ -360,39 +388,45 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	return searchResults, err
 }
 
-func selectClosest(candidates []uint64, urls []uint64, contentsHash uint64, minDistance int) (int, []uint64) {
-	var bestMatches []uint64
-	var bestUrlsKey []uint64
+func rankClosest(candidates []uint64, urls []uint64, contentsHash uint64) ([]int, []uint64) {
+	var distances []int
 
-	minFilesContentdistance := minDistance
+	//minFilesContentdistance := minDistance
 	//use the filecontents hash to select the best results
-	for i, key := range candidates {
-
+	for _, key := range candidates {
 		filesContentdistance := hammingDistance(contentsHash, key)
-		//if the match is not exact with accept a range of valid distances
-		if (filesContentdistance < minFilesContentdistance-4) || (minFilesContentdistance > 0 && filesContentdistance == 0) {
-			bestMatches = []uint64{key}
-			minFilesContentdistance = filesContentdistance
-			bestUrlsKey = []uint64{urls[i]}
-		} else if filesContentdistance <= minFilesContentdistance {
-			bestMatches = append(bestMatches, key)
-			bestUrlsKey = append(bestUrlsKey, urls[i])
-		}
+		distances = append(distances, filesContentdistance)
 	}
 
-	return minFilesContentdistance, bestUrlsKey
+	// Verify that all three lists have the same length
+	if len(candidates) != len(urls) || len(candidates) != len(distances) {
+		panic("All three lists must have the same length")
+	}
+
+	// Create a slice of indices
+	indices := make([]int, len(distances))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	// Sort the indices based on the values in distances
+	sort.Slice(indices, func(i, j int) bool {
+		return distances[indices[i]] < distances[indices[j]]
+	})
+
+	sortedUrls := make([]uint64, len(urls))
+	sortedDistances := make([]int, len(distances))
+
+	// Rearrange according to the sorted indices
+	for i, idx := range indices {
+		sortedUrls[i] = urls[idx]
+		sortedDistances[i] = distances[idx]
+	}
+
+	return sortedDistances, sortedUrls
 }
 
 func hammingDistance(x, y uint64) int {
 	xor := x ^ y
 	return bits.OnesCount64(xor)
-}
-
-func headCalc(simHash uint64) byte {
-	var sum int
-	for i := 0; i < 8; i++ {
-		b := byte((simHash >> (i * 8)) & 0xFF)
-		sum += int(b) * 2
-	}
-	return byte(sum >> 4 & 0xFF)
 }
