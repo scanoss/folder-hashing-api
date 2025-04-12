@@ -19,7 +19,7 @@ import (
 var (
 	mainColletionName      = "url"
 	secondaryColletionName = "secondary"
-	defaultTopResults      = 16000
+	defaultTopResults      = 10000
 
 	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "urlHash"} // Campos a devolver
 	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}            // Campos a devolver
@@ -115,8 +115,8 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		matchedDistances[i] = 999
 	}
 
-	// Process in blocks of 100
-	blockSize := 20
+	// Process in blocks of 40
+	blockSize := 40
 	for start := 0; start < len(mainHashes); start += blockSize {
 		// Calculate end index for current block
 		end := start + blockSize
@@ -154,6 +154,9 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 			for j := 0; j < len(scores); j++ {
 				var lastPurl string
 				var lastUrlHash uint64
+				if scores[j] > scores[0]+2 {
+					break
+				}
 				// Data filed processing
 				if result.Fields != nil {
 					for k, field := range result.Fields {

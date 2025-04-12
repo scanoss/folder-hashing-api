@@ -96,7 +96,7 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Telemetry.Enabled = false
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
 	cfg.Hfh.Dmax = 30
-	cfg.Hfh.Threshold1 = 75
+	cfg.Hfh.Threshold1 = 72
 	cfg.Hfh.Threshold2 = 64
 	cfg.Hfh.Threshold3 = 55
 	cfg.Hfh.UrlsLimit = 10000

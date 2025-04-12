@@ -117,14 +117,14 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 		s.s.Warnf("curated purl list couln't be loaded")
 	}
 
-	s.s.Infof("--- First stage starts --- \n")
+	/*s.s.Infof("--- First stage starts --- \n")
 	err := s.scanTreeFirstStage(projectTree)
 	if err != nil {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
-	}
+	}*/
 
 	s.s.Infof("--- Second stage starts --- \n")
-	err = s.scanTreeSecondStage(projectTree)
+	err := s.scanTreeSecondStage(projectTree)
 	if err != nil {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
 	}
@@ -451,65 +451,63 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 
 func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 
-	if s.resultsMap[node.PathId].Probability > s.thStage1 || len(node.Children) < 4 {
+	if s.resultsMap[node.PathId].Probability > s.thStage1 {
 		return nil
 	}
 	s.s.Debugf("Procesing node %s\n", node.PathId)
-	//	if len(node.Children) > 1 {
 	var contentHashes []uint64
-
-	for _, child := range node.Children {
-		contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
-		contentHashes = append(contentHashes, contentHash)
-	}
-
-	resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, 1)
-	if err != nil {
-		return err
-	}
-	ranking := RankHashesByColumns(resultMatrix, 1)
-	eqProb := float32(0)
-	if len(ranking) > 0 {
-		eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children))
-	}
-	if eqProb >= s.thStage2 {
-		var urlKeys []uint64
-		distance := 0
-		for i, r := range ranking {
-			//go to the main hfh table to look for the url hash
-			if i > 0 && r.Count < ranking[i-1].Count {
-				break
-			}
-			contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
-			d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, 0, s.Config.preferedPurlList)
-			urlKeys = urls[0]
-			distance = d[0]
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
+	if len(node.Children) > 3 {
+		for _, child := range node.Children {
+			contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
+			contentHashes = append(contentHashes, contentHash)
 		}
-		if len(urlKeys) > 0 {
-			s.s.Infof("%s matched distance: %d\n", node.PathId, distance)
-			components := s.getComponents(urlKeys, s.Config.UrlsLimit)
-			if eqProb > 100.0 {
-				eqProb = 100.0
+
+		resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, 1)
+		if err != nil {
+			return err
+		}
+		ranking := RankHashesByColumns(resultMatrix, 2)
+		eqProb := float32(0)
+		if len(ranking) > 0 {
+			eqProb = float32(ranking[0].Count) * 100 / float32(len(node.Children))
+		}
+		if eqProb >= s.thStage2 {
+			var urlKeys []uint64
+			distance := 0
+			for i, r := range ranking {
+				//go to the main hfh table to look for the url hash
+				if i > 0 && r.Count < ranking[i-1].Count {
+					break
+				}
+				contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
+				d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, 0, s.Config.preferedPurlList)
+				urlKeys = urls[0]
+				distance = d[0]
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
 			}
-			namesHash, _ := strconv.ParseUint(node.SimHashNames, 16, 64)
-			dist := hammingDistance(namesHash, ranking[0].Hash)
-			probability := (1 - float32(dist)/(float32(s.Config.Dmax))) * 100
-			probability /= (float32(len(components)) / 2)
-			probability = (probability + eqProb) / 2
-			s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: probability, Stage: 2}
-			if probability > s.thStage2 {
-				return nil
+			if len(urlKeys) > 0 {
+				s.s.Infof("%s matched distance: %d\n", node.PathId, distance)
+				components := s.getComponents(urlKeys, s.Config.UrlsLimit)
+				if eqProb > 100.0 {
+					eqProb = 100.0
+				}
+				//	namesHash, _ := strconv.ParseUint(node.SimHashNames, 16, 64)
+				//	dist := hammingDistance(namesHash, ranking[0].Hash)
+				probability := eqProb //(1 - float32(dist)/(float32(s.Config.Dmax))) * 100
+				//	probability = (probability + eqProb) / 2
+				s.resultsMap[node.PathId] = HFHscanResult{Components: components, Probability: probability, Stage: 2}
+				if probability > s.thStage2 {
+					return nil
+				}
 			}
 		}
 	}
 	for _, child := range node.Children {
 		s.scanTreeSecondStage(child)
 	}
-	//}
 	return nil
 }
 
