@@ -96,9 +96,9 @@ func setServerConfigDefaults(cfg *ServerConfig) {
 	cfg.Telemetry.Enabled = false
 	cfg.Telemetry.OltpExporter = "0.0.0.0:4317" // Default OTEL OLTP gRPC Exporter endpoint
 	cfg.Hfh.Dmax = 30
-	cfg.Hfh.Threshold1 = 72
-	cfg.Hfh.Threshold2 = 64
-	cfg.Hfh.Threshold3 = 55
+	cfg.Hfh.Threshold1 = 70
+	cfg.Hfh.Threshold2 = 60
+	cfg.Hfh.Threshold3 = 51
 	cfg.Hfh.UrlsLimit = 10000
 	cfg.Hfh.CuratedPurlListPath = "/usr/local/etc/scanoss/prefered_purl_list.txt"
 }

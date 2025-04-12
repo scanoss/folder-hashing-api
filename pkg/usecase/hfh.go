@@ -117,14 +117,14 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 		s.s.Warnf("curated purl list couln't be loaded")
 	}
 
-	/*s.s.Infof("--- First stage starts --- \n")
+	s.s.Infof("--- First stage starts --- \n")
 	err := s.scanTreeFirstStage(projectTree)
 	if err != nil {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
-	}*/
+	}
 
 	s.s.Infof("--- Second stage starts --- \n")
-	err := s.scanTreeSecondStage(projectTree)
+	err = s.scanTreeSecondStage(projectTree)
 	if err != nil {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
 	}
@@ -643,7 +643,7 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 
 func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dtos.HFHResult) error {
 	result := s.resultsMap[node.PathId]
-	if result.Probability > s.thStage2 && len(result.Components) > 0 {
+	if result.Probability > s.thStage3 && len(result.Components) > 0 {
 		var components []*dtos.HFHComponent
 		var preferedcomponents []*dtos.HFHComponent
 
@@ -662,7 +662,11 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 			if len(components) < limit {
 				limit = len(components)
 			}
-			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: components[:limit], Probability: result.Probability, Stage: result.Stage})
+			var prob float32 = result.Probability
+			if result.Stage == 2 {
+				prob = result.Probability/(float32(len(components)%5)) + 1
+			}
+			*results = append(*results, &dtos.HFHResult{PathId: node.PathId, Components: components[:limit], Probability: prob, Stage: result.Stage})
 		}
 
 		if len(node.Children) == 0 {
