@@ -93,7 +93,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		topResults = db.TopMainResult
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
 	c, err := client.NewGrpcClient(ctx, db.address)
@@ -116,7 +116,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 	}
 
 	// Process in blocks of 40
-	blockSize := 40
+	blockSize := 20
 	for start := 0; start < len(mainHashes); start += blockSize {
 		// Calculate end index for current block
 		end := start + blockSize
@@ -243,7 +243,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 // Query the secondary hash table
 func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]uint64, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Second)
 	defer cancel()
 
 	c, err := client.NewGrpcClient(ctx, db.address)
@@ -369,7 +369,7 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	}
 
 	// ANN confing. Bigger number, more presicition more time consuming.
-	sp, err := entity.NewIndexBinFlatSearchParam(10)
+	sp, err := entity.NewIndexBinFlatSearchParam(3)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup searching parameter %v", err)
 	}

@@ -30,7 +30,7 @@ func main() {
 	flag.Parse()
 	path := flag.Arg(0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Minute)
 	defer cancel()
 
 	if !directoryExists(path) {
