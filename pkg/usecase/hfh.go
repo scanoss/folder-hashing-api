@@ -31,7 +31,6 @@ type HFHscan struct {
 	thStage2       float32
 	thStage3       float32
 	deepSearch     bool
-	bestMatch      bool
 }
 
 type HFHscanConfig struct {
@@ -105,8 +104,7 @@ func HFHScanNew(log *zap.SugaredLogger, config *HFHscanConfig, input *dtos.HFHsc
 	scanner.thStage1 = scanner.Config.ThStage1 * float32(threshold) / 100
 	scanner.thStage2 = scanner.Config.ThStage2 * float32(threshold) / 100
 	scanner.thStage3 = scanner.Config.ThStage3 * float32(threshold) / 100
-	scanner.bestMatch = bestMatch
-	scanner.deepSearch = false
+	scanner.deepSearch = bestMatch //TODO: update papi definition
 	return &scanner
 }
 
@@ -405,6 +403,11 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	if maxLevel < 2 {
 		maxLevel = 2
 	}
+
+	if s.deepSearch {
+		maxLevel = len(s.nameHashLevels)
+	}
+
 	for level := 0; level < maxLevel; level++ {
 		if s.nameHashLevels[level] == nil {
 			break
@@ -516,7 +519,7 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 		return nil
 	}
 	// If the matching probability is major than the TH we don't need to continue
-	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability >= s.thStage3 && !s.bestMatch {
+	if s.resultsMap[node.PathId].Stage > 0 && s.resultsMap[node.PathId].Probability >= s.thStage3 && !s.deepSearch {
 		s.s.Debugf("skiping children. Root node %s probability exceeds the threshold: %.1f/%.1f", node.PathId, s.resultsMap[node.PathId].Probability, s.thStage3)
 		return nil
 	}

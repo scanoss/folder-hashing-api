@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"math/bits"
 	"sort"
@@ -129,7 +128,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		currentSecHashes := secHashes[start:end]
 
 		// Search for the current block
-		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults,
+		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults, 10,
 			mainColletionName, "hfhNames", outputFields, nil)
 		if err != nil {
 			return nil, nil, err
@@ -255,7 +254,7 @@ func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]ui
 	// Initialize result slices
 	matchedHashNames := make([][]uint64, len(secHashes))
 
-	searchResults, err := searchSimilarHashes(ctx, c, secHashes, db.TopMainResult,
+	searchResults, err := searchSimilarHashes(ctx, c, secHashes, db.TopMainResult, 5,
 		secondaryColletionName, "hfhContents", []string{"hfhNames"}, nil)
 	if err != nil {
 		return nil, err
@@ -327,7 +326,7 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 
 	queryResult, err := c.Query(ctx, mainColletionName, nil, expr, outputFields)
 	if err != nil {
-		log.Fatalf("Error al realizar la consulta: %v", err)
+		return nil, err
 	}
 
 	if len(queryResult) == 0 || queryResult[0].Len() == 0 {
@@ -357,7 +356,7 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 }
 
 // Milvus proximity search wrapper
-func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []uint64, topK int, collectionName string, fieldName string, outputFieldNames []string, partitions []string) ([]client.SearchResult, error) {
+func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []uint64, topK, nprobe int, collectionName string, fieldName string, outputFieldNames []string, partitions []string) ([]client.SearchResult, error) {
 
 	// Convert each uint64 hash to a binary vector
 	var vectors []entity.Vector
@@ -369,7 +368,7 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	}
 
 	// ANN confing. Bigger number, more presicition more time consuming.
-	sp, err := entity.NewIndexBinFlatSearchParam(3)
+	sp, err := entity.NewIndexBinFlatSearchParam(nprobe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup searching parameter %v", err)
 	}
