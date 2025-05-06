@@ -20,8 +20,8 @@ var (
 	secondaryColletionName = "secondary"
 	defaultTopResults      = 10000
 
-	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "urlHash"} // Campos a devolver
-	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}            // Campos a devolver
+	OutputFieldNamesMain = []string{"hfhNames", "hfhContents", "urlHash"}
+	OutputFieldNamesSec  = []string{"hfhContents", "hfhNames"}
 	defaultHost          = "localhost"
 	defaultPort          = "19530"
 )
@@ -114,7 +114,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		matchedDistances[i] = 999
 	}
 
-	// Process in blocks of 40
+	// Process in blocks of 20
 	blockSize := 20
 	for start := 0; start < len(mainHashes); start += blockSize {
 		// Calculate end index for current block
