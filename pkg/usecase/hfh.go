@@ -22,21 +22,21 @@ import (
 
 type HFHscan struct {
 	Config         *HFHscanConfig
-	resultsMap     map[string]HFHscanResult
-	namesContents  map[uint64]uint64
-	nameHashPath   map[uint64]string
-	nameHashLevels map[int][]uint64
+	resultsMap     map[string]HFHscanResult //the key is each folder, the content is the matched purl and probability
+	namesContents  map[uint64]uint64        //map linking names and contents hash.
+	nameHashPath   map[uint64]string        //map linking names hash with path
+	nameHashLevels map[int][]uint64         //keeps the name hashes grouped by project structure level
 	s              *zap.SugaredLogger
-	thStage1       float32
-	thStage2       float32
-	thStage3       float32
-	deepSearch     bool
+	thStage1       float32 //first stage threshold, if the probality is over the threshold is considered a valid match
+	thStage2       float32 //second stage threshold, if the probality is over the threshold is considered a valid match
+	thStage3       float32 //third stage threshold, if the probality is over the threshold is considered a valid match
+	deepSearch     bool    //if true do not stop the scan when a folder is identified
 }
 
+// scan config structure, is defined when the service starts
 type HFHscanConfig struct {
 	mvDb             *mv.MilvusDb
 	Dmax             int
-	SectorTol        int
 	UrlsLimit        int
 	ThStage1         float32
 	ThStage2         float32
@@ -62,13 +62,13 @@ const (
 	purlRankDefaultValue   = 5
 )
 
+// Scanning module initialization
 func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	scanner := HFHscanConfig{
 		ThStage1:  config.Hfh.Threshold1,
 		ThStage2:  config.Hfh.Threshold2,
 		ThStage3:  config.Hfh.Threshold3,
 		Dmax:      config.Hfh.Dmax,
-		SectorTol: config.Hfh.SectorTol,
 		UrlsLimit: config.Hfh.UrlsLimit,
 	}
 
@@ -78,8 +78,8 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	if err != nil {
 		log.Printf("Prefered purl list couldn't be loaded: %s", err)
 	}
-	//new milvus db with default config
-	scanner.mvDb, err = mv.NewMilvusDb("", "")
+	//new milvus db with default config, if milvus is not available the service cannot start
+	scanner.mvDb, err = mv.NewMilvusDb("", "", "")
 	if err != nil {
 		return nil
 	}
@@ -87,11 +87,14 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	return &scanner
 }
 
+// new scan request
 func HFHScanNew(log *zap.SugaredLogger, config *HFHscanConfig, input *dtos.HFHscanInput) *HFHscan {
 	scanner := HFHscan{s: log, resultsMap: make(map[string]HFHscanResult), nameHashPath: make(map[uint64]string),
 		namesContents: make(map[uint64]uint64), Config: config, nameHashLevels: make(map[int][]uint64)}
 	threshold := input.Threshold
 	bestMatch := input.BestMatch
+
+	//threshold adjustment
 	if threshold <= 10 {
 		threshold = 10
 	}
@@ -151,11 +154,13 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 	return results, nil
 }
 
+// hamming distance calculation
 func hammingDistance(x, y uint64) int {
 	xor := x ^ y
 	return bits.OnesCount64(xor)
 }
 
+// helper function to parse purl. TODO: this must be improved
 func parsePurl(purl string) (string, string, string, error) {
 	// Check if the purl is empty
 	if purl == "" {
@@ -189,6 +194,7 @@ func parsePurl(purl string) (string, string, string, error) {
 	return source, vendor, component, nil
 }
 
+// helper function to rank purls. TODO: this must be improved
 func purlRank(purl string, startRank int32) int32 {
 	rank := startRank
 	source, vendor, component, err := parsePurl(purl)
@@ -204,7 +210,7 @@ func purlRank(purl string, startRank int32) int32 {
 	return 10
 }
 
-// retrieves purl information from the url table
+// retrieves purl information from milvus and sort by date and extension
 func (s *HFHscan) getComponents(urls []uint64, limit int) []HFHscanResultItem {
 	uniquePurls := make(map[string]bool)
 	uniquePurlVersions := make(map[string]bool)
@@ -283,7 +289,7 @@ type HashCount struct {
 	Count int
 }
 
-// RankHashesByColumns takes a matrix of strings (hashes) and returns a sorted slice
+// RankHashesByColumns takes a matrix of hashes and returns a sorted slice
 // of HashCount where Count represents the number of different columns where each hash appears
 func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 	if len(matrix) == 0 {
@@ -377,6 +383,7 @@ func RankHashesByColumns(matrix [][]uint64, threshold int) []HashCount {
 
 }
 
+// initilizate the auxiliar maps
 func (s *HFHscan) initMap(node *dtos.HFHScanInputChildren, level *int) error {
 
 	mLevel := *level
@@ -396,14 +403,16 @@ func (s *HFHscan) initMap(node *dtos.HFHScanInputChildren, level *int) error {
 
 }
 
+// At the first stage we travel the project levels, sending to milvus all the hashes of each level and processing the results
 func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	rootLevel := 0
 	s.initMap(node, &rootLevel)
+	//maxLevel means how deep we are going to go in the map levels
 	maxLevel := 2 * int(math.Sqrt(float64(len(s.nameHashLevels))))
 	if maxLevel < 2 {
 		maxLevel = 2
 	}
-
+	//if deepSeach is enabled we travel all the maps levels
 	if s.deepSearch {
 		maxLevel = len(s.nameHashLevels)
 	}
@@ -452,6 +461,8 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 	return nil
 }
 
+// At the second stage we look por partial dependencies using the secondary hash table.
+// Go to each node without results, and if it has more than 3 subfolders, try to match this subfolders to a component
 func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 
 	if s.resultsMap[node.PathId].Probability > s.thStage1 {
@@ -464,11 +475,12 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 			contentHash, _ := strconv.ParseUint(child.SimHashContent, 16, 64)
 			contentHashes = append(contentHashes, contentHash)
 		}
-
+		//query milvus fusing the subfolders content hashes
 		resultMatrix, err := s.Config.mvDb.SecondarySearch(contentHashes, 1)
 		if err != nil {
 			return err
 		}
+		//process the results loocking for a component in common
 		ranking := RankHashesByColumns(resultMatrix, 2)
 		eqProb := float32(0)
 		if len(ranking) > 0 {
@@ -514,6 +526,8 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 	return nil
 }
 
+// At third stage we try to group subfolders components.
+// If three subfolders have the same component, then this fathers must be assigned to the same one
 func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	if node.Children == nil {
 		return nil
@@ -538,7 +552,6 @@ func (s *HFHscan) scanTreeThirdStage(node *dtos.HFHScanInputChildren) error {
 	s.s.Debugf("Now at %s", node.PathId)
 
 	for _, child := range node.Children {
-		//ignore low prob results
 		if len(s.resultsMap[child.PathId].Components) <= 0 { //|| child.Result.Prob < threshold {
 			s.s.Debugf("ignore node without components: %s", child.PathId)
 			childWithoutComponents++

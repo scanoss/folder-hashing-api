@@ -28,11 +28,12 @@ var (
 
 type MilvusDb struct {
 	address       string
+	databaseName  string
 	s             *zap.SugaredLogger
 	TopMainResult int
 }
 
-func NewMilvusDb(host string, port string) (*MilvusDb, error) {
+func NewMilvusDb(host string, port string, database string) (*MilvusDb, error) {
 
 	if host == "" {
 		host = defaultHost
@@ -40,6 +41,10 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 
 	if port == "" {
 		port = defaultPort
+	}
+
+	if database == "" {
+		database = "default"
 	}
 	// Milvus GRPC connection
 	milvusAddress := fmt.Sprintf("%s:%s", host, port)
@@ -54,6 +59,13 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 	}
 	defer c.Close()
 	s.Info("Sucessfuly connected to Milvus KB")
+	err = c.UsingDatabase(ctx, database)
+	if err != nil {
+		return nil, err
+	}
+
+	s.Infof("Using %s database", database)
+
 	// Check if the collections are available
 	has, err := c.HasCollection(ctx, mainColletionName)
 	if err != nil {
@@ -81,7 +93,7 @@ func NewMilvusDb(host string, port string) (*MilvusDb, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error al cargar colección: %v", err)
 	}
-	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults}, nil
+	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults, databaseName: database}, nil
 }
 
 func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, error) {
@@ -100,6 +112,11 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		return nil, nil, err
 	}
 	defer c.Close()
+
+	err = c.UsingDatabase(ctx, db.databaseName)
+	if err != nil {
+		return nil, nil, err
+	}
 	// Make sure input slices have the same length
 	if len(mainHashes) != len(secHashes) {
 		return nil, nil, fmt.Errorf("mainHashes and secHashes must have the same length")
@@ -251,6 +268,11 @@ func (db *MilvusDb) SecondarySearch(secHashes []uint64, maxDistance int) ([][]ui
 	}
 	defer c.Close()
 
+	err = c.UsingDatabase(ctx, db.databaseName)
+	if err != nil {
+		return nil, err
+	}
+
 	// Initialize result slices
 	matchedHashNames := make([][]uint64, len(secHashes))
 
@@ -323,6 +345,11 @@ func (db *MilvusDb) GetComponent(urlKey uint64) ([]string, error) {
 		return nil, err
 	}
 	defer c.Close()
+
+	err = c.UsingDatabase(ctx, db.databaseName)
+	if err != nil {
+		return nil, err
+	}
 
 	queryResult, err := c.Query(ctx, mainColletionName, nil, expr, outputFields)
 	if err != nil {

@@ -97,7 +97,6 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 		ThStage2:  myConfig.Hfh.Threshold2,
 		ThStage3:  myConfig.Hfh.Threshold3,
 		Dmax:      myConfig.Hfh.Dmax,
-		SectorTol: myConfig.Hfh.SectorTol,
 		UrlsLimit: myConfig.Hfh.UrlsLimit,
 	}
 	s.scannerConfig = &scannerConfig
