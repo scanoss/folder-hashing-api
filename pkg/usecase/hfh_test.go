@@ -121,6 +121,49 @@ func TestHFHscanTreeFirstStage(t *testing.T) {
 	}
 }
 
+func TestHFHscanTreeSecondStage(t *testing.T) {
+	scanner, err := testScanInitHelper()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	scanner.resultsMap = make(map[string]HFHscanResult)
+
+	node := &dtos.HFHScanInputChildren{
+		PathId:         "/root",
+		SimHashNames:   "ffffffffffffffff",
+		SimHashContent: "ffffffffffffffff",
+		Children: []*dtos.HFHScanInputChildren{
+			{
+				PathId:         "/root/child1",
+				SimHashNames:   "ffffffffffffffff",
+				SimHashContent: "043d4906f4d2fb74",
+			},
+			{
+				PathId:         "/root/child2",
+				SimHashNames:   "ffffffffffffffff",
+				SimHashContent: "061e17a6bf4b541f",
+			},
+			{
+				PathId:         "/root/child3",
+				SimHashNames:   "ffffffffffffffff",
+				SimHashContent: "1a1cd0a785512dae",
+			},
+			{
+				PathId:         "/root/child4",
+				SimHashNames:   "ffffffffffffffff",
+				SimHashContent: "1a706950c2f73138",
+			},
+		},
+	}
+	err = scanner.scanTreeSecondStage(node)
+	if err != nil {
+		t.Errorf("unexpected error during scan process %v", err)
+		return
+	}
+	t.Log(scanner.resultsMap)
+}
+
 func TestHFHthirdStep(t *testing.T) {
 	resultsMap := map[string]HFHscanResult{
 		"/monorepo/deps/libsignal-protocol-test/gradle": {
