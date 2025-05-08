@@ -302,7 +302,7 @@ func createSearchIndex(ctx context.Context, c client.Client) {
 	err = c.CreateIndex(ctx, CollectionName, "hfhNames", idx, true, opts...)
 
 	if err != nil {
-		log.Println("Error creating index: %v", err)
+		log.Println("Error creating index:", err)
 	}
 
 	// Create the Index object using the correct signature
@@ -312,7 +312,7 @@ func createSearchIndex(ctx context.Context, c client.Client) {
 	err = c.CreateIndex(ctx, CollectionName, "hfhContents", idx, true, opts...)
 
 	if err != nil {
-		log.Println("Error creating index: %v", err)
+		log.Println("Error creating index:", err)
 	}
 
 	// Create the Index object using the correct signature
@@ -322,7 +322,7 @@ func createSearchIndex(ctx context.Context, c client.Client) {
 	err = c.CreateIndex(ctx, CollectionName, "urlHash", idx, true, opts...)
 
 	if err != nil {
-		log.Println("Error creating index: %v", err)
+		log.Println("Error creating index:", err)
 	}
 }
 

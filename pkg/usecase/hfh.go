@@ -63,7 +63,7 @@ const (
 )
 
 // Scanning module initialization
-func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
+func HFHScanInit(config *myconfig.ServerConfig, testMode bool) *HFHscanConfig {
 	scanner := HFHscanConfig{
 		ThStage1:  config.Hfh.Threshold1,
 		ThStage2:  config.Hfh.Threshold2,
@@ -78,8 +78,13 @@ func HFHScanInit(config *myconfig.ServerConfig) *HFHscanConfig {
 	if err != nil {
 		log.Printf("Prefered purl list couldn't be loaded: %s", err)
 	}
+
+	dbName := ""
+	if testMode {
+		dbName = "test"
+	}
 	//new milvus db with default config, if milvus is not available the service cannot start
-	scanner.mvDb, err = mv.NewMilvusDb("", "", "")
+	scanner.mvDb, err = mv.NewMilvusDb("", "", dbName)
 	if err != nil {
 		return nil
 	}

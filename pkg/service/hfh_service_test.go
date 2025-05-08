@@ -92,14 +92,11 @@ func TestHfhServer_FolderHashScan(t *testing.T) {
 		t.Fatalf("failed to load Config: %v", err)
 	}
 	s, _ := NewFolderHashingServer(myConfig)
-	scannerConfig := u.HFHscanConfig{
-		ThStage1:  myConfig.Hfh.Threshold1,
-		ThStage2:  myConfig.Hfh.Threshold2,
-		ThStage3:  myConfig.Hfh.Threshold3,
-		Dmax:      myConfig.Hfh.Dmax,
-		UrlsLimit: myConfig.Hfh.UrlsLimit,
+	s.scannerConfig = u.HFHScanInit(myConfig, true)
+	if s.scannerConfig == nil {
+		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
+		return
 	}
-	s.scannerConfig = &scannerConfig
 
 	var hfhRequestData = `{
 		"best_match": true,

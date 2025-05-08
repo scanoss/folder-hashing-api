@@ -364,18 +364,11 @@ func TestHFHScan(t *testing.T) {
 		t.Errorf("Fatal error loading default config")
 	}
 
-	scannerConfig := HFHScanInit(cfg)
+	scannerConfig := HFHScanInit(cfg, true)
 	if scannerConfig == nil {
 		t.Skipf("scan failed during initialization. To tun this test be sure that you have a valid kb instaled")
 		return
 	}
-
-	db, err := mv.NewMilvusDb("", "", "test")
-	if err != nil {
-		t.Skipf("Test KB is not available")
-	}
-	//overwrite with testing db
-	scannerConfig.mvDb = db
 
 	scanInput := dtos.HFHscanInput{Threshold: 100.0, BestMatch: false, Root: test.Monorepo_root}
 	scanner := HFHScanNew(s, scannerConfig, &scanInput)

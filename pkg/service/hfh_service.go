@@ -38,7 +38,7 @@ type hfhServer struct {
 
 func NewFolderHashingServer(config *myconfig.ServerConfig) (*hfhServer, error) {
 	setupMetrics()
-	scannerConfig := u.HFHScanInit(config)
+	scannerConfig := u.HFHScanInit(config, false)
 	if scannerConfig == nil {
 		return &hfhServer{config: config, scannerConfig: scannerConfig}, fmt.Errorf("error creating scanning instance")
 	}
