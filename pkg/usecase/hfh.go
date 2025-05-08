@@ -86,6 +86,7 @@ func HFHScanInit(config *myconfig.ServerConfig, testMode bool) *HFHscanConfig {
 	//new milvus db with default config, if milvus is not available the service cannot start
 	scanner.mvDb, err = mv.NewMilvusDb("", "", dbName)
 	if err != nil {
+		log.Printf("Milvus setup is not valid: %s", err)
 		return nil
 	}
 

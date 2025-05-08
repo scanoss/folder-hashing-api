@@ -32,7 +32,7 @@ echo "Step 2 completed successfully"
 
 # Step 3: Execute the secondary import
 echo "Step 3: Executing secondary test collection import..."
-go run ./cmd/import_secondary/import_secondary_colletion.go -database test -overwrite -dir ./test/source/secondary/
+go run ./cmd/import_secondary/import_secondary_collection.go -database test -overwrite -dir ./test/source/secondary/
 
 # Check if step 3 was successful
 if [ $? -ne 0 ]; then
