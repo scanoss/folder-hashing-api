@@ -28,6 +28,14 @@ clean_testcache:  ## Expire all Go test caches
 version:  ## Produce hfh version text file
 	@echo "Writing version file..."
 	echo $(VERSION) > pkg/cmd/version.txt
+test: ## Deploy milvus and run tests
+	@echo "Deploying Milvus..."
+	@CURRENT_DIR=$$(pwd) && \
+	cd pkg/usecase/milvus && \
+	bash milvus_deploy.sh && \
+	cd $$CURRENT_DIR && \
+	echo "Running tests..." && \
+	$(MAKE) unit_test
 
 unit_test:  ## Run all unit tests in the pkg folder
 	@echo "Running unit test framework..."

@@ -162,6 +162,10 @@ func TestHFHscanTreeSecondStage(t *testing.T) {
 		return
 	}
 	t.Log(scanner.resultsMap)
+	expectedPurl := "pkg:github/signalapp/libsignal-protocol-java"
+	if scanner.resultsMap["/root"].Components[0].Purl != expectedPurl {
+		t.Errorf("result component doesn't match: %s vs %s", scanner.resultsMap["/root"].Components[0].Purl, expectedPurl)
+	}
 }
 
 func TestHFHthirdStep(t *testing.T) {
