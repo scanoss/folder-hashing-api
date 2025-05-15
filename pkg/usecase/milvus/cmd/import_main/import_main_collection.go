@@ -6,7 +6,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,8 +22,8 @@ import (
 const (
 	MilvusHost = "localhost"
 	MilvusPort = "19530"
-	BatchSize  = 1000
-	MaxWorkers = 8
+	BatchSize  = 4000
+	MaxWorkers = 3
 )
 
 // Default value for collection name, can be overridden with -collectionName flag
@@ -34,6 +34,7 @@ func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
 	collectionNameFlag := flag.String("collectionName", "url", "Name of the Milvus collection to use")
 	databaseNameFlag := flag.String("database", "default", "Name of the Milvus database to use (will be created if it doesn't exist)")
+	overwriteFlag := flag.Bool("overwrite", false, "If true, delete existing collection before import")
 
 	flag.Parse()
 
@@ -53,17 +54,23 @@ func main() {
 	startTime := time.Now()
 
 	// Connect to Milvus
+	log.Println("Connecting to Milvus server...")
 	ctx := context.Background()
 	c, err := client.NewGrpcClient(ctx, fmt.Sprintf("%s:%s", MilvusHost, MilvusPort))
 	if err != nil {
 		log.Fatalf("Error connecting to Milvus: %v", err)
 	}
-	defer c.Close()
+	defer func() {
+		log.Println("Closing connection to Milvus")
+		c.Close()
+	}()
+	log.Println("Connected to Milvus server successfully")
 
 	// Handle database creation/selection
 	databaseName := *databaseNameFlag
 	if databaseName != "default" {
 		// Check if database exists
+		log.Printf("Checking if database '%s' exists...", databaseName)
 		databases, err := c.ListDatabases(ctx)
 		if err != nil {
 			log.Fatalf("Error listing databases: %v", err)
@@ -85,26 +92,44 @@ func main() {
 				log.Fatalf("Error creating database '%s': %v", databaseName, err)
 			}
 			log.Printf("Database '%s' created successfully", databaseName)
+		} else {
+			log.Printf("Database '%s' already exists", databaseName)
 		}
 
 		// Use the specified database
-		log.Printf("Using database: %s", databaseName)
+		log.Printf("Switching to database: %s", databaseName)
 		err = c.UsingDatabase(ctx, databaseName)
 		if err != nil {
 			log.Fatalf("Error setting active database to '%s': %v", databaseName, err)
 		}
+		log.Printf("Now using database: %s", databaseName)
+	}
+	// Check if collection exists and handle overwrite flag
+	hasCollection, err := c.HasCollection(ctx, CollectionName)
+	if err != nil {
+		log.Fatalf("Error checking if collection exists: %v", err)
 	}
 
-	log.Println("Creating Collection")
+	if hasCollection && *overwriteFlag {
+		log.Printf("Collection '%s' exists and overwrite flag is set. Dropping collection...", CollectionName)
+		err = c.DropCollection(ctx, CollectionName)
+		if err != nil {
+			log.Fatalf("Error dropping collection: %v", err)
+		}
+		log.Printf("Collection '%s' dropped successfully", CollectionName)
+		hasCollection = false
+	}
+
+	log.Println("Checking if collection exists...")
 	// Create collection if it doesn't exist
 	createCollectionIfNotExists(ctx, c)
 
 	// Get list of CSV files in the directory
-	files, err := ioutil.ReadDir(*csvDir)
+	log.Printf("Reading directory '%s' for CSV files...", *csvDir)
+	files, err := os.ReadDir(*csvDir)
 	if err != nil {
 		log.Fatalf("Error reading directory: %v", err)
 	}
-	log.Println("Searching for CSV files")
 
 	var csvFiles []string
 	for _, file := range files {
@@ -114,12 +139,28 @@ func main() {
 	}
 
 	log.Printf("Found %d CSV files to import", len(csvFiles))
+	if len(csvFiles) == 0 {
+		log.Println("No CSV files found. Exiting.")
+		return
+	}
 
 	// Channel to process files
 	filesChan := make(chan string, len(csvFiles))
 	var wg sync.WaitGroup
 
+	// Error channel to collect errors from workers
+	errorsChan := make(chan error, len(csvFiles))
+
+	// Flush after importing each sector to ensure data is persisted
+	log.Printf("Flushing data...")
+	err = c.Flush(ctx, CollectionName, false)
+	if err != nil {
+		log.Printf("error flushing data: %v", err)
+	}
+	log.Printf("Data flushed successfully")
+
 	// Start workers to process files in parallel
+	log.Printf("Starting %d worker(s) to process CSV files...", MaxWorkers)
 	for i := 0; i < MaxWorkers; i++ {
 		wg.Add(1)
 		go func(workerId int) {
@@ -131,7 +172,10 @@ func main() {
 
 				err := importCSVFile(ctx, c, file, sectorName)
 				if err != nil {
-					log.Printf("Error importing file %s: %v", file, err)
+					log.Printf("Worker %d: Error importing file %s: %v", workerId, file, err)
+					errorsChan <- fmt.Errorf("error importing file %s: %v", file, err)
+				} else {
+					log.Printf("Worker %d: Successfully processed sector %s", workerId, sectorName)
 				}
 			}
 		}(i)
@@ -144,25 +188,47 @@ func main() {
 	close(filesChan)
 
 	// Wait for all workers to finish
+	log.Println("Waiting for all workers to complete...")
 	wg.Wait()
+	close(errorsChan)
 
-	// Flush to ensure all data is available
-	err = c.Flush(ctx, CollectionName, false)
-	if err != nil {
-		log.Printf("Warning: Error flushing data: %v", err)
+	// Check if there were any errors during processing
+	errCount := 0
+	for err := range errorsChan {
+		errCount++
+		log.Printf("Import error: %v", err)
+	}
+	if errCount > 0 {
+		log.Printf("WARNING: Encountered %d errors during import", errCount)
 	}
 
-	// Create search index if it doesn't exist yet
-	createSearchIndex(ctx, c)
+	// Create search indices synchronously
+	log.Println("Creating search indices (synchronous operation)...")
+	err = createSearchIndices(ctx, c)
+	if err != nil {
+		log.Printf("WARNING: Error creating search indices: %v", err)
+	} else {
+		log.Println("Search indices created successfully")
+	}
+
+	// Load collection to make it available for search
+	log.Println("Loading collection to make it available for search...")
+	err = c.LoadCollection(ctx, CollectionName, false)
+	if err != nil {
+		log.Printf("WARNING: Error loading collection: %v", err)
+	} else {
+		log.Println("Collection loaded successfully")
+	}
 
 	// Show statistics
 	elapsed := time.Since(startTime)
-	log.Printf("Import completed. Total time: %s", elapsed)
+	log.Printf("Import process completed. Total time: %s", elapsed)
+
+	// Show collection statistics if possible
+	showCollectionStats(ctx, c)
 }
 
 // Create collection if it doesn't exist
-// s.Metadata.SrcHash, s.Metadata.Vendor, s.Metadata.Component, s.Metadata.Version, s.Metadata.Release_date, s.Metadata.License, s.Metadata.Purl, s.Metadata.Url, len(s.Metadata.FilesItems), s.Metadata.IndexedFiles, s.Metadata.SourceFiles, s.Metadata.IgnoredFiles, s.Metadata.Size)
-
 func createCollectionIfNotExists(ctx context.Context, c client.Client) {
 	has, err := c.HasCollection(ctx, CollectionName)
 	if err != nil {
@@ -170,7 +236,7 @@ func createCollectionIfNotExists(ctx context.Context, c client.Client) {
 	}
 
 	if !has {
-		log.Println("Creating new collection...")
+		log.Printf("Collection '%s' does not exist. Creating new collection...", CollectionName)
 
 		// Define collection fields
 		fields := []*entity.Field{
@@ -277,153 +343,189 @@ func createCollectionIfNotExists(ctx context.Context, c client.Client) {
 		if err != nil {
 			log.Fatalf("Error creating collection: %v", err)
 		}
-		log.Println("Collection created successfully")
+		log.Printf("Collection '%s' created successfully", CollectionName)
 	} else {
-		log.Println("Using existing collection")
+		log.Printf("Using existing collection '%s'", CollectionName)
 	}
 }
 
-func createSearchIndex(ctx context.Context, c client.Client) {
+// Create search indices synchronously
+func createSearchIndices(ctx context.Context, c client.Client) error {
 	// Verify collection
 	has, err := c.HasCollection(ctx, CollectionName)
 	if err != nil || !has {
-		log.Printf("Error verifying collection: %v", err)
-		return
+		return fmt.Errorf("error verifying collection: %v", err)
 	}
-	log.Println("Creating index for fast searches...")
 
-	// Create the Index object using the correct signature
+	// Create indices one by one, synchronously
+	// Create hfhNames index
+	log.Println("Creating index for hfhNames (synchronous)...")
 	idx := entity.NewGenericIndex("hfhNameIndex", entity.AUTOINDEX, nil)
-
-	// Index options (empty slice if no specific options)
 	var opts []client.IndexOption
-
-	// Try to create the index with this type
-	err = c.CreateIndex(ctx, CollectionName, "hfhNames", idx, true, opts...)
-
+	err = c.CreateIndex(ctx, CollectionName, "hfhNames", idx, true, opts...) // false = not async
 	if err != nil {
-		log.Println("Error creating index:", err)
+		return fmt.Errorf("error creating hfhNames index: %v", err)
 	}
+	log.Println("hfhNames index created successfully")
 
-	// Create the Index object using the correct signature
+	// Create hfhContents index
+	log.Println("Creating index for hfhContents (synchronous)...")
 	idx = entity.NewGenericIndex("hfhContentsIndex", entity.AUTOINDEX, nil)
-
-	// Try to create the index with this type
-	err = c.CreateIndex(ctx, CollectionName, "hfhContents", idx, true, opts...)
-
+	err = c.CreateIndex(ctx, CollectionName, "hfhContents", idx, true, opts...) // false = not async
 	if err != nil {
-		log.Println("Error creating index:", err)
+		return fmt.Errorf("error creating hfhContents index: %v", err)
 	}
+	log.Println("hfhContents index created successfully")
 
-	// Create the Index object using the correct signature
+	// Create urlHash index
+	log.Println("Creating index for urlHash (synchronous)...")
 	idx = entity.NewGenericIndex("urlHashIndex", entity.AUTOINDEX, nil)
-
-	// Try to create the index with this type
-	err = c.CreateIndex(ctx, CollectionName, "urlHash", idx, true, opts...)
-
+	err = c.CreateIndex(ctx, CollectionName, "urlHash", idx, true, opts...) // false = not async
 	if err != nil {
-		log.Println("Error creating index:", err)
+		return fmt.Errorf("error creating urlHash index: %v", err)
 	}
+	log.Println("urlHash index created successfully")
+
+	return nil
 }
 
 // Import data from a CSV file
 func importCSVFile(ctx context.Context, c client.Client, filePath, sectorName string) error {
-
+	// Create partition if it doesn't exist
 	err := createPartitionIfNotExists(ctx, c, sectorName)
 	if err != nil {
 		return fmt.Errorf("error creating partition for %s: %v", sectorName, err)
 	}
 
 	// Open the CSV file
+	log.Printf("Opening CSV file: %s", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("error opening CSV file: %v", err)
 	}
 	defer file.Close()
 
-	// Read the CSV file
+	// Read the CSV file line by line
 	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = 0 // HASH, DATA1, DATA2
+	reader.FieldsPerRecord = 0 // Allow variable number of fields
 
-	// Read all lines
-	records, err := reader.ReadAll()
-	if err != nil {
-		return fmt.Errorf("error reading CSV: %v", err)
+	var validRecords [][]string
+	var lineNumber int
+
+	// Read records one by one
+	for {
+		lineNumber++
+		record, err := reader.Read()
+		if err != nil {
+			if err == io.EOF {
+				break // End of file, exit loop
+			}
+			// Log warning about error in this line but continue
+			log.Printf("WARNING: Error reading line %d in file %s: %v", lineNumber, filePath, err)
+			continue
+		}
+
+		// Add valid record to our collection
+		validRecords = append(validRecords, record)
 	}
 
-	totalRecords := len(records)
+	totalRecords := len(validRecords)
 	if totalRecords == 0 {
-		log.Printf("File %s is empty, skipping", filePath)
+		log.Printf("No valid records found in %s after processing, skipping", filePath)
 		return nil
 	}
 
-	log.Printf("Importing %d records from sector %s", totalRecords, sectorName)
+	log.Printf("Importing %d valid records from sector %s", totalRecords, sectorName)
 
 	// Process in batches for better performance
+	batchesProcessed := 0
 	for i := 0; i < totalRecords; i += BatchSize {
 		end := i + BatchSize
 		if end > totalRecords {
 			end = totalRecords
 		}
+		batch := validRecords[i:end]
+		batchNum := i/BatchSize + 1
+		log.Printf("Processing batch %d/%d (%d records) for sector %s",
+			batchNum, (totalRecords+BatchSize-1)/BatchSize, len(batch), sectorName)
 
-		batch := records[i:end]
+		// Try to insert the batch, but handle errors
 		err := insertBatch(ctx, c, batch, sectorName)
 		if err != nil {
-			return fmt.Errorf("error inserting batch %d: %v", i/BatchSize+1, err)
+			log.Printf("WARNING: Error inserting batch %d: %v. Continuing with next batch.", batchNum, err)
+			continue
 		}
+
+		batchesProcessed++
 	}
 
-	log.Printf("Sector %s imported successfully", sectorName)
+	// Flush after importing each sector to ensure data is persisted
+	log.Printf("Flushing data for sector %s...", sectorName)
+	err = c.Flush(ctx, CollectionName, true)
+	if err != nil {
+		return fmt.Errorf("error flushing data for sector %s: %v", sectorName, err)
+	}
+
+	log.Printf("Data for sector %s flushed successfully", sectorName)
+	log.Printf("All %d batches for sector %s imported successfully", batchesProcessed, sectorName)
 	return nil
 }
 
 // Insert a batch of records
 func insertBatch(ctx context.Context, c client.Client, batch [][]string, sectorName string) error {
 	// Prepare columns for insertion
-	hfhNames := make([][]byte, len(batch))
-	hfhContents := make([][]byte, len(batch))
-	urlHash := make([]int64, len(batch))
-	vendor := make([]string, len(batch))
-	component := make([]string, len(batch))
-	version := make([]string, len(batch))
-	release_date := make([]string, len(batch))
-	license := make([]string, len(batch))
-	purl := make([]string, len(batch))
-	url := make([]string, len(batch))
-	total_files := make([]int32, len(batch))
-	indexed_files := make([]int32, len(batch))
-	source_files := make([]int32, len(batch))
-	ignored_files := make([]int32, len(batch))
-	size := make([]int32, len(batch))
+	recordCount := len(batch)
+	hfhNames := make([][]byte, recordCount)
+	hfhContents := make([][]byte, recordCount)
+	urlHash := make([]int64, recordCount)
+	vendor := make([]string, recordCount)
+	component := make([]string, recordCount)
+	version := make([]string, recordCount)
+	release_date := make([]string, recordCount)
+	license := make([]string, recordCount)
+	purl := make([]string, recordCount)
+	url := make([]string, recordCount)
+	total_files := make([]int32, recordCount)
+	indexed_files := make([]int32, recordCount)
+	source_files := make([]int32, recordCount)
+	ignored_files := make([]int32, recordCount)
+	size := make([]int32, recordCount)
 
 	for j, record := range batch {
-		if len(record) < 3 {
-			return fmt.Errorf("incomplete record at position %d: %v", j, record)
+		// Validate record has sufficient fields
+		if len(record) < 15 {
+			return fmt.Errorf("incomplete record at position %d: expected at least 15 fields, got %d", j, len(record))
 		}
 
+		// Process hfhNames (field 0)
 		hfhNamesStr := strings.TrimSpace(record[0])
-		hfhContentsStr := strings.TrimSpace(record[1])
-		// Convert hexadecimal strings to uint64
 		hfhNamesHash, err := strconv.ParseUint(hfhNamesStr, 16, 64)
 		if err != nil {
-			return fmt.Errorf("error parsing hexadecimal hash '%s': %v", hfhNamesStr, err)
-		}
-
-		hfhContentsHash, err := strconv.ParseUint(hfhContentsStr, 16, 64)
-		if err != nil {
-			return fmt.Errorf("error parsing hexadecimal data1 '%s': %v", hfhContentsStr, err)
+			return fmt.Errorf("error parsing hexadecimal hash '%s' at position %d: %v", hfhNamesStr, j, err)
 		}
 		hfhNamesBin := make([]byte, 8)
 		binary.BigEndian.PutUint64(hfhNamesBin, hfhNamesHash)
+		hfhNames[j] = hfhNamesBin
 
+		// Process hfhContents (field 1)
+		hfhContentsStr := strings.TrimSpace(record[1])
+		hfhContentsHash, err := strconv.ParseUint(hfhContentsStr, 16, 64)
+		if err != nil {
+			return fmt.Errorf("error parsing hexadecimal hash '%s' at position %d: %v", hfhContentsStr, j, err)
+		}
 		hfhContentsBin := make([]byte, 8)
 		binary.BigEndian.PutUint64(hfhContentsBin, hfhContentsHash)
-		hfhNames[j] = hfhNamesBin
 		hfhContents[j] = hfhContentsBin
 
+		// Process urlHash (field 2)
 		hashStr := strings.TrimSpace(record[2])
-		hashUnsigned, _ := strconv.ParseUint(hashStr, 16, 64)
+		hashUnsigned, err := strconv.ParseUint(hashStr, 16, 64)
+		if err != nil {
+			return fmt.Errorf("error parsing hexadecimal url hash '%s' at position %d: %v", hashStr, j, err)
+		}
 		urlHash[j] = int64(hashUnsigned)
+
+		// Process remaining string fields
 		vendor[j] = strings.TrimSpace(record[3])
 		component[j] = strings.TrimSpace(record[4])
 		version[j] = strings.TrimSpace(record[5])
@@ -432,30 +534,59 @@ func insertBatch(ctx context.Context, c client.Client, batch [][]string, sectorN
 		purl[j] = strings.TrimSpace(record[8])
 		url[j] = strings.TrimSpace(record[9])
 
-		num, _ := strconv.ParseInt(record[10], 10, 32)
+		// Process numeric fields with better error handling
+		var parseIntErr error
+		var num int64
+
+		// Process total_files (field 10)
+		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[10]), 10, 32)
+		if parseIntErr != nil {
+			log.Printf("Warning: Cannot parse total_files '%s' at position %d: %v. Setting to 0.", record[10], j, parseIntErr)
+			num = 0
+		}
 		total_files[j] = int32(num)
 
-		num, _ = strconv.ParseInt(record[11], 10, 32)
+		// Process indexed_files (field 11)
+		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[11]), 10, 32)
+		if parseIntErr != nil {
+			log.Printf("Warning: Cannot parse indexed_files '%s' at position %d: %v. Setting to 0.", record[11], j, parseIntErr)
+			num = 0
+		}
 		indexed_files[j] = int32(num)
 
-		num, _ = strconv.ParseInt(record[12], 10, 32)
+		// Process source_files (field 12)
+		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[12]), 10, 32)
+		if parseIntErr != nil {
+			log.Printf("Warning: Cannot parse source_files '%s' at position %d: %v. Setting to 0.", record[12], j, parseIntErr)
+			num = 0
+		}
 		source_files[j] = int32(num)
 
-		num, _ = strconv.ParseInt(record[13], 10, 32)
+		// Process ignored_files (field 13)
+		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[13]), 10, 32)
+		if parseIntErr != nil {
+			log.Printf("Warning: Cannot parse ignored_files '%s' at position %d: %v. Setting to 0.", record[13], j, parseIntErr)
+			num = 0
+		}
 		ignored_files[j] = int32(num)
 
-		num, _ = strconv.ParseInt(record[14], 10, 32)
+		// Process size (field 14)
+		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[14]), 10, 32)
+		if parseIntErr != nil {
+			log.Printf("Warning: Cannot parse size '%s' at position %d: %v. Setting to 0.", record[14], j, parseIntErr)
+			num = 0
+		}
 		size[j] = int32(num)
 
-		// Verification for the first record of each batch
+		// Log first record of each batch for verification
 		if j == 0 {
-			log.Printf("Example: %x, %x, url: %s, purl: %s\n",
-				uint64(urlHash[j]), hfhNames[j], url[j], purl[j])
+			log.Printf("Example record: hfhNames: %x, hfhContents: %x, urlHash: %x, url: %s, purl: %s",
+				hfhNamesHash, hfhContentsHash, hashUnsigned, url[j], purl[j])
 		}
 	}
 
 	// Create columns for insertion
-	hashNamesColumn := entity.NewColumnBinaryVector("hfhNames", 64, hfhNames) // 64-bit vector
+	hashNamesColumn := entity.NewColumnBinaryVector("hfhNames", 64, hfhNames)
 	hashContentsColumn := entity.NewColumnBinaryVector("hfhContents", 64, hfhContents)
 	urlHashColumn := entity.NewColumnInt64("urlHash", urlHash)
 	vendorColumn := entity.NewColumnVarChar("vendor", vendor)
@@ -471,16 +602,30 @@ func insertBatch(ctx context.Context, c client.Client, batch [][]string, sectorN
 	ignored_filesColumn := entity.NewColumnInt32("ignored_files", ignored_files)
 	sizeColumn := entity.NewColumnInt32("size", size)
 
-	// Insert data
-	//_, err := c.Insert(ctx, CollectionName, sectorName, hashNamesColumn, hashContentsColumn, urlColumn)
-	_, err := c.Upsert(ctx, CollectionName, sectorName, hashNamesColumn, hashContentsColumn, urlHashColumn, vendorColumn, componentColumn, versionColumn,
-		release_dateColumn, licenseColumn, purlColumn, urlColumn, total_filesColumn, indexed_filesColumn,
-		source_filesColumn, ignored_filesColumn, sizeColumn)
+	// Insert data using Upsert
+	log.Printf("Upserting %d records to collection '%s', partition '%s'...", recordCount, CollectionName, sectorName)
+	_, err := c.Upsert(ctx, CollectionName, sectorName,
+		hashNamesColumn,
+		hashContentsColumn,
+		urlHashColumn,
+		vendorColumn,
+		componentColumn,
+		versionColumn,
+		release_dateColumn,
+		licenseColumn,
+		purlColumn,
+		urlColumn,
+		total_filesColumn,
+		indexed_filesColumn,
+		source_filesColumn,
+		ignored_filesColumn,
+		sizeColumn)
 
 	if err != nil {
-		return fmt.Errorf("error inserting data: %v", err)
+		return fmt.Errorf("error upserting data: %v", err)
 	}
 
+	log.Printf("Successfully upserted %d records", recordCount)
 	return nil
 }
 
@@ -502,4 +647,37 @@ func createPartitionIfNotExists(ctx context.Context, c client.Client, partitionN
 	}
 
 	return nil
+}
+
+// Function to show collection statistics
+func showCollectionStats(ctx context.Context, c client.Client) {
+	// Try to get collection statistics
+	log.Println("Retrieving collection statistics...")
+	stats, err := c.GetCollectionStatistics(ctx, CollectionName)
+	if err != nil {
+		log.Printf("Could not retrieve collection statistics: %v", err)
+		return
+	}
+
+	// Extract row count from statistics
+	rowCount, ok := stats["row_count"]
+	if !ok {
+		log.Println("Row count not available in collection statistics")
+		return
+	}
+
+	log.Printf("Collection '%s' statistics: %v", CollectionName, stats)
+	log.Printf("Total rows in collection: %s", rowCount)
+
+	// Try to list all partitions
+	partitions, err := c.ShowPartitions(ctx, CollectionName)
+	if err != nil {
+		log.Printf("Could not list partitions: %v", err)
+		return
+	}
+
+	log.Printf("Collection has %d partitions:", len(partitions))
+	for i, partition := range partitions {
+		log.Printf("  Partition %d: %s", i+1, partition)
+	}
 }
