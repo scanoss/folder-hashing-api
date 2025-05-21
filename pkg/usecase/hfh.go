@@ -21,16 +21,16 @@ import (
 )
 
 type HFHscan struct {
-	Config         *HFHscanConfig
-	resultsMap     map[string]HFHscanResult //the key is each folder, the content is the matched purl and probability
-	namesContents  map[uint64]uint64        //map linking names and contents hash.
-	nameHashPath   map[uint64]string        //map linking names hash with path
-	nameHashLevels map[int][]uint64         //keeps the name hashes grouped by project structure level
-	s              *zap.SugaredLogger
-	thStage1       float32 //first stage threshold, if the probality is over the threshold is considered a valid match
-	thStage2       float32 //second stage threshold, if the probality is over the threshold is considered a valid match
-	thStage3       float32 //third stage threshold, if the probality is over the threshold is considered a valid match
-	deepSearch     bool    //if true do not stop the scan when a folder is identified
+	Config            *HFHscanConfig
+	resultsMap        map[string]HFHscanResult //the key is each folder, the content is the matched purl and probability
+	namesDirsContents map[uint64][2]uint64     //map linking names and contents hash.
+	nameHashPath      map[uint64]string        //map linking names hash with path
+	nameHashLevels    map[int][]uint64         //keeps the name hashes grouped by project structure level
+	s                 *zap.SugaredLogger
+	thStage1          float32 //first stage threshold, if the probality is over the threshold is considered a valid match
+	thStage2          float32 //second stage threshold, if the probality is over the threshold is considered a valid match
+	thStage3          float32 //third stage threshold, if the probality is over the threshold is considered a valid match
+	deepSearch        bool    //if true do not stop the scan when a folder is identified
 }
 
 // scan config structure, is defined when the service starts
@@ -96,7 +96,7 @@ func HFHScanInit(config *myconfig.ServerConfig, testMode bool) *HFHscanConfig {
 // new scan request
 func HFHScanNew(log *zap.SugaredLogger, config *HFHscanConfig, input *dtos.HFHscanInput) *HFHscan {
 	scanner := HFHscan{s: log, resultsMap: make(map[string]HFHscanResult), nameHashPath: make(map[uint64]string),
-		namesContents: make(map[uint64]uint64), Config: config, nameHashLevels: make(map[int][]uint64)}
+		namesDirsContents: make(map[uint64][2]uint64), Config: config, nameHashLevels: make(map[int][]uint64)}
 	threshold := input.Threshold
 	bestMatch := input.BestMatch
 
@@ -125,7 +125,8 @@ func (s *HFHscan) Scan(root *dtos.HFHScanInputChildren) (dtos.HFHResultOutput, e
 	}
 
 	s.s.Infof("--- First stage starts --- \n")
-	err := s.scanTreeFirstStage(projectTree)
+	var err error
+	err = s.scanTreeFirstStage(projectTree)
 	if err != nil {
 		return dtos.HFHResultOutput{}, fmt.Errorf("unexpected error during scan process fisrt stage %v", err)
 	}
@@ -395,9 +396,11 @@ func (s *HFHscan) initMap(node *dtos.HFHScanInputChildren, level *int) error {
 	mLevel := *level
 	namesHash, _ := strconv.ParseUint(node.SimHashNames, 16, 64)
 	contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
+	dirsHash, _ := strconv.ParseUint(node.SimHashDirNames, 16, 64)
+
 	if s.nameHashPath[namesHash] == "" {
 		s.nameHashPath[namesHash] = node.PathId
-		s.namesContents[namesHash] = contentHash
+		s.namesDirsContents[namesHash] = [2]uint64{dirsHash, contentHash}
 		s.nameHashLevels[mLevel] = append(s.nameHashLevels[mLevel], namesHash)
 	}
 
@@ -450,7 +453,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 
 		var contentHashes []uint64
 		for _, h := range nameHashes {
-			contentHashes = append(contentHashes, s.namesContents[h])
+			contentHashes = append(contentHashes, s.namesDirsContents[h][0])
 		}
 		//look for coincidences
 		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, 0, s.Config.preferedPurlList)

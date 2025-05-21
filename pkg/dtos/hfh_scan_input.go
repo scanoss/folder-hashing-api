@@ -17,10 +17,11 @@ type HFHscanInput struct {
 
 // HFHRequestChildren represents the children nodes structure in the folder tree
 type HFHScanInputChildren struct {
-	PathId         string                  `json:"path_id,omitempty"`
-	SimHashNames   string                  `json:"sim_hash_names,omitempty"`
-	SimHashContent string                  `json:"sim_hash_content,omitempty"`
-	Children       []*HFHScanInputChildren `json:"children,omitempty"`
+	PathId          string                  `json:"path_id,omitempty"`
+	SimHashNames    string                  `json:"sim_hash_names,omitempty"`
+	SimHashContent  string                  `json:"sim_hash_content,omitempty"`
+	SimHashDirNames string                  `json:"sim_hash_dir_names,omitempty"`
+	Children        []*HFHScanInputChildren `json:"children,omitempty"`
 }
 
 func ParseHFHRequest(s *zap.SugaredLogger, input []byte) (HFHscanInput, error) {

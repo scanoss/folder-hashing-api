@@ -39,7 +39,6 @@ func main() {
 	}
 
 	requestRoot, err := cli.HFHrequestFromPath(path)
-	fmt.Println(err)
 
 	request := &pb.HFHRequest{
 		BestMatch: *detailed,

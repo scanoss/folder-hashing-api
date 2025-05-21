@@ -98,7 +98,7 @@ func NewMilvusDb(host string, port string, database string) (*MilvusDb, error) {
 
 func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, error) {
 
-	outputFields := []string{"hfhContents", "urlHash", "purl"}
+	outputFields := []string{"hfhDirs", "urlHash", "purl"}
 
 	if topResults <= 0 {
 		topResults = db.TopMainResult
@@ -146,7 +146,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 
 		// Search for the current block
 		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults, 10,
-			mainColletionName, "hfhNames", outputFields, nil)
+			mainColletionName, "hfhNames", outputFields, []string{"github_popular", "github"})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -189,7 +189,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 							if dataMethod := binaryCol.Data; dataMethod != nil {
 								data := dataMethod()
 								if j < len(data) {
-									if fieldName == "hfhContents" {
+									if fieldName == "hfhDirs" {
 										hash := binary.BigEndian.Uint64(data[j])
 										fileContentsCandidates = append(fileContentsCandidates, hash)
 									}

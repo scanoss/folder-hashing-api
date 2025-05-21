@@ -12,6 +12,7 @@ import (
 type HFHhash struct {
 	NameHash    uint64
 	ContentHash uint64
+	DirHash     uint64
 }
 
 /* Calc hash head */
@@ -28,6 +29,9 @@ func HashCalc(node *directoryNode) *HFHhash {
 	processedHashes := make(map[string]bool)
 	var fileHashesList [][]byte
 	var selectedNames []string
+	fileMapUnique := make(map[string]bool)
+	dirMapUnique := make(map[string]bool)
+
 	if len(node.Files) < 10 {
 		return nil
 	}
@@ -46,6 +50,13 @@ func HashCalc(node *directoryNode) *HFHhash {
 		if len(fileName) > 32 {
 			continue
 		}
+		extension := filepath.Ext(fileName)
+		filenameWithoutExt := strings.TrimSuffix(fileName, extension)
+		fileMapUnique[filenameWithoutExt] = true
+
+		dir := filepath.Dir(file.Path)
+		lastFolder := filepath.Base(dir)
+		dirMapUnique[lastFolder] = true
 
 		processedHashes[file.KeyStr] = true
 		selectedNames = append(selectedNames, fileName)
@@ -57,25 +68,57 @@ func HashCalc(node *directoryNode) *HFHhash {
 	}
 	sort.Strings(selectedNames)
 	concatenatedNames := strings.Join(selectedNames, "")
-	log.Println(concatenatedNames)
+
 	if len(concatenatedNames) < 32 {
 		return nil
 	}
+
 	/* Calc Files name simhash */
 	FilesNameSimhash := simhash.Simhash(simhash.NewWordFeatureSet([]byte(concatenatedNames)))
+
+	FilteredUniqueFileNames := make([]string, 0, len(fileMapUnique))
+	for k := range fileMapUnique {
+		FilteredUniqueFileNames = append(FilteredUniqueFileNames, k)
+	}
+	sort.Strings(FilteredUniqueFileNames)
+	log.Println(FilteredUniqueFileNames)
+
+	concatenatedNames = strings.Join(FilteredUniqueFileNames, " ")
+
+	FilesNameSimhashNorm := simhash.Simhash(simhash.NewWordFeatureSet([]byte(concatenatedNames)))
+
+	FilteredUniqueDirNames := make([]string, 0, len(dirMapUnique))
+	for k := range dirMapUnique {
+		if k == "." || k == ".." {
+			continue
+		}
+		FilteredUniqueDirNames = append(FilteredUniqueDirNames, k)
+	}
+	sort.Strings(FilteredUniqueDirNames)
+	concatenatedNames = strings.Join(FilteredUniqueDirNames, " ")
+	DirsSimhashNorm := simhash.Simhash(simhash.NewWordFeatureSet([]byte(concatenatedNames)))
+
+	//FilesNameSimhashNorm ^= FilesNameSimhash
 	/* Calc Files content simhash */
 	FilesContentSimhash := simhash.Fingerprint(simhash.VectorizeBytes(fileHashesList))
+
+	//bytes1 := make([]byte, 8) // uint64 ocupa 8 bytes
+	//binary.LittleEndian.PutUint64(bytes1, FilesNameSimhash)
+	//bytes2 := make([]byte, 8) // uint64 ocupa 8 bytes
+	//binary.LittleEndian.PutUint64(bytes2, FilesNameSimhashNorm)
+	//FilesNameSimhashNorm = simhash.Fingerprint(simhash.VectorizeBytes([][]byte{bytes1, bytes2}))
 
 	/* Calc hash head to group close hashes by sector */
 	/*	head := headCalc(FilesNameSimhash)
 		//log.Printf("Main hash head: %02x\n", head)
 		//Overwrite the MS byte with the head to keep the hash size total
 		FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)*/
-	log.Printf("%x - %x\n", FilesNameSimhash, FilesContentSimhash)
+	log.Printf("%x/%x - %x\n", FilesNameSimhash, FilesNameSimhashNorm, FilesContentSimhash)
 
 	return &HFHhash{
-		NameHash:    FilesNameSimhash,
+		NameHash:    FilesNameSimhashNorm,
 		ContentHash: FilesContentSimhash,
+		DirHash:     DirsSimhashNorm,
 	}
 }
 

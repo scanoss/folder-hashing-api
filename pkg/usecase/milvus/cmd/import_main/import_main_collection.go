@@ -22,12 +22,13 @@ import (
 const (
 	MilvusHost = "localhost"
 	MilvusPort = "19530"
-	BatchSize  = 4000
-	MaxWorkers = 3
+	BatchSize  = 20000
+	MaxWorkers = 8
 )
 
 // Default value for collection name, can be overridden with -collectionName flag
 var CollectionName = "url"
+var partitionMap = map[string]int8{"github_popular": 0, "github": 1, "common": 2, "forks": 3}
 
 func main() {
 	// Process command line arguments
@@ -144,20 +145,20 @@ func main() {
 		return
 	}
 
+	for p, _ := range partitionMap {
+		log.Println("Create partition: ", p)
+		err := createPartitionIfNotExists(ctx, c, p)
+		if err != nil {
+			fmt.Errorf("error creating partition for %s: %v", p, err)
+		}
+	}
+
 	// Channel to process files
 	filesChan := make(chan string, len(csvFiles))
 	var wg sync.WaitGroup
 
 	// Error channel to collect errors from workers
 	errorsChan := make(chan error, len(csvFiles))
-
-	// Flush after importing each sector to ensure data is persisted
-	log.Printf("Flushing data...")
-	err = c.Flush(ctx, CollectionName, false)
-	if err != nil {
-		log.Printf("error flushing data: %v", err)
-	}
-	log.Printf("Data flushed successfully")
 
 	// Start workers to process files in parallel
 	log.Printf("Starting %d worker(s) to process CSV files...", MaxWorkers)
@@ -202,8 +203,14 @@ func main() {
 		log.Printf("WARNING: Encountered %d errors during import", errCount)
 	}
 
+	log.Println("Flush (synchronous operation)...")
+	err = c.Flush(ctx, CollectionName, false)
+	if err != nil {
+		log.Printf("WARNING: %v", err)
+	}
+
 	// Create search indices synchronously
-	log.Println("Creating search indices (synchronous operation)...")
+	log.Println("Creating search indices...")
 	err = createSearchIndices(ctx, c)
 	if err != nil {
 		log.Printf("WARNING: Error creating search indices: %v", err)
@@ -240,6 +247,13 @@ func createCollectionIfNotExists(ctx context.Context, c client.Client) {
 
 		// Define collection fields
 		fields := []*entity.Field{
+			{
+				Name:     "hfhDirs",
+				DataType: entity.FieldTypeBinaryVector,
+				TypeParams: map[string]string{
+					"dim": "64", // 64 bits for uint64
+				},
+			},
 			{
 				Name:     "hfhNames",
 				DataType: entity.FieldTypeBinaryVector,
@@ -330,6 +344,10 @@ func createCollectionIfNotExists(ctx context.Context, c client.Client) {
 				Name:     "size",
 				DataType: entity.FieldTypeInt32,
 			},
+			{
+				Name:     "category",
+				DataType: entity.FieldTypeInt8,
+			},
 		}
 
 		// Create the collection
@@ -377,6 +395,14 @@ func createSearchIndices(ctx context.Context, c client.Client) error {
 	}
 	log.Println("hfhContents index created successfully")
 
+	log.Println("Creating index for dir names (synchronous)...")
+	idx = entity.NewGenericIndex("hfhDirsIndex", entity.AUTOINDEX, nil)
+	err = c.CreateIndex(ctx, CollectionName, "hfhDirs", idx, true, opts...) // false = not async
+	if err != nil {
+		return fmt.Errorf("error creating hfhContents index: %v", err)
+	}
+	log.Println("hfhContents index created successfully")
+
 	// Create urlHash index
 	log.Println("Creating index for urlHash (synchronous)...")
 	idx = entity.NewGenericIndex("urlHashIndex", entity.AUTOINDEX, nil)
@@ -391,12 +417,6 @@ func createSearchIndices(ctx context.Context, c client.Client) error {
 
 // Import data from a CSV file
 func importCSVFile(ctx context.Context, c client.Client, filePath, sectorName string) error {
-	// Create partition if it doesn't exist
-	err := createPartitionIfNotExists(ctx, c, sectorName)
-	if err != nil {
-		return fmt.Errorf("error creating partition for %s: %v", sectorName, err)
-	}
-
 	// Open the CSV file
 	log.Printf("Opening CSV file: %s", filePath)
 	file, err := os.Open(filePath)
@@ -450,7 +470,7 @@ func importCSVFile(ctx context.Context, c client.Client, filePath, sectorName st
 			batchNum, (totalRecords+BatchSize-1)/BatchSize, len(batch), sectorName)
 
 		// Try to insert the batch, but handle errors
-		err := insertBatch(ctx, c, batch, sectorName)
+		err := insertBatch(ctx, c, batch)
 		if err != nil {
 			log.Printf("WARNING: Error inserting batch %d: %v. Continuing with next batch.", batchNum, err)
 			continue
@@ -460,172 +480,173 @@ func importCSVFile(ctx context.Context, c client.Client, filePath, sectorName st
 	}
 
 	// Flush after importing each sector to ensure data is persisted
-	log.Printf("Flushing data for sector %s...", sectorName)
-	err = c.Flush(ctx, CollectionName, true)
-	if err != nil {
-		return fmt.Errorf("error flushing data for sector %s: %v", sectorName, err)
-	}
+	/*sectorNum, err := strconv.Atoi(sectorName)
+	if err == nil && sectorNum%MaxWorkers == 0 {
+		log.Printf("Flushing data for sector %s...", sectorName)
+		maxRetries := 5
+		retryDelay := 5 * time.Second
 
-	log.Printf("Data for sector %s flushed successfully", sectorName)
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			err = c.Flush(ctx, CollectionName, true)
+			if err == nil {
+				break
+			}
+
+			if attempt < maxRetries {
+				log.Printf("Flush attempt %d failed: %v, retrying in %v...", attempt, err, retryDelay)
+				time.Sleep(retryDelay)
+			}
+		}
+		log.Printf("Data for sector %s flushed successfully", sectorName)
+	}*/
+
 	log.Printf("All %d batches for sector %s imported successfully", batchesProcessed, sectorName)
 	return nil
 }
 
 // Insert a batch of records
-func insertBatch(ctx context.Context, c client.Client, batch [][]string, sectorName string) error {
-	// Prepare columns for insertion
-	recordCount := len(batch)
-	hfhNames := make([][]byte, recordCount)
-	hfhContents := make([][]byte, recordCount)
-	urlHash := make([]int64, recordCount)
-	vendor := make([]string, recordCount)
-	component := make([]string, recordCount)
-	version := make([]string, recordCount)
-	release_date := make([]string, recordCount)
-	license := make([]string, recordCount)
-	purl := make([]string, recordCount)
-	url := make([]string, recordCount)
-	total_files := make([]int32, recordCount)
-	indexed_files := make([]int32, recordCount)
-	source_files := make([]int32, recordCount)
-	ignored_files := make([]int32, recordCount)
-	size := make([]int32, recordCount)
+func insertBatch(ctx context.Context, c client.Client, batch [][]string) error {
 
-	for j, record := range batch {
-		// Validate record has sufficient fields
-		if len(record) < 15 {
-			return fmt.Errorf("incomplete record at position %d: expected at least 15 fields, got %d", j, len(record))
+	// Agrupamos los registros por categoría
+	recordsByCategory := make(map[string][][]string)
+
+	// Primera pasada: clasificar registros por categoría
+	for _, record := range batch {
+		if len(record) < 17 { // Aseguramos que el registro tiene al menos 16 campos
+			return fmt.Errorf("registro incompleto: %v", record)
 		}
 
-		// Process hfhNames (field 0)
-		hfhNamesStr := strings.TrimSpace(record[0])
-		hfhNamesHash, err := strconv.ParseUint(hfhNamesStr, 16, 64)
-		if err != nil {
-			return fmt.Errorf("error parsing hexadecimal hash '%s' at position %d: %v", hfhNamesStr, j, err)
+		categoryStr := strings.TrimSpace(record[17])
+		// Agregamos el registro al grupo correspondiente
+		recordsByCategory[categoryStr] = append(recordsByCategory[categoryStr], record)
+	}
+
+	// Para cada categoría, procesamos e insertamos los registros correspondientes
+	for partitionName, categoryRecords := range recordsByCategory {
+		batchSize := len(categoryRecords)
+
+		// Preparamos las columnas para este grupo de categoría
+		hfhDirs := make([][]byte, batchSize)
+		hfhNames := make([][]byte, batchSize)
+		hfhContents := make([][]byte, batchSize)
+		urlHash := make([]int64, batchSize)
+		vendor := make([]string, batchSize)
+		component := make([]string, batchSize)
+		version := make([]string, batchSize)
+		release_date := make([]string, batchSize)
+		license := make([]string, batchSize)
+		purl := make([]string, batchSize)
+		url := make([]string, batchSize)
+		total_files := make([]int32, batchSize)
+		indexed_files := make([]int32, batchSize)
+		source_files := make([]int32, batchSize)
+		ignored_files := make([]int32, batchSize)
+		size := make([]int32, batchSize)
+		category := make([]int8, batchSize)
+
+		// Procesamos cada registro del grupo
+		for j, record := range categoryRecords {
+			hfhDirsStr := strings.TrimSpace(record[0])
+			hfhNamesStr := strings.TrimSpace(record[1])
+			//skip 2
+			hfhContentsStr := strings.TrimSpace(record[3])
+
+			// Convertir strings hexadecimales a uint64
+
+			hfhDirHash, err := strconv.ParseUint(hfhDirsStr, 16, 64)
+			if err != nil {
+				return fmt.Errorf("error al parsear hash hexadecimal '%s': %v", hfhNamesStr, err)
+			}
+
+			hfhNamesHash, err := strconv.ParseUint(hfhNamesStr, 16, 64)
+			if err != nil {
+				return fmt.Errorf("error al parsear hash hexadecimal '%s': %v", hfhNamesStr, err)
+			}
+
+			hfhContentsHash, err := strconv.ParseUint(hfhContentsStr, 16, 64)
+			if err != nil {
+				return fmt.Errorf("error al parsear dato1 hexadecimal '%s': %v", hfhContentsStr, err)
+			}
+
+			hfhDirsBin := make([]byte, 8)
+			binary.BigEndian.PutUint64(hfhDirsBin, hfhDirHash)
+
+			hfhNamesBin := make([]byte, 8)
+			binary.BigEndian.PutUint64(hfhNamesBin, hfhNamesHash)
+
+			hfhContentsBin := make([]byte, 8)
+			binary.BigEndian.PutUint64(hfhContentsBin, hfhContentsHash)
+
+			hfhDirs[j] = hfhDirsBin
+			hfhNames[j] = hfhNamesBin
+			hfhContents[j] = hfhContentsBin
+
+			hashStr := strings.TrimSpace(record[4])
+			hashUnsigned, _ := strconv.ParseUint(hashStr, 16, 64)
+			urlHash[j] = int64(hashUnsigned)
+			vendor[j] = strings.TrimSpace(record[5])
+			component[j] = strings.TrimSpace(record[6])
+			version[j] = strings.TrimSpace(record[7])
+			release_date[j] = strings.TrimSpace(record[8])
+			license[j] = strings.TrimSpace(record[9])
+			purl[j] = strings.TrimSpace(record[10])
+			url[j] = strings.TrimSpace(record[11])
+
+			num, _ := strconv.ParseInt(record[12], 10, 32)
+			total_files[j] = int32(num)
+
+			num, _ = strconv.ParseInt(record[13], 10, 32)
+			indexed_files[j] = int32(num)
+
+			num, _ = strconv.ParseInt(record[14], 10, 32)
+			source_files[j] = int32(num)
+
+			num, _ = strconv.ParseInt(record[15], 10, 32)
+			ignored_files[j] = int32(num)
+
+			num, _ = strconv.ParseInt(record[16], 10, 32)
+			size[j] = int32(num)
+
+			category[j] = partitionMap[partitionName]
 		}
-		hfhNamesBin := make([]byte, 8)
-		binary.BigEndian.PutUint64(hfhNamesBin, hfhNamesHash)
-		hfhNames[j] = hfhNamesBin
 
-		// Process hfhContents (field 1)
-		hfhContentsStr := strings.TrimSpace(record[1])
-		hfhContentsHash, err := strconv.ParseUint(hfhContentsStr, 16, 64)
-		if err != nil {
-			return fmt.Errorf("error parsing hexadecimal hash '%s' at position %d: %v", hfhContentsStr, j, err)
-		}
-		hfhContentsBin := make([]byte, 8)
-		binary.BigEndian.PutUint64(hfhContentsBin, hfhContentsHash)
-		hfhContents[j] = hfhContentsBin
+		// Registrar información sobre la inserción
+		log.Printf("Insertando %d registros en partición '%s'",
+			batchSize, partitionName)
 
-		// Process urlHash (field 2)
-		hashStr := strings.TrimSpace(record[2])
-		hashUnsigned, err := strconv.ParseUint(hashStr, 16, 64)
-		if err != nil {
-			return fmt.Errorf("error parsing hexadecimal url hash '%s' at position %d: %v", hashStr, j, err)
-		}
-		urlHash[j] = int64(hashUnsigned)
+		if batchSize > 0 {
+			// Crear columnas para inserción para este grupo
+			hashDirsColumn := entity.NewColumnBinaryVector("hfhDirs", 64, hfhDirs)
+			hashNamesColumn := entity.NewColumnBinaryVector("hfhNames", 64, hfhNames)
+			hashContentsColumn := entity.NewColumnBinaryVector("hfhContents", 64, hfhContents)
+			urlHashColumn := entity.NewColumnInt64("urlHash", urlHash)
+			vendorColumn := entity.NewColumnVarChar("vendor", vendor)
+			componentColumn := entity.NewColumnVarChar("component", component)
+			versionColumn := entity.NewColumnVarChar("version", version)
+			release_dateColumn := entity.NewColumnVarChar("release_date", release_date)
+			licenseColumn := entity.NewColumnVarChar("license", license)
+			purlColumn := entity.NewColumnVarChar("purl", purl)
+			urlColumn := entity.NewColumnVarChar("url", url)
+			total_filesColumn := entity.NewColumnInt32("total_files", total_files)
+			indexed_filesColumn := entity.NewColumnInt32("indexed_files", indexed_files)
+			source_filesColumn := entity.NewColumnInt32("source_files", source_files)
+			ignored_filesColumn := entity.NewColumnInt32("ignored_files", ignored_files)
+			sizeColumn := entity.NewColumnInt32("size", size)
+			categoryColumn := entity.NewColumnInt8("category", category)
 
-		// Process remaining string fields
-		vendor[j] = strings.TrimSpace(record[3])
-		component[j] = strings.TrimSpace(record[4])
-		version[j] = strings.TrimSpace(record[5])
-		release_date[j] = strings.TrimSpace(record[6])
-		license[j] = strings.TrimSpace(record[7])
-		purl[j] = strings.TrimSpace(record[8])
-		url[j] = strings.TrimSpace(record[9])
+			// Insertar datos utilizando la partición correspondiente
+			_, err := c.Upsert(ctx, CollectionName, partitionName, hashDirsColumn,
+				hashNamesColumn, hashContentsColumn, urlHashColumn, vendorColumn,
+				componentColumn, versionColumn, release_dateColumn, licenseColumn,
+				purlColumn, urlColumn, total_filesColumn, indexed_filesColumn,
+				source_filesColumn, ignored_filesColumn, sizeColumn, categoryColumn)
 
-		// Process numeric fields with better error handling
-		var parseIntErr error
-		var num int64
-
-		// Process total_files (field 10)
-		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[10]), 10, 32)
-		if parseIntErr != nil {
-			log.Printf("Warning: Cannot parse total_files '%s' at position %d: %v. Setting to 0.", record[10], j, parseIntErr)
-			num = 0
-		}
-		total_files[j] = int32(num)
-
-		// Process indexed_files (field 11)
-		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[11]), 10, 32)
-		if parseIntErr != nil {
-			log.Printf("Warning: Cannot parse indexed_files '%s' at position %d: %v. Setting to 0.", record[11], j, parseIntErr)
-			num = 0
-		}
-		indexed_files[j] = int32(num)
-
-		// Process source_files (field 12)
-		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[12]), 10, 32)
-		if parseIntErr != nil {
-			log.Printf("Warning: Cannot parse source_files '%s' at position %d: %v. Setting to 0.", record[12], j, parseIntErr)
-			num = 0
-		}
-		source_files[j] = int32(num)
-
-		// Process ignored_files (field 13)
-		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[13]), 10, 32)
-		if parseIntErr != nil {
-			log.Printf("Warning: Cannot parse ignored_files '%s' at position %d: %v. Setting to 0.", record[13], j, parseIntErr)
-			num = 0
-		}
-		ignored_files[j] = int32(num)
-
-		// Process size (field 14)
-		num, parseIntErr = strconv.ParseInt(strings.TrimSpace(record[14]), 10, 32)
-		if parseIntErr != nil {
-			log.Printf("Warning: Cannot parse size '%s' at position %d: %v. Setting to 0.", record[14], j, parseIntErr)
-			num = 0
-		}
-		size[j] = int32(num)
-
-		// Log first record of each batch for verification
-		if j == 0 {
-			log.Printf("Example record: hfhNames: %x, hfhContents: %x, urlHash: %x, url: %s, purl: %s",
-				hfhNamesHash, hfhContentsHash, hashUnsigned, url[j], purl[j])
+			if err != nil {
+				return fmt.Errorf("error al insertar datos en partición %s: %v", partitionName, err)
+			}
 		}
 	}
 
-	// Create columns for insertion
-	hashNamesColumn := entity.NewColumnBinaryVector("hfhNames", 64, hfhNames)
-	hashContentsColumn := entity.NewColumnBinaryVector("hfhContents", 64, hfhContents)
-	urlHashColumn := entity.NewColumnInt64("urlHash", urlHash)
-	vendorColumn := entity.NewColumnVarChar("vendor", vendor)
-	componentColumn := entity.NewColumnVarChar("component", component)
-	versionColumn := entity.NewColumnVarChar("version", version)
-	release_dateColumn := entity.NewColumnVarChar("release_date", release_date)
-	licenseColumn := entity.NewColumnVarChar("license", license)
-	purlColumn := entity.NewColumnVarChar("purl", purl)
-	urlColumn := entity.NewColumnVarChar("url", url)
-	total_filesColumn := entity.NewColumnInt32("total_files", total_files)
-	indexed_filesColumn := entity.NewColumnInt32("indexed_files", indexed_files)
-	source_filesColumn := entity.NewColumnInt32("source_files", source_files)
-	ignored_filesColumn := entity.NewColumnInt32("ignored_files", ignored_files)
-	sizeColumn := entity.NewColumnInt32("size", size)
-
-	// Insert data using Upsert
-	log.Printf("Upserting %d records to collection '%s', partition '%s'...", recordCount, CollectionName, sectorName)
-	_, err := c.Upsert(ctx, CollectionName, sectorName,
-		hashNamesColumn,
-		hashContentsColumn,
-		urlHashColumn,
-		vendorColumn,
-		componentColumn,
-		versionColumn,
-		release_dateColumn,
-		licenseColumn,
-		purlColumn,
-		urlColumn,
-		total_filesColumn,
-		indexed_filesColumn,
-		source_filesColumn,
-		ignored_filesColumn,
-		sizeColumn)
-
-	if err != nil {
-		return fmt.Errorf("error upserting data: %v", err)
-	}
-
-	log.Printf("Successfully upserted %d records", recordCount)
 	return nil
 }
 
