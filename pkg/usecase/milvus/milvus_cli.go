@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"math/bits"
 	"sort"
 	"time"
@@ -96,9 +95,9 @@ func NewMilvusDb(host string, port string, database string) (*MilvusDb, error) {
 	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults, databaseName: database}, nil
 }
 
-func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, error) {
+func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, [][]uint64, error) {
 
-	outputFields := []string{"hfhDirs", "urlHash", "purl"}
+	outputFields := []string{"hfhDirs", "hfhContents", "urlHash", "category"}
 
 	if topResults <= 0 {
 		topResults = db.TopMainResult
@@ -109,22 +108,23 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 
 	c, err := client.NewGrpcClient(ctx, db.address)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer c.Close()
 
 	err = c.UsingDatabase(ctx, db.databaseName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Make sure input slices have the same length
 	if len(mainHashes) != len(secHashes) {
-		return nil, nil, fmt.Errorf("mainHashes and secHashes must have the same length")
+		return nil, nil, nil, fmt.Errorf("mainHashes and secHashes must have the same length")
 	}
 
 	// Initialize result slices
 	matchedDistances := make([]int, len(mainHashes))
-	matchedUrls := make([][]uint64, len(mainHashes))
+	matchedUrlsHash := make([][]uint64, len(mainHashes))
+	matchedContentsHash := make([][]uint64, len(mainHashes))
 
 	// Default all distances to 999 (indicating no match)
 	for i := range matchedDistances {
@@ -148,7 +148,7 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 		searchResults, err := searchSimilarHashes(ctx, c, currentMainHashes, topResults, 10,
 			mainColletionName, "hfhNames", outputFields, []string{"github_popular", "github"})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		// Process the results for this block
@@ -162,14 +162,12 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 			if len(scores) == 0 {
 				continue
 			}
-
+			var dirNamesHashes []uint64
 			var fileContentsCandidates []uint64
 			var urlsCandidates []uint64
-			purlHashMap := make(map[uint64]string)
+			var cats []int8
 			// Process results from scores
 			for j := 0; j < len(scores); j++ {
-				var lastPurl string
-				var lastUrlHash uint64
 				if scores[j] > scores[0]+2 {
 					break
 				}
@@ -184,76 +182,70 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 							fieldName = fmt.Sprintf("campo_%d", k)
 						}
 
-						// Field processing
-						if binaryCol, ok := field.(*entity.ColumnBinaryVector); ok && binaryCol != nil {
-							if dataMethod := binaryCol.Data; dataMethod != nil {
-								data := dataMethod()
-								if j < len(data) {
-									if fieldName == "hfhDirs" {
-										hash := binary.BigEndian.Uint64(data[j])
-										fileContentsCandidates = append(fileContentsCandidates, hash)
-									}
-								}
-							}
-						} else if strCol, ok := field.(*entity.ColumnInt64); ok && strCol != nil {
-							if dataMethod := strCol.Data; dataMethod != nil {
-								data := dataMethod()
-								if j < len(data) {
-									if fieldName == "urlHash" {
-										urlsCandidates = append(urlsCandidates, uint64(data[j]))
-										lastUrlHash = uint64(data[j])
-									}
-								}
-							}
-						} else if strCol, ok := field.(*entity.ColumnVarChar); ok && strCol != nil {
-							if dataMethod := strCol.Data; dataMethod != nil {
-								data := dataMethod()
-								if j < len(data) {
-									if fieldName == "purl" {
-										lastPurl = data[j]
-									}
-								}
-							}
+						switch fieldName {
+						case "hfhContents":
+							dataMethod := field.(*entity.ColumnBinaryVector).Data
+							data := dataMethod()
+							hash := binary.BigEndian.Uint64(data[j])
+							fileContentsCandidates = append(fileContentsCandidates, hash)
+						case "hfhDirs":
+							dataMethod := field.(*entity.ColumnBinaryVector).Data
+							data := dataMethod()
+							hash := binary.BigEndian.Uint64(data[j])
+							dirNamesHashes = append(dirNamesHashes, hash)
+						case "urlHash":
+							dataMethod := field.(*entity.ColumnInt64).Data
+							data := dataMethod()
+							urlsCandidates = append(urlsCandidates, uint64(data[j]))
+						case "category":
+							dataMethod := field.(*entity.ColumnInt8).Data
+							data := dataMethod()
+							cats = append(cats, data[j])
 						}
 					}
-					purlHashMap[lastUrlHash] = lastPurl
 				}
 			}
 			//select closest results based on content proximity
-			distance, urls := rankClosest(fileContentsCandidates, urlsCandidates, currentSecHashes[i])
+			sortedIndexes, sortedDistances := rankClosest(dirNamesHashes, currentSecHashes[i])
 
 			var preferedUrls []uint64
 			var preferedDistances []int
+			var preferedContentHash []uint64
 
 			var regularDistances []int
 			var regularUrls []uint64
+			var regularContentsHash []uint64
 
-			for i, url := range urls {
-				purl := purlHashMap[url]
-				prefered := topPurls[purl]
-				if prefered && (len(preferedDistances) == 0 || distance[i] < int(math.Ceil(float64(preferedDistances[0])*1.1))) {
-					preferedUrls = append(preferedUrls, url)
-					preferedDistances = append(preferedDistances, distance[i])
-				} else if distance[i] <= distance[0]+4 || len(regularUrls) == 0 {
-					regularUrls = append(regularUrls, url)
-					regularDistances = append(regularDistances, distance[i])
+			for i, j := range sortedIndexes {
+				if cats[j] == 0 {
+					preferedUrls = append(preferedUrls, urlsCandidates[j])
+					preferedDistances = append(preferedDistances, sortedDistances[i])
+					preferedContentHash = append(preferedContentHash, fileContentsCandidates[j])
+				} else {
+					regularUrls = append(regularUrls, urlsCandidates[j])
+					regularDistances = append(regularDistances, sortedDistances[i])
+					regularContentsHash = append(regularContentsHash, fileContentsCandidates[j])
+
+				}
+
+				if sortedDistances[i] > sortedDistances[0]+10 {
+					break
 				}
 			}
 
-			if len(preferedDistances) > 0 && preferedDistances[0] < int(math.Ceil(float64(distance[0])*1.1))+1 {
+			if len(preferedDistances) > 0 && len(regularDistances) > 0 && preferedDistances[0] <= regularDistances[0]+5 {
 				matchedDistances[originalIndex] = preferedDistances[0]
-				matchedUrls[originalIndex] = preferedUrls
-			} else if len(preferedDistances) > 0 && preferedDistances[0] < int(math.Ceil((float64(distance[0])*1.2)))+1 {
-				matchedDistances[originalIndex] = (regularDistances[0] + preferedDistances[0]) / 2
-				matchedUrls[originalIndex] = append(regularUrls, preferedUrls...)
+				matchedUrlsHash[originalIndex] = preferedUrls
+				matchedContentsHash[originalIndex] = preferedContentHash
 			} else {
 				matchedDistances[originalIndex] = regularDistances[0]
-				matchedUrls[originalIndex] = regularUrls
+				matchedUrlsHash[originalIndex] = regularUrls
+				matchedContentsHash[originalIndex] = regularContentsHash
 			}
 		}
 	}
 
-	return matchedDistances, matchedUrls, nil
+	return matchedDistances, matchedUrlsHash, matchedContentsHash, nil
 }
 
 // Query the secondary hash table
@@ -417,42 +409,36 @@ func searchSimilarHashes(ctx context.Context, c client.Client, searchValues []ui
 	return searchResults, err
 }
 
-func rankClosest(candidates []uint64, urls []uint64, contentsHash uint64) ([]int, []uint64) {
+func rankClosest(candidates []uint64, tiebreaker uint64) ([]int, []int) {
 	var distances []int
-
-	//minFilesContentdistance := minDistance
-	//use the filecontents hash to select the best results
+	// Calculate distances for each candidate
 	for _, key := range candidates {
-		filesContentdistance := hammingDistance(contentsHash, key)
-		distances = append(distances, filesContentdistance)
+		fileContentDistance := hammingDistance(tiebreaker, key)
+		distances = append(distances, fileContentDistance)
 	}
 
-	// Verify that all three lists have the same length
-	if len(candidates) != len(urls) || len(candidates) != len(distances) {
+	// Verify that all lists have the same length
+	if len(candidates) != len(distances) {
 		panic("All three lists must have the same length")
 	}
 
-	// Create a slice of indices
-	indices := make([]int, len(distances))
-	for i := range indices {
-		indices[i] = i
+	// Create a slice of indexes
+	indexes := make([]int, len(distances))
+	for i := range indexes {
+		indexes[i] = i
 	}
 
-	// Sort the indices based on the values in distances
-	sort.Slice(indices, func(i, j int) bool {
-		return distances[indices[i]] < distances[indices[j]]
+	// Sort the indexes based on distance values
+	sort.Slice(indexes, func(i, j int) bool {
+		return distances[indexes[i]] < distances[indexes[j]]
 	})
 
-	sortedUrls := make([]uint64, len(urls))
 	sortedDistances := make([]int, len(distances))
-
-	// Rearrange according to the sorted indices
-	for i, idx := range indices {
-		sortedUrls[i] = urls[idx]
+	for i, idx := range indexes {
 		sortedDistances[i] = distances[idx]
 	}
 
-	return sortedDistances, sortedUrls
+	return indexes, sortedDistances
 }
 
 func hammingDistance(x, y uint64) int {

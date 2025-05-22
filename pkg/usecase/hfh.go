@@ -451,19 +451,42 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 			nameHashes = append(nameHashes, h)
 		}
 
-		var contentHashes []uint64
+		var dirHashes []uint64
 		for _, h := range nameHashes {
-			contentHashes = append(contentHashes, s.namesDirsContents[h][0])
+			dirHashes = append(dirHashes, s.namesDirsContents[h][0])
 		}
 		//look for coincidences
-		distances, urls, err := s.Config.mvDb.Mainsearch(nameHashes, contentHashes, 0, s.Config.preferedPurlList)
+		distances, urls, contentsHashes, err := s.Config.mvDb.Mainsearch(nameHashes, dirHashes, 0, s.Config.preferedPurlList)
 		if err != nil {
 			return err
 		}
 		//process results
 		for i, d := range distances {
+			contentsHash := s.namesDirsContents[nameHashes[i]][1]
+			contentsDistances := make([]int, len(contentsHashes[i]))
+			for i, ch := range contentsHashes[i] {
+				contentsDistances[i] = hammingDistance(contentsHash, ch)
+			}
+			// Create a slice of indexes
+			indexes := make([]int, len(contentsDistances))
+			for i := range indexes {
+				indexes[i] = i
+			}
+			// Sort the indexes based on distance values
+			sort.Slice(indexes, func(i, j int) bool {
+				return contentsDistances[indexes[i]] < contentsDistances[indexes[j]]
+			})
+
+			var selectedUrls []uint64
+			for _, z := range indexes {
+				selectedUrls = append(selectedUrls, urls[i][z])
+				if contentsDistances[z] > contentsDistances[0]+5 {
+					break
+				}
+			}
+
 			probability := (1 - float32(d)/float32(s.Config.Dmax)) * 100
-			fistStageComponents := s.getComponents(urls[i], s.Config.UrlsLimit)
+			fistStageComponents := s.getComponents(selectedUrls, s.Config.UrlsLimit)
 			s.resultsMap[s.nameHashPath[nameHashes[i]]] = HFHscanResult{Components: fistStageComponents, Probability: probability, Stage: 1}
 		}
 	}
@@ -504,7 +527,7 @@ func (s *HFHscan) scanTreeSecondStage(node *dtos.HFHScanInputChildren) error {
 					break
 				}
 				contentHash, _ := strconv.ParseUint(node.SimHashContent, 16, 64)
-				d, urls, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, 0, s.Config.preferedPurlList)
+				d, urls, _, err := s.Config.mvDb.Mainsearch([]uint64{r.Hash}, []uint64{contentHash}, 0, s.Config.preferedPurlList)
 				urlKeys = urls[0]
 				distance = d[0]
 				if err != nil {
