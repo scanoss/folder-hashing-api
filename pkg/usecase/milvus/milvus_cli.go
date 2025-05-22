@@ -95,7 +95,7 @@ func NewMilvusDb(host string, port string, database string) (*MilvusDb, error) {
 	return &MilvusDb{s: s, address: milvusAddress, TopMainResult: defaultTopResults, databaseName: database}, nil
 }
 
-func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([]int, [][]uint64, [][]uint64, error) {
+func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResults int, topPurls map[string]bool) ([][]int, [][]uint64, [][]uint64, error) {
 
 	outputFields := []string{"hfhDirs", "hfhContents", "urlHash", "category"}
 
@@ -122,14 +122,9 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 	}
 
 	// Initialize result slices
-	matchedDistances := make([]int, len(mainHashes))
+	matchedDistances := make([][]int, len(mainHashes))
 	matchedUrlsHash := make([][]uint64, len(mainHashes))
 	matchedContentsHash := make([][]uint64, len(mainHashes))
-
-	// Default all distances to 999 (indicating no match)
-	for i := range matchedDistances {
-		matchedDistances[i] = 999
-	}
 
 	// Process in blocks of 20
 	blockSize := 20
@@ -219,11 +214,11 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 			for i, j := range sortedIndexes {
 				if cats[j] == 0 {
 					preferedUrls = append(preferedUrls, urlsCandidates[j])
-					preferedDistances = append(preferedDistances, sortedDistances[i])
+					preferedDistances = append(preferedDistances, int(result.Scores[j]))
 					preferedContentHash = append(preferedContentHash, fileContentsCandidates[j])
 				} else {
 					regularUrls = append(regularUrls, urlsCandidates[j])
-					regularDistances = append(regularDistances, sortedDistances[i])
+					regularDistances = append(regularDistances, int(result.Scores[j]))
 					regularContentsHash = append(regularContentsHash, fileContentsCandidates[j])
 
 				}
@@ -234,11 +229,11 @@ func (db *MilvusDb) Mainsearch(mainHashes []uint64, secHashes []uint64, topResul
 			}
 
 			if len(preferedDistances) > 0 && len(regularDistances) > 0 && preferedDistances[0] <= regularDistances[0]+5 {
-				matchedDistances[originalIndex] = preferedDistances[0]
+				matchedDistances[originalIndex] = preferedDistances
 				matchedUrlsHash[originalIndex] = preferedUrls
 				matchedContentsHash[originalIndex] = preferedContentHash
 			} else {
-				matchedDistances[originalIndex] = regularDistances[0]
+				matchedDistances[originalIndex] = regularDistances
 				matchedUrlsHash[originalIndex] = regularUrls
 				matchedContentsHash[originalIndex] = regularContentsHash
 			}
