@@ -55,7 +55,7 @@ func main() {
 	// Connect to Qdrant
 	log.Println("Connecting to Qdrant server...")
 	ctx := context.Background()
-	
+
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: QdrantHost,
 		Port: QdrantPort,
@@ -262,11 +262,10 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-
 // Insert a batch of records
 func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) error {
 	var points []*qdrant.PointStruct
-	
+
 	// Process each record in the batch
 	for _, record := range batch {
 		if len(record) < 18 { // Ensure record has all 18 fields (aligned with Milvus)
@@ -301,7 +300,7 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 
 		// Create the concatenated vector using all three hashes
 		concatenatedVector := hfh.HashesToVector(hfhDirHash, hfhNamesHash, hfhContentsHash)
-		
+
 		// Parse urlHash from record[4] (aligned with Milvus)
 		urlHashStr := strings.TrimSpace(record[4])
 		urlHashUnsigned, err := strconv.ParseUint(urlHashStr, 16, 64)
@@ -349,7 +348,7 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			Vectors: qdrant.NewVectors(concatenatedVector...),
 			Payload: payload,
 		}
-		
+
 		points = append(points, point)
 	}
 
@@ -384,15 +383,15 @@ func showCollectionStats(ctx context.Context, client *qdrant.Client) {
 
 	log.Printf("Collection '%s' information:", CollectionName)
 	log.Printf("  Status: %s", info.Status)
-	
+
 	// Access vector configuration if available
 	if info.Config != nil && info.Config.Params != nil {
 		log.Printf("  Vector configuration available")
 	}
-	
+
 	log.Printf("  Points count: %d", info.PointsCount)
 	log.Printf("  Segments count: %d", info.SegmentsCount)
-	
+
 	// Try to sample a few points to verify they exist
 	log.Println("Attempting to scroll through first few points...")
 	scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{

@@ -1,8 +1,6 @@
 module scanoss.com/hfh-api
 
-go 1.22.2
-
-toolchain go1.24.3
+go 1.23.4
 
 require (
 	github.com/golobby/config/v3 v3.4.2
