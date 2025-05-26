@@ -1,8 +1,8 @@
 module scanoss.com/hfh-api
 
-go 1.22.0
+go 1.22.2
 
-toolchain go1.22.6
+toolchain go1.24.3
 
 require (
 	github.com/golobby/config/v3 v3.4.2
@@ -10,6 +10,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/mfonda/simhash v0.0.0-20151007195837-79f94a1100d6
 	github.com/milvus-io/milvus-sdk-go/v2 v2.4.2
+	github.com/qdrant/go-client v1.14.0
 	github.com/scanoss/go-grpc-helper v0.8.0
 	github.com/scanoss/papi v0.0.0-unpublished
 	github.com/scanoss/zap-logging-helper v0.3.2
