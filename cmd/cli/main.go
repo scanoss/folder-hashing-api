@@ -180,22 +180,28 @@ func searchCommand() {
 		return
 	}
 
-	// Display results
+	// Display results with enhanced information
 	fmt.Printf("\nFound %d similar projects:\n", len(results))
 	fmt.Println(repeatString("=", 80))
 
 	for i, result := range results {
-		fmt.Printf("\n%d. Similarity Score: %.4f\n", i+1, result.Score)
-		fmt.Printf("   Combined Hash: %s\n", result.CombinedHash)
+		fmt.Printf("\n%d. %s (Hamming Distance: %d)\n", i+1, result.SearchStage, result.HammingDist)
+
+		// Display similarity score (if available)
+		if result.Score > 0 {
+			fmt.Printf("   Similarity Score: %.4f\n", result.Score)
+		}
+
 		fmt.Printf("   Vendor: %s\n", result.Vendor)
 		fmt.Printf("   Component: %s\n", result.Component)
 		fmt.Printf("   Version: %s\n", result.Version)
+
 		if result.URL != "" {
 			fmt.Printf("   URL: %s\n", result.URL)
 		}
 
 		// Show some additional metadata if available
-		if license, ok := result.Metadata["license"]; ok {
+		if license, ok := result.Metadata["license"]; ok && license != "" {
 			fmt.Printf("   License: %v\n", license)
 		}
 		if totalFiles, ok := result.Metadata["total_files"]; ok {
@@ -203,6 +209,17 @@ func searchCommand() {
 		}
 		if size, ok := result.Metadata["size"]; ok {
 			fmt.Printf("   Size: %v\n", size)
+		}
+
+		// Display hash information for debugging
+		if dirHash, ok := result.Metadata["hfh_dirs_hash"]; ok {
+			fmt.Printf("   Dir Hash: %v\n", dirHash)
+		}
+		if nameHash, ok := result.Metadata["hfh_names_hash"]; ok {
+			fmt.Printf("   Names Hash: %v\n", nameHash)
+		}
+		if contentHash, ok := result.Metadata["hfh_contents_hash"]; ok {
+			fmt.Printf("   Content Hash: %v\n", contentHash)
 		}
 
 		if i < len(results)-1 {
@@ -216,6 +233,10 @@ func showHelp() {
 	fmt.Println("=============================================================")
 	fmt.Println()
 	fmt.Println("This tool can calculate folder hashes and search for similar projects in Qdrant.")
+	fmt.Println("The search uses a multi-stage approach:")
+	fmt.Println("  1. Exact hash matching - finds identical projects")
+	fmt.Println("  2. Component-aware similarity - finds similar components (strict threshold)")
+	fmt.Println("  3. General similarity - finds loosely similar projects (relaxed threshold)")
 	fmt.Println()
 	fmt.Println("Available subcommands:")
 	fmt.Println("  hash     Calculate hashes for a directory")
@@ -265,6 +286,19 @@ func showSearchHelp() {
 	fmt.Println("===========================")
 	fmt.Println()
 	fmt.Println("Calculate hashes for a directory and search for similar projects in Qdrant.")
+	fmt.Println("Uses a multi-stage approach with Hamming distance filtering:")
+	fmt.Println()
+	fmt.Println("Stage 1: Exact hash matching")
+	fmt.Println("  - Searches for projects with identical hashes")
+	fmt.Println("  - Returns immediately if exact matches found")
+	fmt.Println()
+	fmt.Println("Stage 2: Component-aware similarity (≤15 bit differences)")
+	fmt.Println("  - Uses Manhattan distance for better Hamming approximation")
+	fmt.Println("  - Applies strict threshold for high-quality matches")
+	fmt.Println()
+	fmt.Println("Stage 3: General similarity (≤30 bit differences)")
+	fmt.Println("  - Fallback search with relaxed threshold")
+	fmt.Println("  - Finds loosely similar projects")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  hfh-cli search -dir <directory_path> [options]")

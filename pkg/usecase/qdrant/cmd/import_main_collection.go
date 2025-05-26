@@ -180,7 +180,7 @@ func createCollection(ctx context.Context, client *qdrant.Client) {
 		CollectionName: CollectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     VectorDim,
-			Distance: qdrant.Distance_Cosine, // Use cosine distance for simhash
+			Distance: qdrant.Distance_Manhattan, // Use Manhattan distance for Hamming distance on binary vectors
 		}),
 		// Enable optimizers for better performance
 		OptimizersConfig: &qdrant.OptimizersConfigDiff{
