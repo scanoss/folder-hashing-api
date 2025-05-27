@@ -3,9 +3,11 @@ package hfh
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/qdrant/go-client/qdrant"
 )
@@ -77,6 +79,10 @@ func SearchSimilarProjects(config QdrantConfig, dirHash, nameHash, contentHash u
 
 	// Check if all collections exist
 	ctx := context.Background()
+	log.Println("Checking collections existence...")
+	log.Println("Dirs collection name:", config.DirsCollectionName)
+	log.Println("Names collection name:", config.NamesCollectionName)
+	log.Println("Contents collection name:", config.ContentsCollectionName)
 	dirsExists, err := client.CollectionExists(ctx, config.DirsCollectionName)
 	if err != nil {
 		return nil, fmt.Errorf("error checking dirs collection existence: %v", err)
@@ -198,42 +204,67 @@ func searchExactMatchesMultiIndex(ctx context.Context, client *qdrant.Client, co
 	return results, nil
 }
 
-// searchMultiIndexSimilarity performs similarity search across all collections with weighted fusion
+// searchMultiIndexSimilarity performs similarity search across all collections with weighted fusion and parallel execution
 func searchMultiIndexSimilarity(ctx context.Context, client *qdrant.Client, config QdrantConfig, dirHash, nameHash, contentHash uint64, limit uint64) ([]SearchResult, error) {
 	// Create individual query vectors for each hash type
 	dirVector := hashToVector(dirHash)
 	nameVector := hashToVector(nameHash)
 	contentVector := hashToVector(contentHash)
 
-	// Search each collection with appropriate thresholds
+	// Search each collection with appropriate thresholds (aligned with pseudocode)
 	searchLimit := limit * 2 // Get more results to allow for fusion and filtering
 
-	// Search dirs collection (structural similarity)
-	fmt.Printf("Searching dirs collection with threshold...")
-	dirResults, err := searchSingleCollection(ctx, client, config.DirsCollectionName, dirVector, searchLimit, 20, "Dirs")
-	if err != nil {
-		fmt.Printf("Warning: Dirs collection search failed: %v\n", err)
+	// Search all collections in parallel
+	var wg sync.WaitGroup
+	var contentResults, dirResults, nameResults []SearchResult
+	var contentErr, dirErr, nameErr error
+
+	fmt.Println("Searching all collections in parallel...")
+
+	wg.Add(3)
+
+	// Search contents collection (code content similarity) - threshold 10
+	go func() {
+		defer wg.Done()
+		fmt.Printf("Searching contents collection (threshold=10)...")
+		contentResults, contentErr = searchSingleCollection(ctx, client, config.ContentsCollectionName, contentVector, searchLimit, 10, "Contents")
+	}()
+
+	// Search dirs collection (structural similarity) - threshold 15
+	go func() {
+		defer wg.Done()
+		fmt.Printf("Searching dirs collection (threshold=15)...")
+		dirResults, dirErr = searchSingleCollection(ctx, client, config.DirsCollectionName, dirVector, searchLimit, 15, "Dirs")
+	}()
+
+	// Search names collection (component naming similarity) - threshold 20
+	go func() {
+		defer wg.Done()
+		fmt.Printf("Searching names collection (threshold=20)...")
+		nameResults, nameErr = searchSingleCollection(ctx, client, config.NamesCollectionName, nameVector, searchLimit, 20, "Names")
+	}()
+
+	wg.Wait()
+
+	// Handle errors from parallel searches
+	if contentErr != nil {
+		fmt.Printf("Warning: Contents collection search failed: %v\n", contentErr)
+		contentResults = []SearchResult{}
+	}
+	if dirErr != nil {
+		fmt.Printf("Warning: Dirs collection search failed: %v\n", dirErr)
 		dirResults = []SearchResult{}
 	}
-
-	// Search names collection (component naming similarity)
-	fmt.Printf("Searching names collection...")
-	nameResults, err := searchSingleCollection(ctx, client, config.NamesCollectionName, nameVector, searchLimit, 25, "Names")
-	if err != nil {
-		fmt.Printf("Warning: Names collection search failed: %v\n", err)
+	if nameErr != nil {
+		fmt.Printf("Warning: Names collection search failed: %v\n", nameErr)
 		nameResults = []SearchResult{}
 	}
 
-	// Search contents collection (code content similarity)
-	fmt.Printf("Searching contents collection...")
-	contentResults, err := searchSingleCollection(ctx, client, config.ContentsCollectionName, contentVector, searchLimit, 15, "Contents")
-	if err != nil {
-		fmt.Printf("Warning: Contents collection search failed: %v\n", err)
-		contentResults = []SearchResult{}
-	}
+	fmt.Printf("Parallel search completed. Results: contents=%d, dirs=%d, names=%d\n",
+		len(contentResults), len(dirResults), len(nameResults))
 
-	// Perform weighted fusion of results
-	fusedResults := fuseSearchResults(dirResults, nameResults, contentResults, 0.3, 0.2, 0.5) // Contents weighted highest
+	// Perform weighted fusion of results (content=0.5, dir=0.3, name=0.2)
+	fusedResults := fuseSearchResults(dirResults, nameResults, contentResults, 0.3, 0.2, 0.5)
 
 	// Sort by combined score and return top results
 	if len(fusedResults) > int(limit) {
@@ -339,156 +370,6 @@ func fuseSearchResults(dirResults, nameResults, contentResults []SearchResult, d
 	}
 
 	return fusedResults
-}
-
-// searchExactMatches performs exact hash matching using filters
-func searchExactMatches(ctx context.Context, client *qdrant.Client, collectionName, dirHash, nameHash, contentHash string, limit uint64) ([]SearchResult, error) {
-	// Create filter for exact hash matches
-	filter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_dirs_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: dirHash},
-						},
-					},
-				},
-			},
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_names_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: nameHash},
-						},
-					},
-				},
-			},
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_contents_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: contentHash},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Scroll through results with filter
-	scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: collectionName,
-		Filter:         filter,
-		Limit:          qdrant.PtrOf(uint32(limit)),
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error in exact match scroll: %v", err)
-	}
-
-	var results []SearchResult
-	for _, point := range scrollResp {
-		result := convertRetrievedPointToResult(point, "Stage 1: Exact Match", 0) // 0 Hamming distance for exact matches
-		results = append(results, result)
-	}
-
-	return results, nil
-}
-
-// searchComponentAware performs component-aware similarity search
-func searchComponentAware(ctx context.Context, client *qdrant.Client, collectionName string, dirHash, nameHash, contentHash uint64, limit uint64) ([]SearchResult, error) {
-	// Convert three hashes to concatenated vector
-	queryVector := HashesToVector(dirHash, nameHash, contentHash)
-
-	// For component-aware search, we'll use a tighter similarity threshold
-	// and potentially add component filters if we can extract component name from the query
-
-	queryReq := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(queryVector...),
-		Limit:          qdrant.PtrOf(uint64(limit * 2)), // Get more results to filter and re-rank
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(true), // Need vectors to calculate Hamming distance
-	}
-
-	searchResp, err := client.Query(ctx, queryReq)
-	if err != nil {
-		return nil, fmt.Errorf("error in component-aware search: %v", err)
-	}
-
-	var results []SearchResult
-	queryVectorBinary := HashesToVector(dirHash, nameHash, contentHash)
-
-	for _, point := range searchResp {
-		// Calculate Hamming distance
-		pointVector := point.Vectors.GetVector().GetData()
-		hammingDist := calculateHammingDistance(queryVectorBinary, pointVector)
-
-		// Apply stricter Hamming distance threshold for component-aware search
-		if hammingDist <= 15 { // Allow up to 15 bits difference out of 192
-			result := convertScoredPointToResult(point, "Stage 2: Component-Aware", hammingDist)
-			results = append(results, result)
-		}
-	}
-
-	// Sort by Hamming distance (lower is better)
-	sortResultsByHammingDistance(results)
-
-	// Return up to the requested limit
-	if len(results) > int(limit) {
-		results = results[:limit]
-	}
-
-	return results, nil
-}
-
-// searchGeneralSimilarity performs general similarity search as fallback
-func searchGeneralSimilarity(ctx context.Context, client *qdrant.Client, collectionName string, dirHash, nameHash, contentHash uint64, limit uint64) ([]SearchResult, error) {
-	// Convert three hashes to concatenated vector
-	queryVector := HashesToVector(dirHash, nameHash, contentHash)
-
-	queryReq := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(queryVector...),
-		Limit:          qdrant.PtrOf(uint64(limit * 2)), // Get more results to filter and re-rank
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(true), // Need vectors to calculate Hamming distance
-	}
-
-	searchResp, err := client.Query(ctx, queryReq)
-	if err != nil {
-		return nil, fmt.Errorf("error in general similarity search: %v", err)
-	}
-
-	var results []SearchResult
-	queryVectorBinary := HashesToVector(dirHash, nameHash, contentHash)
-
-	for _, point := range searchResp {
-		// Calculate Hamming distance
-		pointVector := point.Vectors.GetVector().GetData()
-		hammingDist := calculateHammingDistance(queryVectorBinary, pointVector)
-
-		// Apply looser Hamming distance threshold for general search
-		if hammingDist <= 30 { // Allow up to 30 bits difference out of 192
-			result := convertScoredPointToResult(point, "Stage 3: General Similarity", hammingDist)
-			results = append(results, result)
-		}
-	}
-
-	// Sort by Hamming distance (lower is better)
-	sortResultsByHammingDistance(results)
-
-	// Return up to the requested limit
-	if len(results) > int(limit) {
-		results = results[:limit]
-	}
-
-	return results, nil
 }
 
 // convertRetrievedPointToResult converts a Qdrant RetrievedPoint to SearchResult

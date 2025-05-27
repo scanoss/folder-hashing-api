@@ -134,7 +134,6 @@ func searchCommand() {
 	dirPath := searchFlags.String("dir", "", "Directory path to hash and search for similar projects (required)")
 	host := searchFlags.String("host", "localhost", "Qdrant server host")
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
-	collection := searchFlags.String("collection", "url_collection", "Qdrant collection name")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
 	help := searchFlags.Bool("help", false, "Show help message")
 
@@ -164,27 +163,27 @@ func searchCommand() {
 	fmt.Println("=" + repeatString("=", len(absPath)+33))
 
 	// Calculate hashes using the source of truth implementation
-	hfhRequest, err := hfh_cli.HFHrequestFromPath(absPath)
+	requestRoot, err := hfh_cli.HFHrequestFromPath(absPath)
 	if err != nil {
 		log.Fatalf("Error calculating hashes: %v", err)
 	}
 
-	if hfhRequest == nil {
+	if requestRoot == nil {
 		log.Fatal("Error: No hash result returned (directory may be empty or all files filtered)")
 	}
 
 	// Parse the hash strings to uint64
-	dirHash, err := strconv.ParseUint(hfhRequest.SimHashDirNames, 16, 64)
+	dirHash, err := strconv.ParseUint(requestRoot.SimHashDirNames, 16, 64)
 	if err != nil {
 		log.Fatalf("Error parsing directory hash: %v", err)
 	}
 
-	nameHash, err := strconv.ParseUint(hfhRequest.SimHashNames, 16, 64)
+	nameHash, err := strconv.ParseUint(requestRoot.SimHashNames, 16, 64)
 	if err != nil {
 		log.Fatalf("Error parsing names hash: %v", err)
 	}
 
-	contentHash, err := strconv.ParseUint(hfhRequest.SimHashContent, 16, 64)
+	contentHash, err := strconv.ParseUint(requestRoot.SimHashContent, 16, 64)
 	if err != nil {
 		log.Fatalf("Error parsing content hash: %v", err)
 	}
@@ -194,14 +193,16 @@ func searchCommand() {
 	fmt.Printf("  Names Hash:       %016x\n", nameHash)
 	fmt.Printf("  Contents Hash:    %016x\n", contentHash)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
-	fmt.Printf("Host: %s:%d, Collection: %s, Top: %d\n", *host, *port, *collection, *topK)
+	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
 
 	// Search for similar projects in Qdrant
 	config := hfh.QdrantConfig{
-		Host:           *host,
-		Port:           *port,
-		CollectionName: *collection,
+		Host:                   *host,
+		Port:                   *port,
+		DirsCollectionName:     "url_collection_dirs",
+		NamesCollectionName:    "url_collection_names",
+		ContentsCollectionName: "url_collection_contents",
 	}
 
 	results, err := hfh.SearchSimilarProjects(config, dirHash, nameHash, contentHash, uint64(*topK))
