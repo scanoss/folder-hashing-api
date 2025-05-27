@@ -14,6 +14,11 @@ import (
 
 const (
 	VectorDim = 64 // Single 64-bit hash per collection
+
+	// Content-based tie-breaking constants
+	TIE_BREAKING_THRESHOLD = 3   // Hamming distance threshold for considering results "tied"
+	CONTENT_TIE_WEIGHT     = 0.8 // Heavy weight for content in tie-breaking scenarios
+	NAME_DIR_TIE_WEIGHT    = 0.2 // Lighter weight for name/dir in tie-breaking scenarios
 )
 
 // QdrantConfig holds Qdrant connection configuration for multi-index approach
@@ -105,6 +110,113 @@ func hashToVector(hash uint64) []float32 {
 		}
 	}
 	return vector
+}
+
+// resolveContentTieBreaking performs content-based tie-breaking for results with similar name/dir scores
+func resolveContentTieBreaking(results []SearchResult, contentHash uint64) []SearchResult {
+	if len(results) <= 1 {
+		return results
+	}
+
+	fmt.Printf("  Content tie-breaking: Processing %d results\n", len(results))
+
+	// Group results by similarity level (within TIE_BREAKING_THRESHOLD)
+	var tieGroups [][]SearchResult
+	processed := make(map[int]bool)
+
+	for i, result := range results {
+		if processed[i] {
+			continue
+		}
+
+		// Create a tie group starting with this result
+		tieGroup := []SearchResult{result}
+		processed[i] = true
+
+		// Find all results within tie-breaking threshold
+		for j := i + 1; j < len(results); j++ {
+			if processed[j] {
+				continue
+			}
+
+			// Check if results are tied (within threshold)
+			hammingDiff := results[j].HammingDist - result.HammingDist
+			if hammingDiff < 0 {
+				hammingDiff = -hammingDiff
+			}
+
+			if hammingDiff <= TIE_BREAKING_THRESHOLD {
+				tieGroup = append(tieGroup, results[j])
+				processed[j] = true
+			}
+		}
+
+		tieGroups = append(tieGroups, tieGroup)
+	}
+
+	fmt.Printf("  Found %d tie groups for content evaluation\n", len(tieGroups))
+
+	// Process each tie group with content-based scoring
+	var finalResults []SearchResult
+
+	for groupIdx, tieGroup := range tieGroups {
+		if len(tieGroup) == 1 {
+			// No tie-breaking needed
+			finalResults = append(finalResults, tieGroup[0])
+			continue
+		}
+
+		fmt.Printf("  Processing tie group %d with %d results\n", groupIdx+1, len(tieGroup))
+
+		// Calculate content similarity for each result in the tie group
+		for i := range tieGroup {
+			// Get the content hash from metadata or calculate content distance
+			var contentSimilarity float32
+
+			// Try to get content hash from metadata
+			if contentHashStr, exists := tieGroup[i].Metadata["hfh_contents_hash"]; exists {
+				if hashStr, ok := contentHashStr.(string); ok {
+					// Parse the stored content hash and calculate similarity
+					if len(hashStr) == 16 { // 64-bit hash as 16 hex chars
+						// Simple approach: count matching characters (approximation)
+						queryHashStr := fmt.Sprintf("%016x", contentHash)
+						matches := 0
+						for j := 0; j < len(hashStr) && j < len(queryHashStr); j++ {
+							if hashStr[j] == queryHashStr[j] {
+								matches++
+							}
+						}
+						contentSimilarity = float32(matches) / float32(len(hashStr))
+					}
+				}
+			}
+
+			// Calculate content-weighted score
+			nameDirContribution := float32(tieGroup[i].HammingDist) * NAME_DIR_TIE_WEIGHT
+			contentContribution := (1.0 - contentSimilarity) * 64.0 * CONTENT_TIE_WEIGHT
+
+			// New tie-breaking score (lower is better)
+			tieGroup[i].Score = nameDirContribution + contentContribution
+
+			fmt.Printf("    Result %d: Component=%s, NameDir=%d, ContentSim=%.3f, TieScore=%.3f\n",
+				i+1, tieGroup[i].Component, tieGroup[i].HammingDist, contentSimilarity, tieGroup[i].Score)
+		}
+
+		// Sort tie group by new content-aware score (lower is better)
+		for i := 0; i < len(tieGroup); i++ {
+			for j := i + 1; j < len(tieGroup); j++ {
+				if tieGroup[i].Score > tieGroup[j].Score {
+					tieGroup[i], tieGroup[j] = tieGroup[j], tieGroup[i]
+				}
+			}
+		}
+
+		// Add sorted tie group to final results
+		finalResults = append(finalResults, tieGroup...)
+	}
+
+	fmt.Printf("  Content tie-breaking completed: %d results processed\n", len(finalResults))
+	return finalResults
 }
 
 // SearchSimilarProjects searches for similar projects using multi-index approach with weighted fusion
@@ -1008,6 +1120,11 @@ func searchWithStageThresholds(ctx context.Context, client *qdrant.Client, confi
 
 	// Sort by Hamming distance
 	sortResultsByHammingDistance(finalResults)
+
+	// Apply content-based tie-breaking for results with similar name/dir scores
+	if len(finalResults) > 1 {
+		finalResults = resolveContentTieBreaking(finalResults, contentHash)
+	}
 
 	// Debug: log final results for this stage
 	fmt.Printf("    Final stage results: %d unique components\n", len(finalResults))
