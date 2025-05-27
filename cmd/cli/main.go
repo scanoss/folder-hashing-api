@@ -370,15 +370,27 @@ func displayTraditionalResults(results []hfh.SearchResult) {
 	}
 }
 
-// displayGroupedResults displays enhanced grouped search results
+// displayGroupedResults displays enhanced grouped search results with consensus analysis
 func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
-	fmt.Printf("\nFound %d component group(s) with enhanced filtering:\n", len(componentGroups))
+	fmt.Printf("\nFound %d component group(s) with consensus analysis:\n", len(componentGroups))
 	fmt.Println(repeatString("=", 80))
 
 	for i, group := range componentGroups {
-		// Display component header
+		// Display component header with consensus information
 		fmt.Printf("\n%d. Component: %s\n", i+1, group.Component)
 		fmt.Printf("   Vendor: %s\n", group.Vendor)
+		fmt.Printf("   📊 Consensus Score: %.3f (%d supporting results)\n", group.ConsensusScore, group.ResultCount)
+
+		// Add consensus quality indicator
+		if group.ConsensusScore > 0.7 {
+			fmt.Printf("   🎯 Strong Consensus - Multiple results point to this component\n")
+		} else if group.ConsensusScore > 0.5 {
+			fmt.Printf("   ✅ Good Consensus - Several results support this component\n")
+		} else if group.ConsensusScore > 0.3 {
+			fmt.Printf("   ⚠️  Moderate Consensus - Some evidence for this component\n")
+		} else {
+			fmt.Printf("   ❓ Weak Consensus - Limited evidence for this component\n")
+		}
 
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
@@ -457,31 +469,49 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 			fmt.Printf("     📚 Multiple Versions Available (%d)\n", len(group.AllVersions))
 		}
 
+		// Additional consensus analysis
+		if group.ResultCount > 1 {
+			fmt.Printf("     🔍 Multiple Supporting Results (%d) - Higher Reliability\n", group.ResultCount)
+		}
+
 		if i < len(componentGroups)-1 {
 			fmt.Println(repeatString("-", 80))
 		}
 	}
 
-	// Summary
+	// Enhanced summary with consensus information
 	fmt.Printf("\n" + repeatString("=", 80) + "\n")
-	fmt.Printf("SEARCH SUMMARY:\n")
+	fmt.Printf("CONSENSUS ANALYSIS SUMMARY:\n")
 	fmt.Printf("• Found %d unique component(s)\n", len(componentGroups))
 
 	totalVersions := 0
 	highConfidenceCount := 0
+	strongConsensusCount := 0
+	totalSupportingResults := 0
+
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
+		totalSupportingResults += group.ResultCount
 		if group.BestMatch.ConfidenceScore > 0.6 {
 			highConfidenceCount++
+		}
+		if group.ConsensusScore > 0.7 {
+			strongConsensusCount++
 		}
 	}
 
 	fmt.Printf("• Total versions discovered: %d\n", totalVersions)
+	fmt.Printf("• Total supporting search results: %d\n", totalSupportingResults)
 	fmt.Printf("• High confidence matches: %d\n", highConfidenceCount)
+	fmt.Printf("• Strong consensus components: %d\n", strongConsensusCount)
 
 	if len(componentGroups) > 0 {
 		bestMatch := componentGroups[0]
-		fmt.Printf("• Best overall match: %s %s (%.3f confidence)\n",
-			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.ConfidenceScore)
+		fmt.Printf("• Best overall match: %s %s (%.3f confidence, %.3f consensus)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.ConfidenceScore, bestMatch.ConsensusScore)
+
+		if bestMatch.ConsensusScore > 0.7 && bestMatch.ResultCount > 2 {
+			fmt.Printf("• 🎯 Strong recommendation: Multiple results consistently point to %s\n", bestMatch.Component)
+		}
 	}
 }
