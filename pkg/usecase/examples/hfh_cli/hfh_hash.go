@@ -32,9 +32,6 @@ func HashCalc(node *directoryNode) *HFHhash {
 	fileMapUnique := make(map[string]bool)
 	dirMapUnique := make(map[string]bool)
 
-	// Get the root directory name to exclude it
-	rootDirName := filepath.Base(node.Path)
-
 	if len(node.Files) < 10 {
 		return nil
 	}
@@ -92,14 +89,13 @@ func HashCalc(node *directoryNode) *HFHhash {
 
 	FilteredUniqueDirNames := make([]string, 0, len(dirMapUnique))
 	for k := range dirMapUnique {
-		if k == "." || k == ".." || k == rootDirName {
+		if k == "." || k == ".." {
 			continue
 		}
 		FilteredUniqueDirNames = append(FilteredUniqueDirNames, k)
 	}
 	sort.Strings(FilteredUniqueDirNames)
 	concatenatedNames = strings.Join(FilteredUniqueDirNames, " ")
-	log.Println(concatenatedNames)
 	DirsSimhashNorm := simhash.Simhash(simhash.NewWordFeatureSet([]byte(concatenatedNames)))
 
 	//FilesNameSimhashNorm ^= FilesNameSimhash

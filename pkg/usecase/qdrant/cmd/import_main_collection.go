@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"os"
@@ -330,12 +331,6 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 
 		// Parse urlHash from record[4]
 		urlHashStr := strings.TrimSpace(record[4])
-		urlHashUnsigned, err := strconv.ParseUint(urlHashStr, 16, 64)
-		if err != nil {
-			log.Printf("WARNING: Skipping record with invalid url hash '%s': %v", urlHashStr, err)
-			continue
-		}
-		pointId := uint64(urlHashUnsigned)
 
 		// Parse numeric fields
 		totalFiles, _ := strconv.ParseInt(record[12], 10, 32)
@@ -343,10 +338,13 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 		sourceFiles, _ := strconv.ParseInt(record[14], 10, 32)
 		ignoredFiles, _ := strconv.ParseInt(record[15], 10, 32)
 		size, _ := strconv.ParseInt(record[16], 10, 32)
-
-		// Parse category field
 		categoryStr := strings.TrimSpace(record[17])
-		category, _ := strconv.ParseInt(categoryStr, 10, 8)
+
+		// pointId should be a hash of the concatenation of url hash string and categoryStr
+		idStringToHash := urlHashStr + categoryStr
+		hasher := fnv.New64a()
+		hasher.Write([]byte(idStringToHash)) // Write expects []byte
+		pointId := hasher.Sum64()
 
 		// Create payload with all metadata
 		payload := map[string]*qdrant.Value{
@@ -366,7 +364,7 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			"source_files":      qdrant.NewValueInt(sourceFiles),
 			"ignored_files":     qdrant.NewValueInt(ignoredFiles),
 			"size":              qdrant.NewValueInt(size),
-			"category":          qdrant.NewValueInt(category),
+			"category":          qdrant.NewValueString(categoryStr),
 		}
 
 		// Create single point with all three named vectors
