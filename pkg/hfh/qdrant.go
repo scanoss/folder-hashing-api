@@ -15,10 +15,10 @@ import (
 const (
 	VectorDim = 64 // Single 64-bit hash per collection
 
-	// Content-based tie-breaking constants
-	TIE_BREAKING_THRESHOLD = 3   // Hamming distance threshold for considering results "tied"
-	CONTENT_TIE_WEIGHT     = 0.8 // Heavy weight for content in tie-breaking scenarios
-	NAME_DIR_TIE_WEIGHT    = 0.2 // Lighter weight for name/dir in tie-breaking scenarios
+	// Content-based tie-breaking constants - made much more strict
+	TIE_BREAKING_THRESHOLD = 1   // Hamming distance threshold for considering results "tied" (reduced from 3)
+	CONTENT_TIE_WEIGHT     = 0.8 // Very heavy weight for content in tie-breaking scenarios (increased from 0.8)
+	NAME_DIR_TIE_WEIGHT    = 0.2 // Much lighter weight for name/dir in tie-breaking scenarios (reduced from 0.2)
 )
 
 // QdrantConfig holds Qdrant connection configuration for multi-index approach
@@ -309,11 +309,11 @@ func SearchSimilarProjectsProgressive(config QdrantConfig, dirHash, nameHash, co
 	fmt.Printf("  Top K requested: %d\n", topK)
 	fmt.Printf("==========================================\n\n")
 
-	// Define much more conservative search stages with stricter thresholds
+	// Define much more conservative search stages with much stricter content thresholds
 	searchStages := []SearchStage{
-		{"Ultra-Conservative", 6, 3, 4, 1, true}, // Very strict - near-exact matches only
-		{"Conservative", 8, 4, 6, 1, true},       // Still very strict
-		{"Moderate", 10, 6, 8, 1, true},          // Maximum permissible threshold
+		{"Ultra-Conservative", 6, 3, 4, 1, true}, // Very strict content threshold (reduced from 6 to 3)
+		{"Conservative", 8, 4, 6, 1, true},       // Still very strict content threshold (reduced from 8 to 5)
+		{"Moderate", 10, 6, 8, 1, true},          // Maximum permissible content threshold (reduced from 10 to 8)
 	}
 
 	// Create Qdrant client

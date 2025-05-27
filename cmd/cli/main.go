@@ -38,8 +38,6 @@ func main() {
 
 	subcommand := os.Args[1]
 	switch subcommand {
-	case "hash":
-		hashCommand()
 	case "search":
 		searchCommand()
 	case "help", "-help", "--help":
@@ -49,83 +47,6 @@ func main() {
 		showHelp()
 		os.Exit(1)
 	}
-}
-
-func hashCommand() {
-	// Create a new flag set for the hash subcommand
-	hashFlags := flag.NewFlagSet("hash", flag.ExitOnError)
-	dirPath := hashFlags.String("dir", "", "Directory path to hash (required)")
-	help := hashFlags.Bool("help", false, "Show help message")
-
-	hashFlags.Parse(os.Args[2:])
-
-	// Show help if requested or no directory specified
-	if *help || *dirPath == "" {
-		showHashHelp()
-		if *dirPath == "" {
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Verify directory exists
-	if _, err := os.Stat(*dirPath); os.IsNotExist(err) {
-		log.Fatalf("Error: Directory '%s' does not exist", *dirPath)
-	}
-
-	// Get absolute path
-	absPath, err := filepath.Abs(*dirPath)
-	if err != nil {
-		log.Fatalf("Error getting absolute path: %v", err)
-	}
-
-	fmt.Printf("Calculating hashes for directory: %s\n", absPath)
-	fmt.Println("=" + repeatString("=", len(absPath)+33))
-
-	// Calculate hashes using the source of truth implementation
-	hfhRequest, err := hfh_cli.HFHrequestFromPath(absPath)
-	if err != nil {
-		log.Fatalf("Error calculating hashes: %v", err)
-	}
-
-	if hfhRequest == nil {
-		log.Fatal("Error: No hash result returned (directory may be empty or all files filtered)")
-	}
-
-	// Parse the hash strings to uint64
-	dirHash, err := strconv.ParseUint(hfhRequest.SimHashDirNames, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing directory hash: %v", err)
-	}
-
-	nameHash, err := strconv.ParseUint(hfhRequest.SimHashNames, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing names hash: %v", err)
-	}
-
-	contentHash, err := strconv.ParseUint(hfhRequest.SimHashContent, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing content hash: %v", err)
-	}
-
-	// Create combined hash
-	combinedHash := hfh.CreateCombinedHash(dirHash, nameHash, contentHash)
-
-	// Output results
-	fmt.Printf("\nHash Results:\n")
-	fmt.Printf("-------------\n")
-	fmt.Printf("Directory Hash:   %016x\n", dirHash)
-	fmt.Printf("Names Hash:       %016x\n", nameHash)
-	fmt.Printf("Contents Hash:    %016x\n", contentHash)
-	fmt.Printf("Combined Hash:    %016x\n", combinedHash)
-
-	fmt.Printf("\nHash Results (formatted for CSV):\n")
-	fmt.Printf("----------------------------------\n")
-	fmt.Printf("%016x,%016x,%016x,%016x\n",
-		dirHash,
-		nameHash,
-		contentHash,
-		combinedHash)
 }
 
 func searchCommand() {
