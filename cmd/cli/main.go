@@ -196,10 +196,6 @@ func searchCommand() {
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
 
-	// Extract component name from directory for enhanced filtering
-	queryComponent := hfh.ExtractComponentNameFromPath(absPath)
-	fmt.Printf("Extracted component name: %s\n", queryComponent)
-
 	// Search for similar projects in Qdrant using enhanced progressive search
 	config := hfh.QdrantConfig{
 		Host:                   *host,
@@ -209,7 +205,7 @@ func searchCommand() {
 		ContentsCollectionName: "url_collection_contents",
 	}
 
-	componentGroups, err := hfh.SearchSimilarProjectsProgressive(config, dirHash, nameHash, contentHash, queryComponent, uint64(*topK))
+	componentGroups, err := hfh.SearchSimilarProjectsProgressive(config, dirHash, nameHash, contentHash, uint64(*topK))
 	if err != nil {
 		fmt.Printf("Enhanced search failed, falling back to traditional search: %v\n", err)
 
@@ -237,10 +233,10 @@ func showHelp() {
 	fmt.Println("=============================================================")
 	fmt.Println()
 	fmt.Println("This tool can calculate folder hashes and search for similar projects in Qdrant.")
-	fmt.Println("The search uses a multi-stage approach:")
+	fmt.Println("The search uses a consensus-based approach:")
 	fmt.Println("  1. Exact hash matching - finds identical projects")
-	fmt.Println("  2. Component-aware similarity - finds similar components (strict threshold)")
-	fmt.Println("  3. General similarity - finds loosely similar projects (relaxed threshold)")
+	fmt.Println("  2. Progressive similarity search with strict thresholds")
+	fmt.Println("  3. Component consensus analysis - ranks results by agreement across multiple matches")
 	fmt.Println()
 	fmt.Println("Available subcommands:")
 	fmt.Println("  hash     Calculate hashes for a directory")

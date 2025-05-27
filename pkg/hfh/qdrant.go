@@ -187,7 +187,7 @@ func SearchSimilarProjects(config QdrantConfig, dirHash, nameHash, contentHash u
 }
 
 // SearchSimilarProjectsProgressive performs enhanced progressive search with component consensus analysis
-func SearchSimilarProjectsProgressive(config QdrantConfig, dirHash, nameHash, contentHash uint64, queryComponent string, topK uint64) ([]ComponentGroup, error) {
+func SearchSimilarProjectsProgressive(config QdrantConfig, dirHash, nameHash, contentHash uint64, topK uint64) ([]ComponentGroup, error) {
 	// Add comprehensive debug logging
 	fmt.Printf("\n=== DEBUG: Starting Progressive Search ===\n")
 	fmt.Printf("Query Hashes:\n")
@@ -1025,22 +1025,29 @@ func searchWithStageThresholds(ctx context.Context, client *qdrant.Client, confi
 	return finalResults, nil
 }
 
-// enhanceResultsWithSimilarity enhances results with component and version similarity scores
+// enhanceResultsWithSimilarity enhances results with confidence scores based purely on hash similarity
 func enhanceResultsWithSimilarity(results []SearchResult, queryComponent string, queryVersion string) []SearchResult {
 	for i := range results {
-		// Calculate component similarity
+		// Calculate component similarity only if provided (for backwards compatibility)
 		if queryComponent != "" {
 			results[i].ComponentSimilarity = calculateComponentSimilarity(queryComponent, results[i].Component)
 		}
 
-		// Calculate version similarity
+		// Calculate version similarity only if provided (for backwards compatibility)
 		if queryVersion != "" {
 			results[i].VersionSimilarity = calculateVersionSimilarity(queryVersion, results[i].Version)
 		}
 
-		// Calculate overall confidence score
+		// Calculate overall confidence score based primarily on hash similarity
 		hammingScore := 1.0 - (float32(results[i].HammingDist) / 64.0) // Normalize Hamming distance
-		results[i].ConfidenceScore = (hammingScore * 0.4) + (results[i].ComponentSimilarity * 0.4) + (results[i].VersionSimilarity * 0.2)
+
+		// If no query component/version provided, use pure hash-based confidence
+		if queryComponent == "" && queryVersion == "" {
+			results[i].ConfidenceScore = hammingScore
+		} else {
+			// Legacy mode with component/version similarity (for backwards compatibility)
+			results[i].ConfidenceScore = (hammingScore * 0.4) + (results[i].ComponentSimilarity * 0.4) + (results[i].VersionSimilarity * 0.2)
+		}
 	}
 
 	return results
@@ -1053,11 +1060,19 @@ func groupAndRankResults(results []SearchResult, useVersionBoost bool) []Compone
 	for _, result := range results {
 		key := result.Component
 
+		// Apply version boost if enabled
+		confidence := result.ConfidenceScore
+		if useVersionBoost {
+			// Boost confidence for newer versions or stable versions
+			versionBoost := calculateVersionBoost(result.Version)
+			confidence = confidence * versionBoost
+		}
+
 		versionResult := VersionResult{
 			Version:         result.Version,
 			HammingDistance: result.HammingDist,
 			SearchStage:     result.SearchStage,
-			ConfidenceScore: result.ConfidenceScore,
+			ConfidenceScore: confidence,
 			URL:             result.URL,
 			Metadata:        result.Metadata,
 		}
@@ -1113,6 +1128,56 @@ func groupAndRankResults(results []SearchResult, useVersionBoost bool) []Compone
 	}
 
 	return groupSlice
+}
+
+// calculateVersionBoost calculates a boost factor for versions (newer/stable versions get higher boost)
+func calculateVersionBoost(version string) float32 {
+	if version == "" {
+		return 1.0 // No boost for empty versions
+	}
+
+	// Parse the version
+	parsedVersion := parseSemanticVersion(version)
+
+	// Base boost is 1.0 (no change)
+	boost := float32(1.0)
+
+	// Boost for higher major versions (indicates more mature/recent)
+	if parsedVersion.Major >= 2 {
+		boost += 0.1 // 10% boost for v2+
+	}
+	if parsedVersion.Major >= 3 {
+		boost += 0.05 // Additional 5% boost for v3+
+	}
+
+	// Slight boost for non-zero minor versions (indicates active development)
+	if parsedVersion.Minor > 0 {
+		boost += 0.02 // 2% boost
+	}
+
+	// Penalty for pre-release versions (alpha, beta, rc, etc.)
+	if parsedVersion.Pre != "" {
+		lowerPre := strings.ToLower(parsedVersion.Pre)
+		if strings.Contains(lowerPre, "alpha") || strings.Contains(lowerPre, "a") {
+			boost -= 0.15 // 15% penalty for alpha
+		} else if strings.Contains(lowerPre, "beta") || strings.Contains(lowerPre, "b") {
+			boost -= 0.1 // 10% penalty for beta
+		} else if strings.Contains(lowerPre, "rc") || strings.Contains(lowerPre, "release") {
+			boost -= 0.05 // 5% penalty for release candidates
+		} else {
+			boost -= 0.08 // 8% penalty for other pre-release indicators
+		}
+	}
+
+	// Ensure boost stays within reasonable bounds
+	if boost < 0.7 {
+		boost = 0.7 // Minimum 70% of original confidence
+	}
+	if boost > 1.3 {
+		boost = 1.3 // Maximum 130% of original confidence
+	}
+
+	return boost
 }
 
 // calculateVersionSimilarity calculates semantic version similarity
