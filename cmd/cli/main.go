@@ -23,8 +23,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"scanoss.com/hfh-api/pkg/hfh"
+	hfh_cli "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli"
 )
 
 func main() {
@@ -80,33 +82,49 @@ func hashCommand() {
 	fmt.Printf("Calculating hashes for directory: %s\n", absPath)
 	fmt.Println("=" + repeatString("=", len(absPath)+33))
 
-	// Calculate hashes using the HFH package
-	hashResult, err := hfh.HFHRequestFromPath(absPath)
+	// Calculate hashes using the source of truth implementation
+	hfhRequest, err := hfh_cli.HFHrequestFromPath(absPath)
 	if err != nil {
 		log.Fatalf("Error calculating hashes: %v", err)
 	}
 
-	if hashResult == nil {
+	if hfhRequest == nil {
 		log.Fatal("Error: No hash result returned (directory may be empty or all files filtered)")
 	}
 
+	// Parse the hash strings to uint64
+	dirHash, err := strconv.ParseUint(hfhRequest.SimHashDirNames, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing directory hash: %v", err)
+	}
+
+	nameHash, err := strconv.ParseUint(hfhRequest.SimHashNames, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing names hash: %v", err)
+	}
+
+	contentHash, err := strconv.ParseUint(hfhRequest.SimHashContent, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing content hash: %v", err)
+	}
+
 	// Create combined hash
-	combinedHash := hfh.CreateCombinedHash(hashResult.DirHash, hashResult.NameHash, hashResult.ContentHash)
+	combinedHash := hfh.CreateCombinedHash(dirHash, nameHash, contentHash)
 
 	// Output results
 	fmt.Printf("\nHash Results:\n")
 	fmt.Printf("-------------\n")
-	fmt.Printf("Directory Hash:   %016x\n", hashResult.DirHash)
-	fmt.Printf("Names Hash:       %016x\n", hashResult.NameHash)
-	fmt.Printf("Contents Hash:    %016x\n", hashResult.ContentHash)
+	fmt.Printf("Directory Hash:   %016x\n", dirHash)
+	fmt.Printf("Names Hash:       %016x\n", nameHash)
+	fmt.Printf("Contents Hash:    %016x\n", contentHash)
 	fmt.Printf("Combined Hash:    %016x\n", combinedHash)
 
 	fmt.Printf("\nHash Results (formatted for CSV):\n")
 	fmt.Printf("----------------------------------\n")
 	fmt.Printf("%016x,%016x,%016x,%016x\n",
-		hashResult.DirHash,
-		hashResult.NameHash,
-		hashResult.ContentHash,
+		dirHash,
+		nameHash,
+		contentHash,
 		combinedHash)
 }
 
@@ -145,20 +163,36 @@ func searchCommand() {
 	fmt.Printf("Calculating hashes for directory: %s\n", absPath)
 	fmt.Println("=" + repeatString("=", len(absPath)+33))
 
-	// Calculate hashes using the HFH package
-	hashResult, err := hfh.HFHRequestFromPath(absPath)
+	// Calculate hashes using the source of truth implementation
+	hfhRequest, err := hfh_cli.HFHrequestFromPath(absPath)
 	if err != nil {
 		log.Fatalf("Error calculating hashes: %v", err)
 	}
 
-	if hashResult == nil {
+	if hfhRequest == nil {
 		log.Fatal("Error: No hash result returned (directory may be empty or all files filtered)")
 	}
 
+	// Parse the hash strings to uint64
+	dirHash, err := strconv.ParseUint(hfhRequest.SimHashDirNames, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing directory hash: %v", err)
+	}
+
+	nameHash, err := strconv.ParseUint(hfhRequest.SimHashNames, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing names hash: %v", err)
+	}
+
+	contentHash, err := strconv.ParseUint(hfhRequest.SimHashContent, 16, 64)
+	if err != nil {
+		log.Fatalf("Error parsing content hash: %v", err)
+	}
+
 	fmt.Printf("\nQuery Hashes:\n")
-	fmt.Printf("  Directory Hash:   %016x\n", hashResult.DirHash)
-	fmt.Printf("  Names Hash:       %016x\n", hashResult.NameHash)
-	fmt.Printf("  Contents Hash:    %016x\n", hashResult.ContentHash)
+	fmt.Printf("  Directory Hash:   %016x\n", dirHash)
+	fmt.Printf("  Names Hash:       %016x\n", nameHash)
+	fmt.Printf("  Contents Hash:    %016x\n", contentHash)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
 	fmt.Printf("Host: %s:%d, Collection: %s, Top: %d\n", *host, *port, *collection, *topK)
 	fmt.Println(repeatString("-", 60))
@@ -170,7 +204,7 @@ func searchCommand() {
 		CollectionName: *collection,
 	}
 
-	results, err := hfh.SearchSimilarProjects(config, hashResult.DirHash, hashResult.NameHash, hashResult.ContentHash, uint64(*topK))
+	results, err := hfh.SearchSimilarProjects(config, dirHash, nameHash, contentHash, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
