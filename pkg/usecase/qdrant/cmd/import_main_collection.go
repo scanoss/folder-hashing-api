@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
-	"scanoss.com/hfh-api/pkg/hfh"
 )
 
 const (
@@ -23,11 +22,16 @@ const (
 	QdrantPort = 6334
 	BatchSize  = 1000 // Smaller batch size for Qdrant
 	MaxWorkers = 8
-	VectorDim  = 192 // Three 64-bit hashes concatenated (3 * 64 = 192)
+	VectorDim  = 64 // Single 64-bit hash per collection
 )
 
-// Default value for collection name, can be overridden with -collectionName flag
-var CollectionName = "url_collection"
+// Collection names for multi-index approach
+var (
+	CollectionBaseName     = "url_collection"
+	DirsCollectionName     = ""
+	NamesCollectionName    = ""
+	ContentsCollectionName = ""
+)
 
 func main() {
 	// Process command line arguments
@@ -37,8 +41,11 @@ func main() {
 
 	flag.Parse()
 
-	// Set collection name from flag
-	CollectionName = *collectionNameFlag
+	// Set collection names from flag
+	CollectionBaseName = *collectionNameFlag
+	DirsCollectionName = CollectionBaseName + "_dirs"
+	NamesCollectionName = CollectionBaseName + "_names"
+	ContentsCollectionName = CollectionBaseName + "_contents"
 
 	if *csvDir == "" {
 		log.Fatal("Error: You must specify a directory with the -dir option")
@@ -69,28 +76,56 @@ func main() {
 	}()
 	log.Println("Connected to Qdrant server successfully")
 
-	// Check if collection exists and handle overwrite flag
-	exists, err := client.CollectionExists(ctx, CollectionName)
+	// Check if collections exist and handle overwrite flag
+	log.Println("Checking if collections exist...")
+	dirsExists, err := client.CollectionExists(ctx, DirsCollectionName)
 	if err != nil {
-		log.Fatalf("Error checking if collection exists: %v", err)
+		log.Fatalf("Error checking if dirs collection exists: %v", err)
 	}
 
-	if exists && *overwriteFlag {
-		log.Printf("Collection '%s' exists and overwrite flag is set. Dropping collection...", CollectionName)
-		err = client.DeleteCollection(ctx, CollectionName)
-		if err != nil {
-			log.Fatalf("Error dropping collection: %v", err)
+	namesExists, err := client.CollectionExists(ctx, NamesCollectionName)
+	if err != nil {
+		log.Fatalf("Error checking if names collection exists: %v", err)
+	}
+
+	contentsExists, err := client.CollectionExists(ctx, ContentsCollectionName)
+	if err != nil {
+		log.Fatalf("Error checking if contents collection exists: %v", err)
+	}
+
+	if *overwriteFlag && (dirsExists || namesExists || contentsExists) {
+		log.Printf("Collections exist and overwrite flag is set. Dropping collections...")
+		if dirsExists {
+			err = client.DeleteCollection(ctx, DirsCollectionName)
+			if err != nil {
+				log.Fatalf("Error dropping dirs collection: %v", err)
+			}
+			log.Printf("Collection '%s' dropped successfully", DirsCollectionName)
 		}
-		log.Printf("Collection '%s' dropped successfully", CollectionName)
-		exists = false
+		if namesExists {
+			err = client.DeleteCollection(ctx, NamesCollectionName)
+			if err != nil {
+				log.Fatalf("Error dropping names collection: %v", err)
+			}
+			log.Printf("Collection '%s' dropped successfully", NamesCollectionName)
+		}
+		if contentsExists {
+			err = client.DeleteCollection(ctx, ContentsCollectionName)
+			if err != nil {
+				log.Fatalf("Error dropping contents collection: %v", err)
+			}
+			log.Printf("Collection '%s' dropped successfully", ContentsCollectionName)
+		}
+		dirsExists = false
+		namesExists = false
+		contentsExists = false
 	}
 
-	log.Println("Checking if collection exists...")
-	// Create collection if it doesn't exist
-	if !exists {
-		createCollection(ctx, client)
+	// Create collections if they don't exist
+	if !dirsExists || !namesExists || !contentsExists {
+		createCollections(ctx, client)
 	} else {
-		log.Printf("Using existing collection '%s'", CollectionName)
+		log.Printf("Using existing collections: %s, %s, %s", DirsCollectionName, NamesCollectionName, ContentsCollectionName)
 	}
 
 	// Get list of CSV files in the directory
@@ -171,13 +206,38 @@ func main() {
 	showCollectionStats(ctx, client)
 }
 
-// Create collection if it doesn't exist
-func createCollection(ctx context.Context, client *qdrant.Client) {
-	log.Printf("Collection '%s' does not exist. Creating new collection...", CollectionName)
+// Create collections if they don't exist
+func createCollections(ctx context.Context, client *qdrant.Client) {
+	log.Printf("Creating multi-index collections: %s, %s, %s", DirsCollectionName, NamesCollectionName, ContentsCollectionName)
+
+	// Create dirs collection
+	err := createSingleCollection(ctx, client, DirsCollectionName)
+	if err != nil {
+		log.Fatalf("Error creating dirs collection: %v", err)
+	}
+
+	// Create names collection
+	err = createSingleCollection(ctx, client, NamesCollectionName)
+	if err != nil {
+		log.Fatalf("Error creating names collection: %v", err)
+	}
+
+	// Create contents collection
+	err = createSingleCollection(ctx, client, ContentsCollectionName)
+	if err != nil {
+		log.Fatalf("Error creating contents collection: %v", err)
+	}
+
+	log.Printf("All collections created successfully")
+}
+
+// Create a single collection with vector configuration
+func createSingleCollection(ctx context.Context, client *qdrant.Client, collectionName string) error {
+	log.Printf("Creating collection '%s'...", collectionName)
 
 	// Create collection with vector configuration
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: CollectionName,
+		CollectionName: collectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan, // Use Manhattan distance for Hamming distance on binary vectors
@@ -189,9 +249,10 @@ func createCollection(ctx context.Context, client *qdrant.Client) {
 		},
 	})
 	if err != nil {
-		log.Fatalf("Error creating collection: %v", err)
+		return fmt.Errorf("error creating collection %s: %v", collectionName, err)
 	}
-	log.Printf("Collection '%s' created successfully", CollectionName)
+	log.Printf("Collection '%s' created successfully", collectionName)
+	return nil
 }
 
 // Import data from a CSV file
@@ -262,7 +323,20 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-// Insert a batch of records
+// hashToVector converts a single 64-bit hash into a 64-dimensional binary vector
+func hashToVector(hash uint64) []float32 {
+	vector := make([]float32, 64)
+	for i := 0; i < 64; i++ {
+		if (hash>>i)&1 == 1 {
+			vector[i] = 1.0
+		} else {
+			vector[i] = 0.0
+		}
+	}
+	return vector
+}
+
+// Insert a batch of records to all three collections
 func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) error {
 	var points []*qdrant.PointStruct
 
@@ -298,8 +372,10 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			continue
 		}
 
-		// Create the concatenated vector using all three hashes
-		concatenatedVector := hfh.HashesToVector(hfhDirHash, hfhNamesHash, hfhContentsHash)
+		// Create individual vectors for each hash type
+		dirVector := hashToVector(hfhDirHash)
+		nameVector := hashToVector(hfhNamesHash)
+		contentVector := hashToVector(hfhContentsHash)
 
 		// Parse urlHash from record[4] (aligned with Milvus)
 		urlHashStr := strings.TrimSpace(record[4])
@@ -308,7 +384,7 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			log.Printf("WARNING: Skipping record with invalid url hash '%s': %v", urlHashStr, err)
 			continue
 		}
-		pointId := int64(urlHashUnsigned)
+		pointId := uint64(urlHashUnsigned)
 
 		// Parse numeric fields (adjusted indices to match Milvus structure)
 		totalFiles, _ := strconv.ParseInt(record[12], 10, 32)
@@ -342,14 +418,27 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			"category":          qdrant.NewValueInt(category),
 		}
 
-		// Create point
-		point := &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(uint64(pointId)),
-			Vectors: qdrant.NewVectors(concatenatedVector...),
+		// Create points for each collection with same ID and payload but different vectors
+		dirPoint := &qdrant.PointStruct{
+			Id:      qdrant.NewIDNum(pointId),
+			Vectors: qdrant.NewVectors(dirVector...),
 			Payload: payload,
 		}
 
-		points = append(points, point)
+		namePoint := &qdrant.PointStruct{
+			Id:      qdrant.NewIDNum(pointId),
+			Vectors: qdrant.NewVectors(nameVector...),
+			Payload: payload,
+		}
+
+		contentPoint := &qdrant.PointStruct{
+			Id:      qdrant.NewIDNum(pointId),
+			Vectors: qdrant.NewVectors(contentVector...),
+			Payload: payload,
+		}
+
+		// Store points for batch insertion (we'll create separate batches for each collection)
+		points = append(points, dirPoint, namePoint, contentPoint)
 	}
 
 	if len(points) == 0 {
@@ -357,55 +446,94 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 		return nil
 	}
 
-	// Insert all points in the batch
-	log.Printf("Inserting %d valid points", len(points))
-	_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: CollectionName,
-		Points:         points,
-	})
+	// Separate points into three collections (every 3rd point goes to a different collection)
+	var dirPoints, namePoints, contentPoints []*qdrant.PointStruct
+	for i := 0; i < len(points); i += 3 {
+		if i < len(points) {
+			dirPoints = append(dirPoints, points[i])
+		}
+		if i+1 < len(points) {
+			namePoints = append(namePoints, points[i+1])
+		}
+		if i+2 < len(points) {
+			contentPoints = append(contentPoints, points[i+2])
+		}
+	}
 
+	log.Printf("Inserting %d points to each collection", len(dirPoints))
+
+	// Insert to dirs collection
+	_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: DirsCollectionName,
+		Points:         dirPoints,
+	})
 	if err != nil {
-		return fmt.Errorf("error inserting batch: %v", err)
+		return fmt.Errorf("error inserting to dirs collection: %v", err)
+	}
+
+	// Insert to names collection
+	_, err = client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: NamesCollectionName,
+		Points:         namePoints,
+	})
+	if err != nil {
+		return fmt.Errorf("error inserting to names collection: %v", err)
+	}
+
+	// Insert to contents collection
+	_, err = client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: ContentsCollectionName,
+		Points:         contentPoints,
+	})
+	if err != nil {
+		return fmt.Errorf("error inserting to contents collection: %v", err)
 	}
 
 	return nil
 }
 
-// Function to show collection statistics
+// Function to show collection statistics for all three collections
 func showCollectionStats(ctx context.Context, client *qdrant.Client) {
-	// Try to get collection info
-	log.Println("Retrieving collection information...")
-	info, err := client.GetCollectionInfo(ctx, CollectionName)
-	if err != nil {
-		log.Printf("Could not retrieve collection information: %v", err)
-		return
+	collections := map[string]string{
+		"Directories": DirsCollectionName,
+		"Names":       NamesCollectionName,
+		"Contents":    ContentsCollectionName,
 	}
 
-	log.Printf("Collection '%s' information:", CollectionName)
-	log.Printf("  Status: %s", info.Status)
+	log.Println("Retrieving collection information for all collections...")
 
-	// Access vector configuration if available
-	if info.Config != nil && info.Config.Params != nil {
-		log.Printf("  Vector configuration available")
-	}
+	for collectionType, collectionName := range collections {
+		log.Printf("\n=== %s Collection (%s) ===", collectionType, collectionName)
 
-	log.Printf("  Points count: %d", info.PointsCount)
-	log.Printf("  Segments count: %d", info.SegmentsCount)
+		info, err := client.GetCollectionInfo(ctx, collectionName)
+		if err != nil {
+			log.Printf("Could not retrieve %s collection information: %v", collectionType, err)
+			continue
+		}
 
-	// Try to sample a few points to verify they exist
-	log.Println("Attempting to scroll through first few points...")
-	scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: CollectionName,
-		Limit:          qdrant.PtrOf(uint32(5)), // Get first 5 points
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false), // Don't need vectors for this check
-	})
-	if err != nil {
-		log.Printf("ERROR: Could not scroll points: %v", err)
-	} else {
-		log.Printf("  Sample points found: %d", len(scrollResp))
-		for i, point := range scrollResp {
-			if i < 3 { // Show details for first 3 points
+		log.Printf("  Status: %s", info.Status)
+
+		// Access vector configuration if available
+		if info.Config != nil && info.Config.Params != nil {
+			log.Printf("  Vector configuration available")
+		}
+
+		log.Printf("  Points count: %d", info.PointsCount)
+		log.Printf("  Segments count: %d", info.SegmentsCount)
+
+		// Try to sample a few points to verify they exist
+		log.Printf("Attempting to scroll through first few points in %s collection...", collectionType)
+		scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: collectionName,
+			Limit:          qdrant.PtrOf(uint32(3)), // Get first 3 points
+			WithPayload:    qdrant.NewWithPayload(true),
+			WithVectors:    qdrant.NewWithVectors(false), // Don't need vectors for this check
+		})
+		if err != nil {
+			log.Printf("ERROR: Could not scroll points in %s collection: %v", collectionType, err)
+		} else {
+			log.Printf("  Sample points found: %d", len(scrollResp))
+			for i, point := range scrollResp {
 				log.Printf("    Point %d: ID=%v", i+1, point.Id)
 				if point.Payload != nil {
 					if vendor, exists := point.Payload["vendor"]; exists {
@@ -413,9 +541,6 @@ func showCollectionStats(ctx context.Context, client *qdrant.Client) {
 					}
 					if component, exists := point.Payload["component"]; exists {
 						log.Printf("      Component: %v", component.GetStringValue())
-					}
-					if category, exists := point.Payload["category"]; exists {
-						log.Printf("      Category: %v", category.GetIntegerValue())
 					}
 				}
 			}
