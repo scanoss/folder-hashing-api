@@ -173,31 +173,6 @@ func showHelp() {
 	fmt.Println("  hfh-cli search -help")
 }
 
-func showHashHelp() {
-	fmt.Println("HFH CLI - Hash Subcommand")
-	fmt.Println("=========================")
-	fmt.Println()
-	fmt.Println("Calculate three types of hashes for a directory:")
-	fmt.Println("  1. Directory structure hash - based on folder hierarchy")
-	fmt.Println("  2. File names hash - based on all file names")
-	fmt.Println("  3. File contents hash - based on actual file contents")
-	fmt.Println("  4. Combined hash - intelligent combination of all three")
-	fmt.Println()
-	fmt.Println("Usage:")
-	fmt.Println("  hfh-cli hash -dir <directory_path>")
-	fmt.Println()
-	fmt.Println("Options:")
-	fmt.Println("  -dir string    Directory path to hash (required)")
-	fmt.Println("  -help         Show this help message")
-	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  hfh-cli hash -dir /path/to/project")
-	fmt.Println("  hfh-cli hash -dir .")
-	fmt.Println("  hfh-cli hash -dir ../some-folder")
-	fmt.Println()
-	fmt.Println("Note: Hidden files, build directories, and binary files are automatically filtered out.")
-}
-
 func showSearchHelp() {
 	fmt.Println("HFH CLI - Search Subcommand")
 	fmt.Println("===========================")

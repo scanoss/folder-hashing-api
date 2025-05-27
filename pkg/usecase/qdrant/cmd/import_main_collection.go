@@ -182,15 +182,15 @@ func createCollection(ctx context.Context, client *qdrant.Client) {
 		VectorsConfig: qdrant.NewVectorsConfigMap(map[string]*qdrant.VectorParams{
 			"dirs": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Manhattan, // Manhattan distance = Hamming distance for binary vectors
+				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
 			},
 			"names": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Manhattan,
+				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
 			},
 			"contents": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Manhattan,
+				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
 			},
 		}),
 		// Enable optimizers for better performance
@@ -273,14 +273,15 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-// hashToVector converts a single 64-bit hash into a 64-dimensional binary vector
-func hashToVector(hash uint64) []float32 {
+// hashToDenseVector converts a single 64-bit hash into a 64-dimensional dense vector
+// Uses -1.0 for unset bits and 1.0 for set bits, optimized for cosine similarity
+func hashToDenseVector(hash uint64) []float32 {
 	vector := make([]float32, 64)
 	for i := 0; i < 64; i++ {
 		if (hash>>i)&1 == 1 {
-			vector[i] = 1.0
+			vector[i] = 1.0 // Bit is set
 		} else {
-			vector[i] = 0.0
+			vector[i] = -1.0 // Bit is unset
 		}
 	}
 	return vector
@@ -322,10 +323,10 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			continue
 		}
 
-		// Create vectors for each hash type
-		dirVector := hashToVector(hfhDirHash)
-		nameVector := hashToVector(hfhNamesHash)
-		contentVector := hashToVector(hfhContentsHash)
+		// Create dense vectors for each hash type
+		dirVector := hashToDenseVector(hfhDirHash)
+		nameVector := hashToDenseVector(hfhNamesHash)
+		contentVector := hashToDenseVector(hfhContentsHash)
 
 		// Parse urlHash from record[4]
 		urlHashStr := strings.TrimSpace(record[4])
