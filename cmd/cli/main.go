@@ -196,7 +196,11 @@ func searchCommand() {
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
 
-	// Search for similar projects in Qdrant
+	// Extract component name from directory for enhanced filtering
+	queryComponent := hfh.ExtractComponentNameFromPath(absPath)
+	fmt.Printf("Extracted component name: %s\n", queryComponent)
+
+	// Search for similar projects in Qdrant using enhanced progressive search
 	config := hfh.QdrantConfig{
 		Host:                   *host,
 		Port:                   *port,
@@ -205,62 +209,27 @@ func searchCommand() {
 		ContentsCollectionName: "url_collection_contents",
 	}
 
-	results, err := hfh.SearchSimilarProjects(config, dirHash, nameHash, contentHash, uint64(*topK))
+	componentGroups, err := hfh.SearchSimilarProjectsProgressive(config, dirHash, nameHash, contentHash, queryComponent, uint64(*topK))
 	if err != nil {
-		log.Fatalf("Error searching in Qdrant: %v", err)
-	}
+		fmt.Printf("Enhanced search failed, falling back to traditional search: %v\n", err)
 
-	if len(results) == 0 {
-		fmt.Println("No similar projects found.")
+		// Fallback to traditional search
+		results, fallbackErr := hfh.SearchSimilarProjects(config, dirHash, nameHash, contentHash, uint64(*topK))
+		if fallbackErr != nil {
+			log.Fatalf("Error searching in Qdrant: %v", fallbackErr)
+		}
+
+		displayTraditionalResults(results)
 		return
 	}
 
-	// Display results with enhanced information
-	fmt.Printf("\nFound %d similar projects:\n", len(results))
-	fmt.Println(repeatString("=", 80))
-
-	for i, result := range results {
-		fmt.Printf("\n%d. %s (Hamming Distance: %d)\n", i+1, result.SearchStage, result.HammingDist)
-
-		// Display similarity score (if available)
-		if result.Score > 0 {
-			fmt.Printf("   Similarity Score: %.4f\n", result.Score)
-		}
-
-		fmt.Printf("   Vendor: %s\n", result.Vendor)
-		fmt.Printf("   Component: %s\n", result.Component)
-		fmt.Printf("   Version: %s\n", result.Version)
-
-		if result.URL != "" {
-			fmt.Printf("   URL: %s\n", result.URL)
-		}
-
-		// Show some additional metadata if available
-		if license, ok := result.Metadata["license"]; ok && license != "" {
-			fmt.Printf("   License: %v\n", license)
-		}
-		if totalFiles, ok := result.Metadata["total_files"]; ok {
-			fmt.Printf("   Total Files: %v\n", totalFiles)
-		}
-		if size, ok := result.Metadata["size"]; ok {
-			fmt.Printf("   Size: %v\n", size)
-		}
-
-		// Display hash information for debugging
-		if dirHash, ok := result.Metadata["hfh_dirs_hash"]; ok {
-			fmt.Printf("   Dir Hash: %v\n", dirHash)
-		}
-		if nameHash, ok := result.Metadata["hfh_names_hash"]; ok {
-			fmt.Printf("   Names Hash: %v\n", nameHash)
-		}
-		if contentHash, ok := result.Metadata["hfh_contents_hash"]; ok {
-			fmt.Printf("   Content Hash: %v\n", contentHash)
-		}
-
-		if i < len(results)-1 {
-			fmt.Println(repeatString("-", 40))
-		}
+	if len(componentGroups) == 0 {
+		fmt.Println("No similar projects found with sufficient confidence.")
+		return
 	}
+
+	// Display enhanced grouped results
+	displayGroupedResults(componentGroups)
 }
 
 func showHelp() {
@@ -361,4 +330,158 @@ func repeatString(s string, count int) string {
 		result += s
 	}
 	return result
+}
+
+// displayTraditionalResults displays traditional search results
+func displayTraditionalResults(results []hfh.SearchResult) {
+	fmt.Printf("\nFound %d similar projects (traditional search):\n", len(results))
+	fmt.Println(repeatString("=", 80))
+
+	for i, result := range results {
+		fmt.Printf("\n%d. %s (Hamming Distance: %d)\n", i+1, result.SearchStage, result.HammingDist)
+
+		// Display similarity score (if available)
+		if result.Score > 0 {
+			fmt.Printf("   Similarity Score: %.4f\n", result.Score)
+		}
+
+		fmt.Printf("   Vendor: %s\n", result.Vendor)
+		fmt.Printf("   Component: %s\n", result.Component)
+		fmt.Printf("   Version: %s\n", result.Version)
+
+		if result.URL != "" {
+			fmt.Printf("   URL: %s\n", result.URL)
+		}
+
+		// Show some additional metadata if available
+		if license, ok := result.Metadata["license"]; ok && license != "" {
+			fmt.Printf("   License: %v\n", license)
+		}
+		if totalFiles, ok := result.Metadata["total_files"]; ok {
+			fmt.Printf("   Total Files: %v\n", totalFiles)
+		}
+		if size, ok := result.Metadata["size"]; ok {
+			fmt.Printf("   Size: %v\n", size)
+		}
+
+		if i < len(results)-1 {
+			fmt.Println(repeatString("-", 40))
+		}
+	}
+}
+
+// displayGroupedResults displays enhanced grouped search results
+func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
+	fmt.Printf("\nFound %d component group(s) with enhanced filtering:\n", len(componentGroups))
+	fmt.Println(repeatString("=", 80))
+
+	for i, group := range componentGroups {
+		// Display component header
+		fmt.Printf("\n%d. Component: %s\n", i+1, group.Component)
+		fmt.Printf("   Vendor: %s\n", group.Vendor)
+
+		// Display best match
+		fmt.Printf("   \n🏆 BEST MATCH:\n")
+		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
+		fmt.Printf("     Hamming Distance: %d\n", group.BestMatch.HammingDistance)
+		fmt.Printf("     Confidence Score: %.3f\n", group.BestMatch.ConfidenceScore)
+		fmt.Printf("     Search Stage: %s\n", group.BestMatch.SearchStage)
+
+		if group.BestMatch.URL != "" {
+			fmt.Printf("     URL: %s\n", group.BestMatch.URL)
+		}
+
+		// Display metadata for best match
+		if license, ok := group.BestMatch.Metadata["license"]; ok && license != "" {
+			fmt.Printf("     License: %v\n", license)
+		}
+		if totalFiles, ok := group.BestMatch.Metadata["total_files"]; ok {
+			fmt.Printf("     Total Files: %v\n", totalFiles)
+		}
+		if size, ok := group.BestMatch.Metadata["size"]; ok {
+			fmt.Printf("     Size: %v bytes\n", size)
+		}
+		if releaseDate, ok := group.BestMatch.Metadata["release_date"]; ok && releaseDate != "" {
+			fmt.Printf("     Release Date: %v\n", releaseDate)
+		}
+
+		// Display other versions if available
+		if len(group.OtherVersions) > 0 {
+			fmt.Printf("   \n📦 OTHER AVAILABLE VERSIONS:\n")
+			for j, version := range group.OtherVersions {
+				fmt.Printf("     %d. %s", j+1, version)
+
+				// Find the detailed version info
+				for _, versionDetail := range group.AllVersions {
+					if versionDetail.Version == version {
+						fmt.Printf(" (Hamming: %d, Confidence: %.3f)", versionDetail.HammingDistance, versionDetail.ConfidenceScore)
+						break
+					}
+				}
+				fmt.Println()
+
+				// Limit to max 5 other versions for readability
+				if j >= 4 {
+					remaining := len(group.OtherVersions) - j - 1
+					if remaining > 0 {
+						fmt.Printf("     ... and %d more versions\n", remaining)
+					}
+					break
+				}
+			}
+		}
+
+		// Quality indicators
+		fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
+		if group.BestMatch.ConfidenceScore > 0.8 {
+			fmt.Printf("     ✅ Very High Confidence Match\n")
+		} else if group.BestMatch.ConfidenceScore > 0.6 {
+			fmt.Printf("     ✅ High Confidence Match\n")
+		} else if group.BestMatch.ConfidenceScore > 0.4 {
+			fmt.Printf("     ⚠️  Medium Confidence Match\n")
+		} else {
+			fmt.Printf("     ⚠️  Low Confidence Match\n")
+		}
+
+		if group.BestMatch.HammingDistance == 0 {
+			fmt.Printf("     🎯 Exact Hash Match\n")
+		} else if group.BestMatch.HammingDistance <= 5 {
+			fmt.Printf("     🎯 Very Similar Structure\n")
+		} else if group.BestMatch.HammingDistance <= 15 {
+			fmt.Printf("     🔍 Similar Structure\n")
+		} else {
+			fmt.Printf("     🔍 Loosely Similar\n")
+		}
+
+		if len(group.AllVersions) > 1 {
+			fmt.Printf("     📚 Multiple Versions Available (%d)\n", len(group.AllVersions))
+		}
+
+		if i < len(componentGroups)-1 {
+			fmt.Println(repeatString("-", 80))
+		}
+	}
+
+	// Summary
+	fmt.Printf("\n" + repeatString("=", 80) + "\n")
+	fmt.Printf("SEARCH SUMMARY:\n")
+	fmt.Printf("• Found %d unique component(s)\n", len(componentGroups))
+
+	totalVersions := 0
+	highConfidenceCount := 0
+	for _, group := range componentGroups {
+		totalVersions += len(group.AllVersions)
+		if group.BestMatch.ConfidenceScore > 0.6 {
+			highConfidenceCount++
+		}
+	}
+
+	fmt.Printf("• Total versions discovered: %d\n", totalVersions)
+	fmt.Printf("• High confidence matches: %d\n", highConfidenceCount)
+
+	if len(componentGroups) > 0 {
+		bestMatch := componentGroups[0]
+		fmt.Printf("• Best overall match: %s %s (%.3f confidence)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.ConfidenceScore)
+	}
 }

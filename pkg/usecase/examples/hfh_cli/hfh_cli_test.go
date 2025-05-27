@@ -76,7 +76,7 @@ func TestLocalGRPCRequest(t *testing.T) {
 		t.Fatalf("Port is not free at start: %v", err)
 	}
 
-	requestRoot, err := HFHrequestFromPath("../")
+	requestRoot, err := HFHrequestFromPath("../../../../../scanoss-1.17.3")
 	if err != nil {
 		t.Error(err)
 		return

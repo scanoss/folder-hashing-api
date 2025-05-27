@@ -40,16 +40,57 @@ func NewQdrantConfig(host string, port int, baseName string) QdrantConfig {
 
 // SearchResult represents a search result from Qdrant
 type SearchResult struct {
-	Score        float32
-	ID           uint64
-	CombinedHash string
-	Vendor       string
-	Component    string
-	Version      string
-	URL          string
-	Metadata     map[string]interface{}
-	SearchStage  string // Which stage found this result
-	HammingDist  int    // Hamming distance for this result
+	Score               float32
+	ID                  uint64
+	CombinedHash        string
+	Vendor              string
+	Component           string
+	Version             string
+	URL                 string
+	Metadata            map[string]interface{}
+	SearchStage         string  // Which stage found this result
+	HammingDist         int     // Hamming distance for this result
+	ComponentSimilarity float32 // Component name similarity score
+	VersionSimilarity   float32 // Version similarity score
+	ConfidenceScore     float32 // Overall confidence score
+}
+
+// ComponentGroup represents grouped results by component name
+type ComponentGroup struct {
+	Component     string          `json:"component"`
+	Vendor        string          `json:"vendor"`
+	BestMatch     VersionResult   `json:"best_match"`
+	OtherVersions []string        `json:"other_versions,omitempty"`
+	AllVersions   []VersionResult `json:"all_versions,omitempty"`
+}
+
+// VersionResult represents a version-specific result within a component group
+type VersionResult struct {
+	Version         string                 `json:"version"`
+	HammingDistance int                    `json:"hamming_distance"`
+	SearchStage     string                 `json:"search_stage"`
+	ConfidenceScore float32                `json:"confidence_score"`
+	URL             string                 `json:"url,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// SearchStage defines a progressive search stage with specific thresholds
+type SearchStage struct {
+	Name             string
+	ContentThreshold int
+	DirsThreshold    int
+	NamesThreshold   int
+	MinComponentSim  float32
+	RequiredResults  int
+	UseVersionBoost  bool
+}
+
+// SemanticVersion represents a parsed semantic version
+type SemanticVersion struct {
+	Major int
+	Minor int
+	Patch int
+	Pre   string
 }
 
 // hashToVector converts a single 64-bit hash into a 64-dimensional binary vector
@@ -142,6 +183,138 @@ func SearchSimilarProjects(config QdrantConfig, dirHash, nameHash, contentHash u
 	}
 
 	return allResults, nil
+}
+
+// SearchSimilarProjectsProgressive performs enhanced progressive search with component filtering
+func SearchSimilarProjectsProgressive(config QdrantConfig, dirHash, nameHash, contentHash uint64, queryComponent string, topK uint64) ([]ComponentGroup, error) {
+	// Define progressive search stages
+	searchStages := []SearchStage{
+		{"Content-Focused", 15, 6, 8, 0.8, 1, true},    // Prioritize content matches first
+		{"Ultra-Conservative", 10, 6, 8, 0.8, 2, true}, // Relaxed content threshold
+		{"Conservative", 13, 8, 10, 0.6, 2, true},      // Content ≤13 for v1.17.3
+		{"Moderate", 15, 12, 15, 0.4, 1, true},         // Even more relaxed
+		{"Relaxed", 18, 15, 20, 0.2, 1, false},         // Very relaxed
+		{"Fallback", 25, 18, 25, 0.0, 1, false},        // Catch-all
+	}
+
+	// Create Qdrant client
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host: config.Host,
+		Port: config.Port,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to Qdrant: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+
+	// Stage 1: Try exact match first
+	fmt.Println("Stage 1: Searching for exact hash matches...")
+	dirHashStr := fmt.Sprintf("%016x", dirHash)
+	nameHashStr := fmt.Sprintf("%016x", nameHash)
+	contentHashStr := fmt.Sprintf("%016x", contentHash)
+
+	exactResults, err := searchExactMatchesMultiIndex(ctx, client, config, dirHashStr, nameHashStr, contentHashStr, topK)
+	if err != nil {
+		fmt.Printf("Warning: Stage 1 search failed: %v\n", err)
+	} else if len(exactResults) > 0 {
+		fmt.Printf("Stage 1: Found %d exact matches\n", len(exactResults))
+		// Enhance results with component similarity
+		enhancedResults := enhanceResultsWithSimilarity(exactResults, queryComponent, "")
+		return groupAndRankResults(enhancedResults, true), nil
+	}
+
+	// Stage 2: Progressive similarity search - collect results from multiple stages
+	fmt.Println("Stage 2: Progressive similarity search...")
+	var allStageResults []SearchResult
+	bestStageResults := []SearchResult{}
+	bestStageName := ""
+
+	for i, stage := range searchStages {
+		fmt.Printf("  Trying %s (Stage %d/%d)...\n", stage.Name, i+1, len(searchStages))
+
+		results, err := searchWithStageThresholds(ctx, client, config, dirHash, nameHash, contentHash, stage, topK*2)
+		if err != nil {
+			fmt.Printf("  Warning: %s search failed: %v\n", stage.Name, err)
+			continue
+		}
+
+		// Filter by component similarity
+		filteredResults := filterByComponentSimilarity(results, queryComponent, stage.MinComponentSim)
+
+		fmt.Printf("  %s: Found %d results (after component filtering)\n", stage.Name, len(filteredResults))
+
+		// Always collect results for later evaluation
+		allStageResults = append(allStageResults, filteredResults...)
+
+		// Check if this stage meets the quality threshold
+		if len(filteredResults) >= stage.RequiredResults {
+			// Enhance with similarity scores
+			enhancedResults := enhanceResultsWithSimilarity(filteredResults, queryComponent, "")
+			grouped := groupAndRankResults(enhancedResults, stage.UseVersionBoost)
+
+			// Quality check: ensure we have high-confidence results
+			if hasHighConfidenceResults(grouped) {
+				fmt.Printf("  %s: Meets quality threshold with %d component groups\n", stage.Name, len(grouped))
+
+				// If this is the first valid stage or better than previous, save it
+				if len(bestStageResults) == 0 || len(filteredResults) > len(bestStageResults) {
+					bestStageResults = filteredResults
+					bestStageName = stage.Name
+				}
+
+				// For content-focused stage, return immediately since content is most reliable
+				if stage.Name == "Content-Focused" {
+					fmt.Printf("  %s: Content match found! Returning immediately\n", stage.Name)
+					return grouped, nil
+				}
+			}
+		}
+
+		// Stop after moderate stage if we have good results to avoid too much noise
+		if stage.Name == "Moderate" && len(bestStageResults) > 0 {
+			fmt.Printf("  Stopping at Moderate stage - found %d results in %s\n", len(bestStageResults), bestStageName)
+			break
+		}
+	}
+
+	// If we have results from any stage, use the best ones
+	if len(bestStageResults) > 0 {
+		fmt.Printf("  Using best results from %s stage (%d results)\n", bestStageName, len(bestStageResults))
+		enhancedResults := enhanceResultsWithSimilarity(bestStageResults, queryComponent, "")
+		grouped := groupAndRankResults(enhancedResults, true)
+		return grouped, nil
+	}
+
+	// Fallback: if no good results from early stages, try all collected results
+	if len(allStageResults) > 0 {
+		fmt.Printf("  Fallback: Using all collected results (%d total)\n", len(allStageResults))
+		// Remove duplicates from all results
+		uniqueResults := make(map[uint64]SearchResult)
+		for _, result := range allStageResults {
+			if existing, exists := uniqueResults[result.ID]; exists {
+				// Keep the one with lower Hamming distance
+				if result.HammingDist < existing.HammingDist {
+					uniqueResults[result.ID] = result
+				}
+			} else {
+				uniqueResults[result.ID] = result
+			}
+		}
+
+		// Convert back to slice
+		var finalResults []SearchResult
+		for _, result := range uniqueResults {
+			finalResults = append(finalResults, result)
+		}
+
+		enhancedResults := enhanceResultsWithSimilarity(finalResults, queryComponent, "")
+		grouped := groupAndRankResults(enhancedResults, true)
+		return grouped, nil
+	}
+
+	return nil, fmt.Errorf("no similar projects found with sufficient confidence")
 }
 
 // searchExactMatchesMultiIndex performs exact hash matching across all collections
@@ -499,6 +672,11 @@ func extractComponentName(dirPath string) string {
 	return componentName
 }
 
+// ExtractComponentNameFromPath extracts component name from directory path (public function)
+func ExtractComponentNameFromPath(dirPath string) string {
+	return extractComponentName(dirPath)
+}
+
 // calculateStringSimilarity calculates simple string similarity (Levenshtein-based)
 func calculateStringSimilarity(s1, s2 string) float32 {
 	s1 = strings.ToLower(s1)
@@ -530,4 +708,450 @@ func calculateStringSimilarity(s1, s2 string) float32 {
 	}
 
 	return float32(common) / float32(maxLen)
+}
+
+// calculateComponentSimilarity calculates advanced component name similarity
+func calculateComponentSimilarity(comp1, comp2 string) float32 {
+	// Exact match
+	if comp1 == comp2 {
+		return 1.0
+	}
+
+	// Normalize components (lowercase, remove common suffixes)
+	norm1 := normalizeComponentName(comp1)
+	norm2 := normalizeComponentName(comp2)
+
+	if norm1 == norm2 {
+		return 0.95
+	}
+
+	// Calculate Levenshtein similarity
+	levSim := levenshteinSimilarity(norm1, norm2)
+
+	// Bonus for shared package paths (e.g., org.apache.*)
+	packageSim := calculatePackageSimilarity(comp1, comp2)
+
+	// Weighted combination
+	return (levSim * 0.7) + (packageSim * 0.3)
+}
+
+// normalizeComponentName normalizes component names for better comparison
+func normalizeComponentName(component string) string {
+	normalized := strings.ToLower(component)
+
+	// Remove common prefixes/suffixes
+	suffixes := []string{"-core", "-main", "-api", "-lib", "-client", "-server", ".jar", ".war"}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(normalized, suffix) {
+			normalized = strings.TrimSuffix(normalized, suffix)
+			break
+		}
+	}
+
+	return normalized
+}
+
+// levenshteinSimilarity calculates Levenshtein similarity (0-1)
+func levenshteinSimilarity(s1, s2 string) float32 {
+	len1, len2 := len(s1), len(s2)
+	if len1 == 0 {
+		return float32(len2)
+	}
+	if len2 == 0 {
+		return float32(len1)
+	}
+
+	matrix := make([][]int, len1+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len2+1)
+		matrix[i][0] = i
+	}
+	for j := 0; j <= len2; j++ {
+		matrix[0][j] = j
+	}
+
+	for i := 1; i <= len1; i++ {
+		for j := 1; j <= len2; j++ {
+			cost := 0
+			if s1[i-1] != s2[j-1] {
+				cost = 1
+			}
+			matrix[i][j] = min(
+				matrix[i-1][j]+1,      // deletion
+				matrix[i][j-1]+1,      // insertion
+				matrix[i-1][j-1]+cost, // substitution
+			)
+		}
+	}
+
+	maxLen := len1
+	if len2 > maxLen {
+		maxLen = len2
+	}
+
+	distance := matrix[len1][len2]
+	return 1.0 - float32(distance)/float32(maxLen)
+}
+
+// min returns the minimum of three integers
+func min(a, b, c int) int {
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
+	return c
+}
+
+// calculatePackageSimilarity calculates similarity based on package structure
+func calculatePackageSimilarity(comp1, comp2 string) float32 {
+	parts1 := strings.Split(comp1, ".")
+	parts2 := strings.Split(comp2, ".")
+
+	commonParts := 0
+	maxLen := len(parts1)
+	if len(parts2) < maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		if parts1[i] == parts2[i] {
+			commonParts++
+		} else {
+			break // Stop at first difference for package hierarchy
+		}
+	}
+
+	totalParts := len(parts1)
+	if len(parts2) > totalParts {
+		totalParts = len(parts2)
+	}
+
+	if totalParts == 0 {
+		return 0.0
+	}
+
+	return float32(commonParts) / float32(totalParts)
+}
+
+// searchWithStageThresholds performs search with specific stage thresholds
+func searchWithStageThresholds(ctx context.Context, client *qdrant.Client, config QdrantConfig, dirHash, nameHash, contentHash uint64, stage SearchStage, limit uint64) ([]SearchResult, error) {
+	// Create individual query vectors for each hash type
+	dirVector := hashToVector(dirHash)
+	nameVector := hashToVector(nameHash)
+	contentVector := hashToVector(contentHash)
+
+	// Search all collections in parallel with stage-specific thresholds
+	var wg sync.WaitGroup
+	var contentResults, dirResults, nameResults []SearchResult
+	var contentErr, dirErr, nameErr error
+
+	wg.Add(3)
+
+	// Search contents collection with stage threshold
+	go func() {
+		defer wg.Done()
+		contentResults, contentErr = searchSingleCollection(ctx, client, config.ContentsCollectionName, contentVector, limit, stage.ContentThreshold, "Contents")
+	}()
+
+	// Search dirs collection with stage threshold
+	go func() {
+		defer wg.Done()
+		dirResults, dirErr = searchSingleCollection(ctx, client, config.DirsCollectionName, dirVector, limit, stage.DirsThreshold, "Dirs")
+	}()
+
+	// Search names collection with stage threshold
+	go func() {
+		defer wg.Done()
+		nameResults, nameErr = searchSingleCollection(ctx, client, config.NamesCollectionName, nameVector, limit, stage.NamesThreshold, "Names")
+	}()
+
+	wg.Wait()
+
+	// Handle errors from parallel searches
+	if contentErr != nil {
+		contentResults = []SearchResult{}
+	}
+	if dirErr != nil {
+		dirResults = []SearchResult{}
+	}
+	if nameErr != nil {
+		nameResults = []SearchResult{}
+	}
+
+	// Combine and fuse results
+	allResults := append(contentResults, append(dirResults, nameResults...)...)
+
+	// Remove duplicates and enhance with stage info
+	uniqueResults := make(map[uint64]SearchResult)
+	for _, result := range allResults {
+		if existing, exists := uniqueResults[result.ID]; exists {
+			// Keep the one with lower Hamming distance
+			if result.HammingDist < existing.HammingDist {
+				result.SearchStage = fmt.Sprintf("%s: %s", stage.Name, result.SearchStage)
+				uniqueResults[result.ID] = result
+			}
+		} else {
+			result.SearchStage = fmt.Sprintf("%s: %s", stage.Name, result.SearchStage)
+			uniqueResults[result.ID] = result
+		}
+	}
+
+	// Convert back to slice
+	var finalResults []SearchResult
+	for _, result := range uniqueResults {
+		finalResults = append(finalResults, result)
+	}
+
+	// Sort by Hamming distance
+	sortResultsByHammingDistance(finalResults)
+
+	return finalResults, nil
+}
+
+// filterByComponentSimilarity filters results based on component name similarity
+func filterByComponentSimilarity(results []SearchResult, queryComponent string, minSimilarity float32) []SearchResult {
+	if queryComponent == "" || minSimilarity <= 0 {
+		return results // No filtering if no query component or threshold
+	}
+
+	var filteredResults []SearchResult
+	for _, result := range results {
+		compSim := calculateComponentSimilarity(queryComponent, result.Component)
+		if compSim >= minSimilarity {
+			result.ComponentSimilarity = compSim
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	return filteredResults
+}
+
+// enhanceResultsWithSimilarity enhances results with component and version similarity scores
+func enhanceResultsWithSimilarity(results []SearchResult, queryComponent string, queryVersion string) []SearchResult {
+	for i := range results {
+		// Calculate component similarity
+		if queryComponent != "" {
+			results[i].ComponentSimilarity = calculateComponentSimilarity(queryComponent, results[i].Component)
+		}
+
+		// Calculate version similarity
+		if queryVersion != "" {
+			results[i].VersionSimilarity = calculateVersionSimilarity(queryVersion, results[i].Version)
+		}
+
+		// Calculate overall confidence score
+		hammingScore := 1.0 - (float32(results[i].HammingDist) / 64.0) // Normalize Hamming distance
+		results[i].ConfidenceScore = (hammingScore * 0.4) + (results[i].ComponentSimilarity * 0.4) + (results[i].VersionSimilarity * 0.2)
+	}
+
+	return results
+}
+
+// groupAndRankResults groups results by component and ranks them
+func groupAndRankResults(results []SearchResult, useVersionBoost bool) []ComponentGroup {
+	groups := make(map[string]*ComponentGroup)
+
+	for _, result := range results {
+		key := result.Component
+
+		versionResult := VersionResult{
+			Version:         result.Version,
+			HammingDistance: result.HammingDist,
+			SearchStage:     result.SearchStage,
+			ConfidenceScore: result.ConfidenceScore,
+			URL:             result.URL,
+			Metadata:        result.Metadata,
+		}
+
+		if group, exists := groups[key]; exists {
+			// Add version to existing component group
+			group.AllVersions = append(group.AllVersions, versionResult)
+
+			// Update best match if this version is better
+			if versionResult.ConfidenceScore > group.BestMatch.ConfidenceScore {
+				group.BestMatch = versionResult
+			}
+		} else {
+			// Create new component group
+			groups[key] = &ComponentGroup{
+				Component:   result.Component,
+				Vendor:      result.Vendor,
+				BestMatch:   versionResult,
+				AllVersions: []VersionResult{versionResult},
+			}
+		}
+	}
+
+	// Convert to slice and sort by best match confidence
+	var groupSlice []ComponentGroup
+	for _, group := range groups {
+		// Sort versions within group by confidence score
+		for i := 0; i < len(group.AllVersions); i++ {
+			for j := i + 1; j < len(group.AllVersions); j++ {
+				if group.AllVersions[i].ConfidenceScore < group.AllVersions[j].ConfidenceScore {
+					group.AllVersions[i], group.AllVersions[j] = group.AllVersions[j], group.AllVersions[i]
+				}
+			}
+		}
+
+		// Create other versions list (excluding best match)
+		for _, version := range group.AllVersions {
+			if version.Version != group.BestMatch.Version {
+				group.OtherVersions = append(group.OtherVersions, version.Version)
+			}
+		}
+
+		groupSlice = append(groupSlice, *group)
+	}
+
+	// Sort groups by best match confidence score (descending)
+	for i := 0; i < len(groupSlice); i++ {
+		for j := i + 1; j < len(groupSlice); j++ {
+			if groupSlice[i].BestMatch.ConfidenceScore < groupSlice[j].BestMatch.ConfidenceScore {
+				groupSlice[i], groupSlice[j] = groupSlice[j], groupSlice[i]
+			}
+		}
+	}
+
+	return groupSlice
+}
+
+// hasHighConfidenceResults checks if the results contain high-confidence matches
+func hasHighConfidenceResults(groups []ComponentGroup) bool {
+	if len(groups) == 0 {
+		return false
+	}
+
+	// Check if the best result has high confidence
+	bestGroup := groups[0]
+	if bestGroup.BestMatch.ConfidenceScore > 0.6 {
+		return true
+	}
+
+	// Check if we have multiple decent results
+	decentResults := 0
+	for _, group := range groups {
+		if group.BestMatch.ConfidenceScore > 0.4 {
+			decentResults++
+		}
+	}
+
+	return decentResults >= 2
+}
+
+// calculateVersionSimilarity calculates semantic version similarity
+func calculateVersionSimilarity(v1, v2 string) float32 {
+	if v1 == v2 {
+		return 1.0
+	}
+
+	ver1 := parseSemanticVersion(v1)
+	ver2 := parseSemanticVersion(v2)
+
+	// Same major.minor = high similarity
+	if ver1.Major == ver2.Major && ver1.Minor == ver2.Minor {
+		patchDiff := ver1.Patch - ver2.Patch
+		if patchDiff < 0 {
+			patchDiff = -patchDiff
+		}
+		return 0.9 - float32(patchDiff)*0.05 // Reduce by 0.05 per patch difference
+	}
+
+	// Same major = medium similarity
+	if ver1.Major == ver2.Major {
+		minorDiff := ver1.Minor - ver2.Minor
+		if minorDiff < 0 {
+			minorDiff = -minorDiff
+		}
+		return 0.7 - float32(minorDiff)*0.1 // Reduce by 0.1 per minor difference
+	}
+
+	// Different major = low similarity
+	majorDiff := ver1.Major - ver2.Major
+	if majorDiff < 0 {
+		majorDiff = -majorDiff
+	}
+	similarity := 0.3 - float32(majorDiff)*0.1
+	if similarity < 0 {
+		similarity = 0
+	}
+	return similarity
+}
+
+// parseSemanticVersion parses a semantic version string
+func parseSemanticVersion(version string) SemanticVersion {
+	// Clean version string
+	version = strings.TrimSpace(version)
+
+	// Remove 'v' prefix if present
+	if strings.HasPrefix(version, "v") {
+		version = version[1:]
+	}
+
+	// Split by dots
+	parts := strings.Split(version, ".")
+
+	result := SemanticVersion{Major: 0, Minor: 0, Patch: 0}
+
+	// Parse major
+	if len(parts) > 0 {
+		if major, err := parseInt(parts[0]); err == nil {
+			result.Major = major
+		}
+	}
+
+	// Parse minor
+	if len(parts) > 1 {
+		if minor, err := parseInt(parts[1]); err == nil {
+			result.Minor = minor
+		}
+	}
+
+	// Parse patch (handle pre-release suffixes)
+	if len(parts) > 2 {
+		patchStr := parts[2]
+		// Split on common pre-release separators
+		for _, sep := range []string{"-", "_", "+", "."} {
+			if idx := strings.Index(patchStr, sep); idx >= 0 {
+				result.Pre = patchStr[idx:]
+				patchStr = patchStr[:idx]
+				break
+			}
+		}
+
+		if patch, err := parseInt(patchStr); err == nil {
+			result.Patch = patch
+		}
+	}
+
+	return result
+}
+
+// parseInt safely parses integer from string
+func parseInt(s string) (int, error) {
+	// Remove any non-digit characters at the end
+	cleaned := ""
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			cleaned += string(r)
+		} else {
+			break
+		}
+	}
+
+	if cleaned == "" {
+		return 0, fmt.Errorf("no digits found")
+	}
+
+	result := 0
+	for _, r := range cleaned {
+		result = result*10 + int(r-'0')
+	}
+
+	return result, nil
 }
