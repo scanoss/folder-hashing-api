@@ -255,28 +255,7 @@ func SearchSimilarProjects(config QdrantConfig, dirHash, nameHash, contentHash u
 			dirsExists, namesExists, contentsExists)
 	}
 
-	// Convert hashes to hex strings for exact matching
-	dirHashStr := fmt.Sprintf("%016x", dirHash)
-	nameHashStr := fmt.Sprintf("%016x", nameHash)
-	contentHashStr := fmt.Sprintf("%016x", contentHash)
-
 	var allResults []SearchResult
-
-	// Stage 1: Exact hash matching across all collections
-	fmt.Println("Stage 1: Searching for exact hash matches...")
-	exactResults, err := searchExactMatchesMultiIndex(ctx, client, config, dirHashStr, nameHashStr, contentHashStr, topK)
-	if err != nil {
-		fmt.Printf("Warning: Stage 1 search failed: %v\n", err)
-	} else if len(exactResults) > 0 {
-		fmt.Printf("Stage 1: Found %d exact matches\n", len(exactResults))
-		allResults = append(allResults, exactResults...)
-		// If we have exact matches, return them immediately
-		if len(allResults) >= int(topK) {
-			return allResults[:topK], nil
-		}
-	} else {
-		fmt.Println("Stage 1: No exact matches found")
-	}
 
 	// Stage 2: Multi-index similarity search with weighted fusion
 	fmt.Println("Stage 2: Multi-index similarity search...")
@@ -552,74 +531,12 @@ func hasHighConsensusResults(groups []ComponentGroup) bool {
 	return decentConsensus >= 1
 }
 
-// searchExactMatchesMultiIndex performs exact hash matching across all collections
-func searchExactMatchesMultiIndex(ctx context.Context, client *qdrant.Client, config QdrantConfig, dirHash, nameHash, contentHash string, limit uint64) ([]SearchResult, error) {
-	// Search for exact matches by filtering on hash fields in any one collection (they all have the same metadata)
-	// We'll use the contents collection as it's likely to have the most distinctive matches
-	filter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_dirs_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: dirHash},
-						},
-					},
-				},
-			},
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_names_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: nameHash},
-						},
-					},
-				},
-			},
-			{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key: "hfh_contents_hash",
-						Match: &qdrant.Match{
-							MatchValue: &qdrant.Match_Text{Text: contentHash},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Scroll through results with filter (using contents collection)
-	scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: config.ContentsCollectionName,
-		Filter:         filter,
-		Limit:          qdrant.PtrOf(uint32(limit)),
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error in exact match scroll: %v", err)
-	}
-
-	var results []SearchResult
-	for _, point := range scrollResp {
-		result := convertRetrievedPointToResult(point, "Stage 1: Exact Match", 0) // 0 Hamming distance for exact matches
-		results = append(results, result)
-	}
-
-	return results, nil
-}
-
 // searchMultiIndexSimilarity performs similarity search across all collections with weighted fusion and parallel execution
 func searchMultiIndexSimilarity(ctx context.Context, client *qdrant.Client, config QdrantConfig, dirHash, nameHash, contentHash uint64, limit uint64) ([]SearchResult, error) {
-	// Create individual query vectors for each hash type
 	dirVector := hashToVector(dirHash)
 	nameVector := hashToVector(nameHash)
 	contentVector := hashToVector(contentHash)
 
-	// Search each collection with appropriate thresholds (aligned with pseudocode)
 	searchLimit := limit * 2 // Get more results to allow for fusion and filtering
 
 	// Search all collections in parallel
