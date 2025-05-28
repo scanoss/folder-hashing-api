@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strconv"
 
 	"github.com/qdrant/go-client/qdrant"
 )
@@ -11,11 +13,11 @@ import (
 const (
 	VectorDim = 64 // Single 64-bit hash per collection
 
-	// Cosine similarity thresholds for dense vectors
-	EXACT_MATCH_THRESHOLD       = 0.99 // Very high similarity for exact matches
-	HIGH_SIMILARITY_THRESHOLD   = 0.85 // Strong similarity
-	MEDIUM_SIMILARITY_THRESHOLD = 0.70 // Moderate similarity
-	LOW_SIMILARITY_THRESHOLD    = 0.50 // Minimum acceptable similarity
+	// Manhattan distance thresholds for binary vectors (lower scores = better matches)
+	EXACT_MATCH_THRESHOLD       = 0  // Perfect match (identical vectors)
+	HIGH_SIMILARITY_THRESHOLD   = 4  // 1-4 bit differences
+	MEDIUM_SIMILARITY_THRESHOLD = 12 // 5-12 bit differences
+	LOW_SIMILARITY_THRESHOLD    = 20 // 13-20 bit differences
 )
 
 // QdrantConfig holds Qdrant connection configuration for single collection approach
@@ -36,7 +38,7 @@ func NewQdrantConfig(host string, port int, collectionName string) QdrantConfig 
 
 // SearchResult represents a search result from Qdrant
 type SearchResult struct {
-	Score     float32                `json:"score"`
+	Distance  float32                `json:"distance"`
 	ID        uint64                 `json:"id"`
 	Vendor    string                 `json:"vendor"`
 	Component string                 `json:"component"`
@@ -58,42 +60,67 @@ type ComponentGroup struct {
 // VersionResult represents a version-specific result within a component group
 type VersionResult struct {
 	Version  string                 `json:"version"`
-	Score    float32                `json:"score"`
+	Distance float32                `json:"distance"`
 	URL      string                 `json:"url,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// hashToDenseVector converts a single 64-bit hash into a 64-dimensional dense vector
-// Uses -1.0 for unset bits and 1.0 for set bits, optimized for cosine similarity
-func hashToDenseVector(hash uint64) []float32 {
-	vector := make([]float32, 64)
-	for i := 0; i < 64; i++ {
-		if (hash>>i)&1 == 1 {
-			vector[i] = 1.0 // Bit is set
+func HexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
+	if hexHashString == "" {
+		return nil, fmt.Errorf("input hex string cannot be empty")
+	}
+
+	// 1. Parse the hexadecimal string into an unsigned integer (uint64).
+	//    We specify base 16 and the bit size.
+	uintValue, err := strconv.ParseUint(hexHashString, 16, bits)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse hex string '%s': %w", hexHashString, err)
+	}
+
+	// 2. Create the format string for Sprintf.
+	//    This will look like "%064b" for 64 bits, ensuring padding with leading zeros.
+	formatString := fmt.Sprintf("%%0%db", bits)
+
+	// 3. Format the integer value as a binary string, padded to the correct length.
+	binaryString := fmt.Sprintf(formatString, uintValue)
+
+	// 4. Ensure the resulting binary string has the exact length.
+	//    (This is a safeguard, Sprintf should handle it but doesn't hurt to check).
+	if len(binaryString) != bits {
+		return nil, fmt.Errorf("internal error: formatted binary string length (%d) does not match expected bits (%d)", len(binaryString), bits)
+	}
+
+	// 5. Create the float vector and populate it.
+	//    We pre-allocate the slice for efficiency.
+	vector := make([]float32, bits)
+	for i, bitRune := range binaryString {
+		if bitRune == '1' {
+			vector[i] = 1.0
 		} else {
-			vector[i] = -1.0 // Bit is unset
+			vector[i] = 0.0 // Explicitly set to 0.0, though it's the default
 		}
 	}
-	return vector
+
+	return vector, nil
 }
 
 // SearchByDirHash searches for similar projects using directory structure hash
-func SearchByDirHash(config QdrantConfig, dirHash uint64, topK uint64) ([]SearchResult, error) {
+func SearchByDirHash(config QdrantConfig, dirHash string, topK uint64) ([]SearchResult, error) {
 	return searchByHash(config, "dirs", dirHash, topK)
 }
 
 // SearchByNameHash searches for similar projects using component names hash
-func SearchByNameHash(config QdrantConfig, nameHash uint64, topK uint64) ([]SearchResult, error) {
+func SearchByNameHash(config QdrantConfig, nameHash string, topK uint64) ([]SearchResult, error) {
 	return searchByHash(config, "names", nameHash, topK)
 }
 
 // SearchByContentHash searches for similar projects using content hash
-func SearchByContentHash(config QdrantConfig, contentHash uint64, topK uint64) ([]SearchResult, error) {
+func SearchByContentHash(config QdrantConfig, contentHash string, topK uint64) ([]SearchResult, error) {
 	return searchByHash(config, "contents", contentHash, topK)
 }
 
-// searchByHash performs a similarity search using the specified vector type with cosine similarity
-func searchByHash(config QdrantConfig, vectorName string, hash uint64, topK uint64) ([]SearchResult, error) {
+// searchByHash performs a similarity search using the specified vector type with Manhattan distance
+func searchByHash(config QdrantConfig, vectorName string, hash string, topK uint64) ([]SearchResult, error) {
 	// Create Qdrant client
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: config.Host,
@@ -116,19 +143,22 @@ func searchByHash(config QdrantConfig, vectorName string, hash uint64, topK uint
 	}
 
 	// Convert hash to dense vector
-	queryVector := hashToDenseVector(hash)
+	queryVector, err := HexSimhashToVector(hash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting hash to vector: %v", err)
+	}
 
 	log.Printf("Searching collection %s using vector %s for hash %016x", config.CollectionName, vectorName, hash)
 
 	// Perform the search with score threshold to filter low similarity results
+	// For Manhattan distance, we want results BELOW the threshold (lower scores = better matches)
 	queryReq := &qdrant.QueryPoints{
 		CollectionName: config.CollectionName,
 		Query:          qdrant.NewQuery(queryVector...),
-		Using:          &vectorName, // Specify which named vector to use
+		Using:          &vectorName,
 		Limit:          qdrant.PtrOf(topK),
-		ScoreThreshold: qdrant.PtrOf(float32(LOW_SIMILARITY_THRESHOLD)), // Only return results above minimum threshold
 		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false), // Don't need vectors in response
+		WithVectors:    qdrant.NewWithVectors(false),
 	}
 
 	searchResp, err := client.Query(ctx, queryReq)
@@ -142,92 +172,117 @@ func searchByHash(config QdrantConfig, vectorName string, hash uint64, topK uint
 		result := convertPointToResult(point)
 
 		// Additional quality filtering based on score
-		if result.Score >= HIGH_SIMILARITY_THRESHOLD {
-			log.Printf("High similarity match: %s %s (score: %.3f)", result.Component, result.Version, result.Score)
-		} else if result.Score >= MEDIUM_SIMILARITY_THRESHOLD {
-			log.Printf("Medium similarity match: %s %s (score: %.3f)", result.Component, result.Version, result.Score)
-		} else if result.Score >= LOW_SIMILARITY_THRESHOLD {
-			log.Printf("Low similarity match: %s %s (score: %.3f)", result.Component, result.Version, result.Score)
+		// For manhattan distance, lower scores are better
+		if result.Distance <= HIGH_SIMILARITY_THRESHOLD {
+			log.Printf("High similarity match using %s: %s %s (distance: %.3f)", vectorName, result.Component, result.Version, result.Distance)
+			results = append(results, result)
+		} else if result.Distance <= MEDIUM_SIMILARITY_THRESHOLD {
+			log.Printf("Medium similarity match using %s: %s %s (distance: %.3f)", vectorName, result.Component, result.Version, result.Distance)
+			results = append(results, result)
+		} else {
+			log.Printf("Low similarity match using %s: %s %s (distance: %.3f)", vectorName, result.Component, result.Version, result.Distance)
 		}
-
-		results = append(results, result)
 	}
 
-	log.Printf("Found %d results with score >= %.2f", len(results), LOW_SIMILARITY_THRESHOLD)
+	log.Printf("Found %d results with distance <= %d", len(results), LOW_SIMILARITY_THRESHOLD)
 	return results, nil
 }
 
-// SearchCombined performs searches across all three vector types and combines results
-func SearchCombined(config QdrantConfig, dirHash, nameHash, contentHash uint64, topK uint64) ([]ComponentGroup, error) {
-	// Search each vector type
-	dirResults, err := SearchByDirHash(config, dirHash, topK)
+func searchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]SearchResult, error) {
+	// Create Qdrant client
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host: config.Host,
+		Port: config.Port,
+	})
 	if err != nil {
-		log.Printf("Warning: Dir hash search failed: %v", err)
-		dirResults = []SearchResult{}
+		return nil, fmt.Errorf("error connecting to Qdrant: %v", err)
 	}
+	defer client.Close()
 
-	nameResults, err := SearchByNameHash(config, nameHash, topK)
+	ctx := context.Background()
+
+	// Check if collection exists
+	exists, err := client.CollectionExists(ctx, config.CollectionName)
 	if err != nil {
-		log.Printf("Warning: Name hash search failed: %v", err)
-		nameResults = []SearchResult{}
+		return nil, fmt.Errorf("error checking collection existence: %v", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("collection %s does not exist", config.CollectionName)
 	}
 
-	contentResults, err := SearchByContentHash(config, contentHash, topK)
+	// Convert hash to dense vector
+	dirVector, err := HexSimhashToVector(dirHash, VectorDim)
 	if err != nil {
-		log.Printf("Warning: Content hash search failed: %v", err)
-		contentResults = []SearchResult{}
+		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	// Combine and deduplicate results
-	allResults := combineResults(dirResults, nameResults, contentResults)
-
-	// Group by component
-	componentGroups := groupByComponent(allResults)
-
-	log.Printf("Combined search found %d total results grouped into %d components", len(allResults), len(componentGroups))
-	return componentGroups, nil
-}
-
-// combineResults combines results from multiple searches and removes duplicates
-// For cosine similarity, higher scores are better
-func combineResults(dirResults, nameResults, contentResults []SearchResult) []SearchResult {
-	resultMap := make(map[uint64]SearchResult)
-
-	// Add all results, keeping the best score for each ID
-	for _, result := range dirResults {
-		if existing, exists := resultMap[result.ID]; !exists || result.Score > existing.Score {
-			resultMap[result.ID] = result
-		}
+	nameVector, err := HexSimhashToVector(nameHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	for _, result := range nameResults {
-		if existing, exists := resultMap[result.ID]; !exists || result.Score > existing.Score {
-			resultMap[result.ID] = result
-		}
+	contentVector, err := HexSimhashToVector(contentHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	for _, result := range contentResults {
-		if existing, exists := resultMap[result.ID]; !exists || result.Score > existing.Score {
-			resultMap[result.ID] = result
-		}
+	log.Printf("Searching collection %s using vector dirs for hash %016x", config.CollectionName, dirHash)
+	log.Printf("Searching collection %s using vector names for hash %016x", config.CollectionName, nameHash)
+	log.Printf("Searching collection %s using vector contents for hash %016x", config.CollectionName, contentHash)
+
+	// Perform the search with score threshold to filter low similarity results
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: config.CollectionName,
+		Prefetch: []*qdrant.PrefetchQuery{
+			{
+				Query: qdrant.NewQuery(dirVector...),
+				Using: qdrant.PtrOf("dirs"),
+			},
+			{
+				Query: qdrant.NewQuery(nameVector...),
+				Using: qdrant.PtrOf("names"),
+			},
+			{
+				Query: qdrant.NewQuery(contentVector...),
+				Using: qdrant.PtrOf("contents"),
+			},
+		},
+		Query:       qdrant.NewQueryFusion(qdrant.Fusion_RRF),
+		Limit:       qdrant.PtrOf(topK),
+		WithPayload: qdrant.NewWithPayload(true),
+		WithVectors: qdrant.NewWithVectors(false),
 	}
 
-	// Convert map to slice and sort by score (descending - higher is better for cosine)
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error performing search: %v", err)
+	}
+
+	// Convert results and filter by quality
 	var results []SearchResult
-	for _, result := range resultMap {
-		results = append(results, result)
-	}
+	for _, point := range searchResp {
+		result := convertPointToResult(point)
 
-	// Sort by score (higher is better for cosine similarity)
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[i].Score < results[j].Score {
-				results[i], results[j] = results[j], results[i]
-			}
+		// Additional quality filtering based on distance
+		// For manhattan distance, lower distances are better
+		if result.Distance <= HIGH_SIMILARITY_THRESHOLD {
+			log.Printf("High similarity match: %s %s (distance: %.3f)", result.Component, result.Version, result.Distance)
+			results = append(results, result)
+		} else if result.Distance <= MEDIUM_SIMILARITY_THRESHOLD {
+			log.Printf("Medium similarity match: %s %s (distance: %.3f)", result.Component, result.Version, result.Distance)
+			results = append(results, result)
+		} else if result.Distance <= LOW_SIMILARITY_THRESHOLD {
+			log.Printf("Low similarity match: %s %s (distance: %.3f)", result.Component, result.Version, result.Distance)
+			results = append(results, result)
+		} else {
+			// Distance is too high (poor match) for manhattan distance
+			log.Printf("Poor match: %s %s (distance: %.3f)", result.Component, result.Version, result.Distance)
+			continue
 		}
 	}
 
-	return results
+	log.Printf("Found %d results with score <= %d", len(results), MEDIUM_SIMILARITY_THRESHOLD)
+	return results, nil
 }
 
 // groupByComponent groups results by component name
@@ -246,7 +301,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 
 		versionResult := VersionResult{
 			Version:  result.Version,
-			Score:    result.Score,
+			Distance: result.Distance,
 			URL:      result.URL,
 			Metadata: result.Metadata,
 		}
@@ -257,7 +312,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 			group.ResultCount++
 
 			// Update best match if this version has a better score
-			if versionResult.Score > group.BestMatch.Score {
+			if versionResult.Distance < group.BestMatch.Distance {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -275,18 +330,14 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 	// Convert to slice and finalize
 	var groupSlice []ComponentGroup
 	for _, group := range groups {
-		// Sort versions within group by score (descending)
-		for i := 0; i < len(group.AllVersions); i++ {
-			for j := i + 1; j < len(group.AllVersions); j++ {
-				if group.AllVersions[i].Score < group.AllVersions[j].Score {
-					group.AllVersions[i], group.AllVersions[j] = group.AllVersions[j], group.AllVersions[i]
-				}
-			}
-		}
+		// Sort versions within group by distance (lower distance is better)
+		sort.Slice(group.AllVersions, func(i, j int) bool {
+			return group.AllVersions[i].Distance < group.AllVersions[j].Distance
+		})
 
 		// Create other versions list (excluding best match)
 		for _, version := range group.AllVersions {
-			if version.Version != group.BestMatch.Version || version.Score != group.BestMatch.Score {
+			if version.Version != group.BestMatch.Version || version.Distance != group.BestMatch.Distance {
 				group.OtherVersions = append(group.OtherVersions, version.Version)
 			}
 		}
@@ -294,14 +345,10 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 		groupSlice = append(groupSlice, *group)
 	}
 
-	// Sort groups by best match score (descending)
-	for i := 0; i < len(groupSlice); i++ {
-		for j := i + 1; j < len(groupSlice); j++ {
-			if groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score {
-				groupSlice[i], groupSlice[j] = groupSlice[j], groupSlice[i]
-			}
-		}
-	}
+	// Sort groups by best match distance (lower distance is better)
+	sort.Slice(groupSlice, func(i, j int) bool {
+		return groupSlice[i].BestMatch.Distance < groupSlice[j].BestMatch.Distance
+	})
 
 	return groupSlice
 }
@@ -309,7 +356,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
 func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	result := SearchResult{
-		Score:    point.Score,
+		Distance: point.Score,
 		ID:       point.Id.GetNum(),
 		Metadata: make(map[string]interface{}),
 	}
@@ -347,14 +394,14 @@ func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	return result
 }
 
-// SearchExact searches for exact hash matches using cosine similarity
-func SearchExact(config QdrantConfig, dirHash, nameHash, contentHash uint64) (*SearchResult, error) {
+// SearchExact searches for exact hash matches using manhattan distance
+func SearchExact(config QdrantConfig, dirHash, nameHash, contentHash string) (*SearchResult, error) {
 	// Try each vector type to find exact matches
 	vectorTypes := []struct {
 		name string
-		hash uint64
+		hash string
 	}{
-		{"contents", contentHash}, // Try content first (most specific)
+		{"contents", contentHash},
 		{"dirs", dirHash},
 		{"names", nameHash},
 	}
@@ -365,9 +412,9 @@ func SearchExact(config QdrantConfig, dirHash, nameHash, contentHash uint64) (*S
 			continue
 		}
 
-		if len(results) > 0 && results[0].Score >= EXACT_MATCH_THRESHOLD {
-			// Found exact match (score >= 0.99 for cosine similarity)
-			log.Printf("Found exact match using %s vector: %s %s (score: %.3f)", vt.name, results[0].Component, results[0].Version, results[0].Score)
+		if len(results) > 0 && results[0].Distance <= EXACT_MATCH_THRESHOLD {
+			// Found exact match (distance <= 0 for manhattan distance means identical vectors)
+			log.Printf("Found exact match using %s vector: %s %s (distance: %.3f)", vt.name, results[0].Component, results[0].Version, results[0].Distance)
 			return &results[0], nil
 		}
 	}
@@ -375,65 +422,86 @@ func SearchExact(config QdrantConfig, dirHash, nameHash, contentHash uint64) (*S
 	return nil, fmt.Errorf("no exact match found")
 }
 
-// SearchProgressive performs progressive search with different similarity thresholds
-func SearchProgressive(config QdrantConfig, dirHash, nameHash, contentHash uint64, topK uint64) ([]ComponentGroup, error) {
-	log.Printf("Starting progressive search for hashes: dir=%016x, name=%016x, content=%016x", dirHash, nameHash, contentHash)
-
-	// Stage 1: Look for exact or near-exact matches (>= 0.99)
-	log.Println("Stage 1: Searching for exact matches...")
-	exactResult, err := SearchExact(config, dirHash, nameHash, contentHash)
-	if err == nil && exactResult != nil {
-		log.Printf("Found exact match: %s %s", exactResult.Component, exactResult.Version)
-		return []ComponentGroup{{
-			Component:     exactResult.Component,
-			Vendor:        exactResult.Vendor,
-			BestMatch:     VersionResult{Version: exactResult.Version, Score: exactResult.Score, URL: exactResult.URL, Metadata: exactResult.Metadata},
-			AllVersions:   []VersionResult{{Version: exactResult.Version, Score: exactResult.Score, URL: exactResult.URL, Metadata: exactResult.Metadata}},
-			OtherVersions: []string{},
-			ResultCount:   1,
-		}}, nil
-	}
-
-	// Stage 2: Look for high similarity matches (>= 0.85)
-	log.Println("Stage 2: Searching for high similarity matches...")
-	results, err := SearchCombined(config, dirHash, nameHash, contentHash, topK)
+func SearchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]ComponentGroup, error) {
+	searchResults, err := searchWithPrefetch(config, dirHash, nameHash, contentHash, topK)
 	if err != nil {
-		return nil, fmt.Errorf("combined search failed: %v", err)
+		log.Printf("Error searching in Qdrant: %v", err)
+		return []ComponentGroup{}, nil
 	}
 
-	// Filter for high-quality results
-	var filteredGroups []ComponentGroup
-	for _, group := range results {
-		if group.BestMatch.Score >= HIGH_SIMILARITY_THRESHOLD {
-			log.Printf("High similarity component found: %s (score: %.3f)", group.Component, group.BestMatch.Score)
-			filteredGroups = append(filteredGroups, group)
-		} else if group.BestMatch.Score >= MEDIUM_SIMILARITY_THRESHOLD {
-			log.Printf("Medium similarity component found: %s (score: %.3f)", group.Component, group.BestMatch.Score)
-			// Only include if we don't have enough high-quality results
-			if len(filteredGroups) < 3 {
-				filteredGroups = append(filteredGroups, group)
-			}
+	// Group by component
+	componentGroups := groupByComponent(searchResults)
+
+	log.Printf("Multi-stage search completed. Found %d results grouped into %d components", len(componentGroups), len(componentGroups))
+	return componentGroups, nil
+}
+
+// SearchMultiStage performs searches across all three vector types and combines results
+func SearchMultiStage(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]ComponentGroup, error) {
+	// Search each vector type
+	dirResults, err := SearchByDirHash(config, dirHash, topK)
+	if err != nil {
+		log.Printf("Warning: Dir hash search failed: %v", err)
+		dirResults = []SearchResult{}
+	}
+
+	nameResults, err := SearchByNameHash(config, nameHash, topK)
+	if err != nil {
+		log.Printf("Warning: Name hash search failed: %v", err)
+		nameResults = []SearchResult{}
+	}
+
+	contentResults, err := SearchByContentHash(config, contentHash, topK)
+	if err != nil {
+		log.Printf("Warning: Content hash search failed: %v", err)
+		contentResults = []SearchResult{}
+	}
+
+	// Combine and deduplicate results
+	allResults := combineResults(dirResults, nameResults, contentResults)
+
+	// Group by component
+	componentGroups := groupByComponent(allResults)
+
+	log.Printf("Combined search found %d total results grouped into %d components", len(allResults), len(componentGroups))
+	return componentGroups, nil
+}
+
+// combineResults combines results from multiple searches and removes duplicates
+// For hamming distance similarity, lower scores are better (we use manhattan distance in qdrant)
+func combineResults(dirResults, nameResults, contentResults []SearchResult) []SearchResult {
+	resultMap := make(map[uint64]SearchResult)
+
+	// Add all results, keeping the best score for each ID
+	// For manhattan distance, LOWER scores are better
+	for _, result := range dirResults {
+		if existing, exists := resultMap[result.ID]; !exists || result.Distance < existing.Distance {
+			resultMap[result.ID] = result
 		}
 	}
 
-	if len(filteredGroups) > 0 {
-		log.Printf("Progressive search completed. Found %d high-quality component groups", len(filteredGroups))
-		return filteredGroups, nil
-	}
-
-	// Stage 3: Fallback to any reasonable matches (>= 0.50)
-	log.Println("Stage 3: Fallback to any reasonable matches...")
-	for _, group := range results {
-		if group.BestMatch.Score >= LOW_SIMILARITY_THRESHOLD {
-			log.Printf("Low similarity component found: %s (score: %.3f)", group.Component, group.BestMatch.Score)
-			filteredGroups = append(filteredGroups, group)
+	for _, result := range nameResults {
+		if existing, exists := resultMap[result.ID]; !exists || result.Distance < existing.Distance {
+			resultMap[result.ID] = result
 		}
 	}
 
-	if len(filteredGroups) > 0 {
-		log.Printf("Progressive search completed. Found %d reasonable component groups", len(filteredGroups))
-		return filteredGroups, nil
+	for _, result := range contentResults {
+		if existing, exists := resultMap[result.ID]; !exists || result.Distance < existing.Distance {
+			resultMap[result.ID] = result
+		}
 	}
 
-	return nil, fmt.Errorf("no similar projects found above minimum similarity threshold (%.2f)", LOW_SIMILARITY_THRESHOLD)
+	// Convert map to slice
+	var results []SearchResult
+	for _, result := range resultMap {
+		results = append(results, result)
+	}
+
+	// Sort by distance (lower is better for hamming distance)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Distance < results[j].Distance
+	})
+
+	return results
 }

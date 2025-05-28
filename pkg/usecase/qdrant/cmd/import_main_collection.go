@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
+	"scanoss.com/hfh-api/pkg/hfh"
 )
 
 const (
@@ -183,15 +184,15 @@ func createCollection(ctx context.Context, client *qdrant.Client) {
 		VectorsConfig: qdrant.NewVectorsConfigMap(map[string]*qdrant.VectorParams{
 			"dirs": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
+				Distance: qdrant.Distance_Manhattan,
 			},
 			"names": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
+				Distance: qdrant.Distance_Manhattan,
 			},
 			"contents": {
 				Size:     VectorDim,
-				Distance: qdrant.Distance_Cosine, // Cosine similarity for dense vectors
+				Distance: qdrant.Distance_Manhattan,
 			},
 		}),
 		// Enable optimizers for better performance
@@ -274,20 +275,6 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-// hashToDenseVector converts a single 64-bit hash into a 64-dimensional dense vector
-// Uses -1.0 for unset bits and 1.0 for set bits, optimized for cosine similarity
-func hashToDenseVector(hash uint64) []float32 {
-	vector := make([]float32, 64)
-	for i := 0; i < 64; i++ {
-		if (hash>>i)&1 == 1 {
-			vector[i] = 1.0 // Bit is set
-		} else {
-			vector[i] = -1.0 // Bit is unset
-		}
-	}
-	return vector
-}
-
 // Insert a batch of records to the single collection with named vectors
 func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) error {
 	var points []*qdrant.PointStruct
@@ -305,29 +292,21 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 		// Skip record[2] as in previous implementation
 		hfhContentsStr := strings.TrimSpace(record[3])
 
-		// Convert hexadecimal strings to uint64
-		hfhDirHash, err := strconv.ParseUint(hfhDirsStr, 16, 64)
+		dirVector, err := hfh.HexSimhashToVector(hfhDirsStr, VectorDim)
 		if err != nil {
 			log.Printf("WARNING: Skipping record with invalid dir hash '%s': %v", hfhDirsStr, err)
 			continue
 		}
-
-		hfhNamesHash, err := strconv.ParseUint(hfhNamesStr, 16, 64)
+		nameVector, err := hfh.HexSimhashToVector(hfhNamesStr, VectorDim)
 		if err != nil {
 			log.Printf("WARNING: Skipping record with invalid names hash '%s': %v", hfhNamesStr, err)
 			continue
 		}
-
-		hfhContentsHash, err := strconv.ParseUint(hfhContentsStr, 16, 64)
+		contentVector, err := hfh.HexSimhashToVector(hfhContentsStr, VectorDim)
 		if err != nil {
 			log.Printf("WARNING: Skipping record with invalid contents hash '%s': %v", hfhContentsStr, err)
 			continue
 		}
-
-		// Create dense vectors for each hash type
-		dirVector := hashToDenseVector(hfhDirHash)
-		nameVector := hashToDenseVector(hfhNamesHash)
-		contentVector := hashToDenseVector(hfhContentsHash)
 
 		// Parse urlHash from record[4]
 		urlHashStr := strings.TrimSpace(record[4])
@@ -340,8 +319,9 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 		size, _ := strconv.ParseInt(record[16], 10, 32)
 		categoryStr := strings.TrimSpace(record[17])
 
-		// pointId should be a hash of the concatenation of url hash string and categoryStr
-		idStringToHash := urlHashStr + categoryStr
+		// pointId should be a hash of all unique identifiers to ensure uniqueness
+		// Include all hash values to prevent overwrites when records have same url+category but different content
+		idStringToHash := urlHashStr + categoryStr + hfhDirsStr + hfhNamesStr + hfhContentsStr
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash)) // Write expects []byte
 		pointId := hasher.Sum64()

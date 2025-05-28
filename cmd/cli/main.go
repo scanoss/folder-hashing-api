@@ -23,7 +23,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"scanoss.com/hfh-api/pkg/hfh"
 	hfh_cli "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli"
@@ -57,6 +56,7 @@ func searchCommand() {
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
 	help := searchFlags.Bool("help", false, "Show help message")
+	withPrefetch := searchFlags.Bool("with-prefetch", false, "Combine search with prefetching")
 
 	searchFlags.Parse(os.Args[2:])
 
@@ -93,26 +93,10 @@ func searchCommand() {
 		log.Fatal("Error: No hash result returned (directory may be empty or all files filtered)")
 	}
 
-	// Parse the hash strings to uint64
-	dirHash, err := strconv.ParseUint(requestRoot.SimHashDirNames, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing directory hash: %v", err)
-	}
-
-	nameHash, err := strconv.ParseUint(requestRoot.SimHashNames, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing names hash: %v", err)
-	}
-
-	contentHash, err := strconv.ParseUint(requestRoot.SimHashContent, 16, 64)
-	if err != nil {
-		log.Fatalf("Error parsing content hash: %v", err)
-	}
-
 	fmt.Printf("\nQuery Hashes:\n")
-	fmt.Printf("  Directory Hash:   %016x\n", dirHash)
-	fmt.Printf("  Names Hash:       %016x\n", nameHash)
-	fmt.Printf("  Contents Hash:    %016x\n", contentHash)
+	fmt.Printf("  Directory Hash:   %016x\n", requestRoot.SimHashDirNames)
+	fmt.Printf("  Names Hash:       %016x\n", requestRoot.SimHashNames)
+	fmt.Printf("  Contents Hash:    %016x\n", requestRoot.SimHashContent)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
@@ -120,18 +104,13 @@ func searchCommand() {
 	// Search for similar projects in Qdrant using the new simplified approach
 	config := hfh.NewQdrantConfig(*host, *port, "url_collection")
 
-	// Try exact match first
-	fmt.Println("Searching for exact matches...")
-	exactMatch, err := hfh.SearchExact(config, dirHash, nameHash, contentHash)
-	if err == nil && exactMatch != nil {
-		fmt.Printf("🎯 Found exact match: %s %s\n", exactMatch.Component, exactMatch.Version)
-		displaySingleResult(*exactMatch)
-		return
+	var componentGroups []hfh.ComponentGroup
+	if *withPrefetch {
+		componentGroups, err = hfh.SearchWithPrefetch(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
+	} else {
+		componentGroups, err = hfh.SearchMultiStage(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
 	}
 
-	// No exact match found, perform combined similarity search
-	fmt.Println("No exact match found. Searching for similar projects...")
-	componentGroups, err := hfh.SearchCombined(config, dirHash, nameHash, contentHash, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -220,73 +199,6 @@ func repeatString(s string, count int) string {
 	return result
 }
 
-// displaySingleResult displays a single exact match result
-func displaySingleResult(result hfh.SearchResult) {
-	fmt.Printf("\n🎯 EXACT MATCH FOUND:\n")
-	fmt.Println(repeatString("=", 80))
-
-	fmt.Printf("   Vendor: %s\n", result.Vendor)
-	fmt.Printf("   Component: %s\n", result.Component)
-	fmt.Printf("   Version: %s\n", result.Version)
-	fmt.Printf("   Score: %.4f (Perfect Match)\n", result.Score)
-
-	if result.URL != "" {
-		fmt.Printf("   URL: %s\n", result.URL)
-	}
-
-	// Show additional metadata if available
-	if license, ok := result.Metadata["license"]; ok && license != "" {
-		fmt.Printf("   License: %v\n", license)
-	}
-	if totalFiles, ok := result.Metadata["total_files"]; ok {
-		fmt.Printf("   Total Files: %v\n", totalFiles)
-	}
-	if size, ok := result.Metadata["size"]; ok {
-		fmt.Printf("   Size: %v\n", size)
-	}
-	if releaseDate, ok := result.Metadata["release_date"]; ok && releaseDate != "" {
-		fmt.Printf("   Release Date: %v\n", releaseDate)
-	}
-}
-
-// displayTraditionalResults displays traditional search results
-func displayTraditionalResults(results []hfh.SearchResult) {
-	fmt.Printf("\nFound %d similar projects:\n", len(results))
-	fmt.Println(repeatString("=", 80))
-
-	for i, result := range results {
-		fmt.Printf("\n%d. Match\n", i+1)
-
-		// Display similarity score (if available)
-		if result.Score > 0 {
-			fmt.Printf("   Similarity Score: %.4f\n", result.Score)
-		}
-
-		fmt.Printf("   Vendor: %s\n", result.Vendor)
-		fmt.Printf("   Component: %s\n", result.Component)
-		fmt.Printf("   Version: %s\n", result.Version)
-
-		if result.URL != "" {
-			fmt.Printf("   URL: %s\n", result.URL)
-		}
-
-		// Show some additional metadata if available
-		if license, ok := result.Metadata["license"]; ok && license != "" {
-			fmt.Printf("   License: %v\n", license)
-		}
-		if totalFiles, ok := result.Metadata["total_files"]; ok {
-			fmt.Printf("   Total Files: %v\n", totalFiles)
-		}
-		if size, ok := result.Metadata["size"]; ok {
-			fmt.Printf("   Size: %v\n", size)
-		}
-
-		if i < len(results)-1 {
-			fmt.Println(repeatString("-", 40))
-		}
-	}
-}
-
 // displayGroupedResults displays grouped search results
 func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	fmt.Printf("\nFound %d component group(s):\n", len(componentGroups))
@@ -312,7 +224,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
 		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
-		fmt.Printf("     Similarity Score: %.4f\n", group.BestMatch.Score)
+		fmt.Printf("     Distance: %.4f\n", group.BestMatch.Distance)
 
 		if group.BestMatch.URL != "" {
 			fmt.Printf("     URL: %s\n", group.BestMatch.URL)
@@ -341,7 +253,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 				// Find the detailed version info
 				for _, versionDetail := range group.AllVersions {
 					if versionDetail.Version == version {
-						fmt.Printf(" (Score: %.4f)", versionDetail.Score)
+						fmt.Printf(" (Distance: %.4f)", versionDetail.Distance)
 						break
 					}
 				}
@@ -360,21 +272,21 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 
 		// Quality indicators
 		fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
-		if group.BestMatch.Score > 0.8 {
+		if group.BestMatch.Distance <= hfh.EXACT_MATCH_THRESHOLD {
 			fmt.Printf("     ✅ Very High Similarity Match\n")
-		} else if group.BestMatch.Score > 0.6 {
+		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
 			fmt.Printf("     ✅ High Similarity Match\n")
-		} else if group.BestMatch.Score > 0.4 {
+		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD {
 			fmt.Printf("     ⚠️  Medium Similarity Match\n")
 		} else {
 			fmt.Printf("     ⚠️  Low Similarity Match\n")
 		}
 
-		if group.BestMatch.Score == 1.0 {
+		if group.BestMatch.Distance <= hfh.EXACT_MATCH_THRESHOLD {
 			fmt.Printf("     🎯 Perfect Match\n")
-		} else if group.BestMatch.Score > 0.9 {
+		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
 			fmt.Printf("     🎯 Very Similar Structure\n")
-		} else if group.BestMatch.Score > 0.7 {
+		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD {
 			fmt.Printf("     🔍 Similar Structure\n")
 		} else {
 			fmt.Printf("     🔍 Loosely Similar\n")
@@ -407,7 +319,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
 		totalSupportingResults += group.ResultCount
-		if group.BestMatch.Score > 0.6 {
+		if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
 			highScoreCount++
 		}
 		if group.ResultCount > 1 {
@@ -422,10 +334,10 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 
 	if len(componentGroups) > 0 {
 		bestMatch := componentGroups[0]
-		fmt.Printf("• Best overall match: %s %s (%.4f similarity)\n",
-			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Score)
+		fmt.Printf("• Best overall match: %s %s (%.4f distance)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Distance)
 
-		if bestMatch.BestMatch.Score > 0.8 && bestMatch.ResultCount > 2 {
+		if bestMatch.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD && bestMatch.ResultCount > 2 {
 			fmt.Printf("• 🎯 Strong recommendation: High similarity with multiple supporting results for %s\n", bestMatch.Component)
 		}
 	}
