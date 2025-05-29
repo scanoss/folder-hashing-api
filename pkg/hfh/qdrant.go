@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/qdrant/go-client/qdrant"
 )
@@ -18,7 +21,26 @@ const (
 	HIGH_SIMILARITY_THRESHOLD   = 4  // 1-4 bit differences
 	MEDIUM_SIMILARITY_THRESHOLD = 12 // 5-12 bit differences
 	LOW_SIMILARITY_THRESHOLD    = 20 // 13-20 bit differences
+
+	// Cache settings
+	CACHE_TTL_MINUTES = 30   // Cache exact matches for 30 minutes
+	MAX_CACHE_SIZE    = 1000 // Maximum cache entries
 )
+
+// Global exact match cache for performance optimization
+type exactMatchCache struct {
+	mu    sync.RWMutex
+	cache map[string]cacheEntry
+}
+
+type cacheEntry struct {
+	result    *SearchResult
+	timestamp time.Time
+}
+
+var globalExactCache = &exactMatchCache{
+	cache: make(map[string]cacheEntry),
+}
 
 // QdrantConfig holds Qdrant connection configuration for single collection approach
 type QdrantConfig struct {
@@ -119,7 +141,7 @@ func SearchByContentHash(config QdrantConfig, contentHash string, topK uint64) (
 	return searchByHash(config, "contents", contentHash, topK)
 }
 
-// searchByHash performs a similarity search using the specified vector type with Manhattan distance
+// searchByHash performs exact matching first, then similarity search using the specified vector type
 func searchByHash(config QdrantConfig, vectorName string, hash string, topK uint64) ([]SearchResult, error) {
 	// Create Qdrant client
 	client, err := qdrant.NewClient(&qdrant.Config{
@@ -142,21 +164,263 @@ func searchByHash(config QdrantConfig, vectorName string, hash string, topK uint
 		return nil, fmt.Errorf("collection %s does not exist", config.CollectionName)
 	}
 
+	// First, try exact payload matching to catch perfect matches
+	exactResults, err := searchExactByPayload(client, ctx, config.CollectionName, vectorName, hash)
+	if err != nil {
+		log.Printf("Warning: exact payload search failed: %v", err)
+	} else if len(exactResults) > 0 {
+		log.Printf("Found %d exact matches using payload filter for %s hash %s", len(exactResults), vectorName, hash)
+		// If we found exact matches, return them (they have distance 0)
+		if len(exactResults) >= int(topK) {
+			return exactResults[:topK], nil
+		}
+		// If we found some exact matches but need more, combine with similarity search
+		remainingK := topK - uint64(len(exactResults))
+		similarResults, err := performSimilaritySearch(client, ctx, config.CollectionName, vectorName, hash, remainingK, exactResults)
+		if err != nil {
+			log.Printf("Warning: similarity search failed: %v", err)
+			return exactResults, nil
+		}
+		// Combine results, exact matches first
+		allResults := append(exactResults, similarResults...)
+		if len(allResults) > int(topK) {
+			return allResults[:topK], nil
+		}
+		return allResults, nil
+	}
+
+	// No exact matches found, proceed with similarity search
+	return performSimilaritySearch(client, ctx, config.CollectionName, vectorName, hash, topK, nil)
+}
+
+// checkExactCache checks if exact match is cached
+func (cache *exactMatchCache) get(vectorName, hash string) (*SearchResult, bool) {
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+
+	key := vectorName + ":" + hash
+	entry, exists := cache.cache[key]
+	if !exists {
+		return nil, false
+	}
+
+	// Check if cache entry is still valid
+	if time.Since(entry.timestamp).Minutes() > CACHE_TTL_MINUTES {
+		return nil, false
+	}
+
+	return entry.result, true
+}
+
+// putExactCache stores exact match in cache
+func (cache *exactMatchCache) put(vectorName, hash string, result *SearchResult) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	// Clean cache if too large
+	if len(cache.cache) >= MAX_CACHE_SIZE {
+		// Remove oldest entries (simple cleanup)
+		oldest := time.Now()
+		oldestKey := ""
+		for k, v := range cache.cache {
+			if v.timestamp.Before(oldest) {
+				oldest = v.timestamp
+				oldestKey = k
+			}
+		}
+		if oldestKey != "" {
+			delete(cache.cache, oldestKey)
+		}
+	}
+
+	key := vectorName + ":" + hash
+	cache.cache[key] = cacheEntry{
+		result:    result,
+		timestamp: time.Now(),
+	}
+}
+
+// searchExactByPayload finds exact matches using payload filtering with caching
+func searchExactByPayload(client *qdrant.Client, ctx context.Context, collectionName, vectorName, hash string) ([]SearchResult, error) {
+	// Check cache first for performance
+	if cachedResult, found := globalExactCache.get(vectorName, hash); found {
+		log.Printf("Cache hit for exact match: %s %s", vectorName, hash)
+		return []SearchResult{*cachedResult}, nil
+	}
+	// Determine the payload field name based on vector name
+	var payloadField string
+	switch vectorName {
+	case "dirs":
+		payloadField = "hfh_dirs_hash"
+	case "names":
+		payloadField = "hfh_names_hash"
+	case "contents":
+		payloadField = "hfh_contents_hash"
+	default:
+		return nil, fmt.Errorf("unknown vector name: %s", vectorName)
+	}
+
+	// Filter for exact hash match
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: payloadField,
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: hash,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Also filter out corrupted ffffffffffffffff hashes
+	filter.MustNot = []*qdrant.Condition{
+		{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: payloadField,
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Text{
+							Text: "ffffffffffffffff",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Use scroll to find exact matches
+	scrollResp, err := client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: collectionName,
+		Filter:         filter,
+		Limit:          qdrant.PtrOf(uint32(50)), // reasonable limit for exact matches
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error in exact payload search: %v", err)
+	}
+
+	var results []SearchResult
+	for _, point := range scrollResp {
+		result := SearchResult{
+			Distance: 0.0, // Exact match
+			ID:       point.Id.GetNum(),
+			Metadata: make(map[string]interface{}),
+		}
+
+		// Extract payload fields
+		if point.Payload != nil {
+			if val, exists := point.Payload["vendor"]; exists {
+				result.Vendor = val.GetStringValue()
+			}
+			if val, exists := point.Payload["component"]; exists {
+				result.Component = val.GetStringValue()
+			}
+			if val, exists := point.Payload["version"]; exists {
+				result.Version = val.GetStringValue()
+			}
+			if val, exists := point.Payload["url"]; exists {
+				result.URL = val.GetStringValue()
+			}
+
+			// Store all payload for access to other fields
+			for key, value := range point.Payload {
+				switch {
+				case value.GetStringValue() != "":
+					result.Metadata[key] = value.GetStringValue()
+				case value.GetIntegerValue() != 0:
+					result.Metadata[key] = value.GetIntegerValue()
+				case value.GetDoubleValue() != 0:
+					result.Metadata[key] = value.GetDoubleValue()
+				case value.GetBoolValue():
+					result.Metadata[key] = value.GetBoolValue()
+				}
+			}
+		}
+
+		results = append(results, result)
+
+		// Cache the first exact match for future performance
+		if len(results) == 1 {
+			globalExactCache.put(vectorName, hash, &result)
+		}
+	}
+
+	return results, nil
+}
+
+// performSimilaritySearch performs vector similarity search, excluding already found results
+func performSimilaritySearch(client *qdrant.Client, ctx context.Context, collectionName, vectorName, hash string, topK uint64, excludeResults []SearchResult) ([]SearchResult, error) {
 	// Convert hash to dense vector
 	queryVector, err := HexSimhashToVector(hash, VectorDim)
 	if err != nil {
 		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	log.Printf("Searching collection %s using vector %s for hash %016x", config.CollectionName, vectorName, hash)
+	log.Printf("Performing similarity search for %s vector with hash %s", vectorName, hash)
+
+	// Build filter to exclude ffffffffffffffff and already found results
+	var filter *qdrant.Filter
+	var mustNotConditions []*qdrant.Condition
+
+	// Always exclude corrupted ffffffffffffffff hashes
+	var payloadField string
+	switch vectorName {
+	case "dirs":
+		payloadField = "hfh_dirs_hash"
+	case "names":
+		payloadField = "hfh_names_hash"
+	case "contents":
+		payloadField = "hfh_contents_hash"
+	default:
+		return nil, fmt.Errorf("unknown vector name: %s", vectorName)
+	}
+
+	mustNotConditions = append(mustNotConditions, &qdrant.Condition{
+		ConditionOneOf: &qdrant.Condition_Field{
+			Field: &qdrant.FieldCondition{
+				Key: payloadField,
+				Match: &qdrant.Match{
+					MatchValue: &qdrant.Match_Text{
+						Text: "ffffffffffffffff",
+					},
+				},
+			},
+		},
+	})
+
+	// Exclude already found results if any
+	if excludeResults != nil && len(excludeResults) > 0 {
+		for _, excludeResult := range excludeResults {
+			mustNotConditions = append(mustNotConditions, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: []*qdrant.PointId{qdrant.NewIDNum(excludeResult.ID)},
+					},
+				},
+			})
+		}
+	}
+
+	if len(mustNotConditions) > 0 {
+		filter = &qdrant.Filter{
+			MustNot: mustNotConditions,
+		}
+	}
 
 	// Perform the search with score threshold to filter low similarity results
-	// For Manhattan distance, we want results BELOW the threshold (lower scores = better matches)
 	queryReq := &qdrant.QueryPoints{
-		CollectionName: config.CollectionName,
+		CollectionName: collectionName,
 		Query:          qdrant.NewQuery(queryVector...),
 		Using:          &vectorName,
 		Limit:          qdrant.PtrOf(topK),
+		Filter:         filter,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 	}
@@ -184,8 +448,759 @@ func searchByHash(config QdrantConfig, vectorName string, hash string, topK uint
 		}
 	}
 
-	log.Printf("Found %d results with distance <= %d", len(results), LOW_SIMILARITY_THRESHOLD)
+	log.Printf("Found %d similarity results with distance <= %d", len(results), LOW_SIMILARITY_THRESHOLD)
 	return results, nil
+}
+
+// searchStage1Names performs broad name-based search to find initial candidates
+func searchStage1Names(config QdrantConfig, nameHash string, candidateLimit uint64) ([]SearchResult, error) {
+	log.Printf("Stage 1: Names search for hash %s", nameHash)
+
+	client := getQdrantClient(config)
+	if client == nil {
+		return nil, fmt.Errorf("failed to create Qdrant client")
+	}
+	defer client.Close()
+	ctx := context.Background()
+
+	// First try exact match
+	exactResults, err := searchExactByPayload(client, ctx, config.CollectionName, "names", nameHash)
+	if err != nil {
+		log.Printf("Stage 1: Exact search failed: %v", err)
+	} else if len(exactResults) > 0 {
+		log.Printf("Stage 1: Found %d exact matches, including in candidates", len(exactResults))
+	}
+
+	// Get similarity candidates with larger limit for broad matching
+	similarResults, err := performSimilaritySearch(client, ctx, config.CollectionName, "names", nameHash, candidateLimit, exactResults)
+	if err != nil {
+		log.Printf("Stage 1: Similarity search failed: %v", err)
+		if len(exactResults) > 0 {
+			return exactResults, nil
+		}
+		return nil, err
+	}
+
+	// Combine exact and similar results
+	allResults := append(exactResults, similarResults...)
+
+	// Calculate adaptive threshold based on result distribution
+	threshold := calculateAdaptiveThreshold(allResults, "Stage 1 Names")
+
+	// Filter by adaptive threshold
+	var filteredResults []SearchResult
+	for _, result := range allResults {
+		if result.Distance <= threshold {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	log.Printf("Stage 1: Applied adaptive threshold %.1f, kept %d/%d candidates",
+		threshold, len(filteredResults), len(allResults))
+
+	return filteredResults, nil
+}
+
+// searchStage2Dirs filters stage 1 candidates using directory structure matching
+func searchStage2Dirs(config QdrantConfig, dirHash string, stage1Candidates []SearchResult) ([]SearchResult, error) {
+	log.Printf("Stage 2: Directory filtering for hash %s on %d candidates", dirHash, len(stage1Candidates))
+
+	if len(stage1Candidates) == 0 {
+		return stage1Candidates, nil
+	}
+
+	// Extract candidate IDs for filtering
+	candidateIDs := make([]*qdrant.PointId, len(stage1Candidates))
+	for i, candidate := range stage1Candidates {
+		candidateIDs[i] = qdrant.NewIDNum(candidate.ID)
+	}
+
+	// Search only among stage 1 candidates using dir hash
+	client := getQdrantClient(config)
+	if client == nil {
+		return nil, fmt.Errorf("failed to create Qdrant client")
+	}
+	defer client.Close()
+	ctx := context.Background()
+
+	// Convert dir hash to vector
+	queryVector, err := HexSimhashToVector(dirHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting dir hash to vector: %v", err)
+	}
+
+	// Build filter to search only among candidates
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: candidateIDs,
+					},
+				},
+			},
+		},
+		MustNot: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "hfh_dirs_hash",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: "ffffffffffffffff",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Search with dir vectors among candidates
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: config.CollectionName,
+		Query:          qdrant.NewQuery(queryVector...),
+		Using:          qdrant.PtrOf("dirs"),
+		Limit:          qdrant.PtrOf(uint64(len(stage1Candidates))), // Get all candidates
+		Filter:         filter,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	}
+
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error in stage 2 dir search: %v", err)
+	}
+
+	// Convert results
+	var dirResults []SearchResult
+	for _, point := range searchResp {
+		result := convertPointToResult(point)
+		dirResults = append(dirResults, result)
+	}
+
+	// Calculate adaptive threshold for dir matching
+	threshold := calculateAdaptiveThreshold(dirResults, "Stage 2 Dirs")
+
+	// Filter by adaptive threshold and merge with stage 1 scores
+	var filteredResults []SearchResult
+	stage1Map := make(map[uint64]SearchResult)
+	for _, candidate := range stage1Candidates {
+		stage1Map[candidate.ID] = candidate
+	}
+
+	for _, dirResult := range dirResults {
+		if dirResult.Distance <= threshold {
+			// Combine scores from stage 1 (names) and stage 2 (dirs)
+			if stage1Result, exists := stage1Map[dirResult.ID]; exists {
+				// Use weighted average: 60% names, 40% dirs
+				combinedScore := (stage1Result.Distance * 0.6) + (dirResult.Distance * 0.4)
+				dirResult.Distance = combinedScore
+				filteredResults = append(filteredResults, dirResult)
+			}
+		}
+	}
+
+	// Sort by combined score
+	sort.Slice(filteredResults, func(i, j int) bool {
+		return filteredResults[i].Distance < filteredResults[j].Distance
+	})
+
+	log.Printf("Stage 2: Applied dir threshold %.1f, kept %d/%d candidates",
+		threshold, len(filteredResults), len(dirResults))
+
+	return filteredResults, nil
+}
+
+// searchStage3Contents performs final tie-breaking using content hashes
+func searchStage3Contents(config QdrantConfig, contentHash string, stage2Candidates []SearchResult, topK uint64) ([]SearchResult, error) {
+	log.Printf("Stage 3: Content tie-breaking for hash %s on %d candidates", contentHash, len(stage2Candidates))
+
+	if len(stage2Candidates) == 0 {
+		return stage2Candidates, nil
+	}
+
+	// Extract candidate IDs for filtering
+	candidateIDs := make([]*qdrant.PointId, len(stage2Candidates))
+	for i, candidate := range stage2Candidates {
+		candidateIDs[i] = qdrant.NewIDNum(candidate.ID)
+	}
+
+	// Search only among stage 2 candidates using content hash
+	client := getQdrantClient(config)
+	if client == nil {
+		return nil, fmt.Errorf("failed to create Qdrant client")
+	}
+	defer client.Close()
+	ctx := context.Background()
+
+	// Convert content hash to vector
+	queryVector, err := HexSimhashToVector(contentHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting content hash to vector: %v", err)
+	}
+
+	// Build filter to search only among candidates
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: candidateIDs,
+					},
+				},
+			},
+		},
+		MustNot: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "hfh_contents_hash",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: "ffffffffffffffff",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Search with content vectors among candidates
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: config.CollectionName,
+		Query:          qdrant.NewQuery(queryVector...),
+		Using:          qdrant.PtrOf("contents"),
+		Limit:          qdrant.PtrOf(uint64(len(stage2Candidates))), // Get all candidates
+		Filter:         filter,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	}
+
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error in stage 3 content search: %v", err)
+	}
+
+	// Convert results and combine with previous stage scores
+	stage2Map := make(map[uint64]SearchResult)
+	for _, candidate := range stage2Candidates {
+		stage2Map[candidate.ID] = candidate
+	}
+
+	var finalResults []SearchResult
+	for _, point := range searchResp {
+		contentResult := convertPointToResult(point)
+
+		if stage2Result, exists := stage2Map[contentResult.ID]; exists {
+			// Combine scores: 40% from stages 1+2, 60% from content (tie-breaker)
+			finalScore := (stage2Result.Distance * 0.4) + (contentResult.Distance * 0.6)
+			contentResult.Distance = finalScore
+			finalResults = append(finalResults, contentResult)
+		}
+	}
+
+	// Sort by final combined score
+	sort.Slice(finalResults, func(i, j int) bool {
+		return finalResults[i].Distance < finalResults[j].Distance
+	})
+
+	// Return top K results
+	if len(finalResults) > int(topK) {
+		finalResults = finalResults[:topK]
+	}
+
+	log.Printf("Stage 3: Final ranking complete, returning top %d results", len(finalResults))
+
+	return finalResults, nil
+}
+
+// calculateAdaptiveThreshold calculates dynamic threshold based on result distribution
+func calculateAdaptiveThreshold(results []SearchResult, stageName string) float32 {
+	if len(results) == 0 {
+		return HIGH_SIMILARITY_THRESHOLD
+	}
+
+	// Sort by distance to analyze distribution
+	sortedResults := make([]SearchResult, len(results))
+	copy(sortedResults, results)
+	sort.Slice(sortedResults, func(i, j int) bool {
+		return sortedResults[i].Distance < sortedResults[j].Distance
+	})
+
+	// Calculate statistics
+	minDist := sortedResults[0].Distance
+	maxDist := sortedResults[len(sortedResults)-1].Distance
+
+	// Find median distance
+	medianDist := sortedResults[len(sortedResults)/2].Distance
+
+	// Calculate adaptive threshold
+	var threshold float32
+
+	if minDist == 0 {
+		// Have exact matches, be more selective
+		threshold = minDist + 2 // Allow up to 2 bit differences from exact matches
+	} else if medianDist <= HIGH_SIMILARITY_THRESHOLD {
+		// Good quality results, use median + small buffer
+		threshold = medianDist + 3
+	} else if medianDist <= MEDIUM_SIMILARITY_THRESHOLD {
+		// Medium quality, use median + moderate buffer
+		threshold = medianDist + 5
+	} else {
+		// Lower quality, be more permissive but cap at reasonable limit
+		threshold = float32(math.Min(float64(medianDist+8), float64(LOW_SIMILARITY_THRESHOLD)))
+	}
+
+	log.Printf("%s adaptive threshold: min=%.1f, median=%.1f, max=%.1f → threshold=%.1f",
+		stageName, minDist, medianDist, maxDist, threshold)
+
+	return threshold
+}
+
+// getQdrantClient creates a new Qdrant client (helper function)
+func getQdrantClient(config QdrantConfig) *qdrant.Client {
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host: config.Host,
+		Port: config.Port,
+	})
+	if err != nil {
+		log.Printf("Error creating Qdrant client: %v", err)
+		return nil
+	}
+	return client
+}
+
+// searchStage1NamesOptimized performs parallel exact + similarity search with connection reuse
+func searchStage1NamesOptimized(client *qdrant.Client, ctx context.Context, config QdrantConfig, nameHash string, topK uint64) ([]SearchResult, bool, error) {
+	log.Printf("Stage 1 (Optimized): Names search for hash %s", nameHash)
+
+	// Use channels for parallel exact and similarity searches
+	type searchResult struct {
+		results []SearchResult
+		isExact bool
+		err     error
+	}
+
+	resultChan := make(chan searchResult, 2)
+
+	// Launch exact search in parallel
+	go func() {
+		exactResults, err := searchExactByPayload(client, ctx, config.CollectionName, "names", nameHash)
+		resultChan <- searchResult{results: exactResults, isExact: true, err: err}
+	}()
+
+	// Launch similarity search in parallel with adaptive limit
+	go func() {
+		adaptiveLimit := topK * 5 // Start with smaller limit for better performance
+		if topK <= 3 {
+			adaptiveLimit = topK * 10 // Increase for small topK
+		}
+
+		similarResults, err := performSimilaritySearchOptimized(client, ctx, config.CollectionName, "names", nameHash, adaptiveLimit, nil)
+		resultChan <- searchResult{results: similarResults, isExact: false, err: err}
+	}()
+
+	// Collect results from both searches
+	var exactResults, similarResults []SearchResult
+	var exactErr, similarErr error
+	hasExactMatch := false
+
+	for i := 0; i < 2; i++ {
+		result := <-resultChan
+		if result.isExact {
+			exactResults = result.results
+			exactErr = result.err
+			if len(exactResults) > 0 {
+				hasExactMatch = true
+			}
+		} else {
+			similarResults = result.results
+			similarErr = result.err
+		}
+	}
+
+	// Handle errors
+	if exactErr != nil {
+		log.Printf("Stage 1: Exact search failed: %v", exactErr)
+	}
+	if similarErr != nil {
+		log.Printf("Stage 1: Similarity search failed: %v", similarErr)
+		if len(exactResults) > 0 {
+			return exactResults, hasExactMatch, nil
+		}
+		return nil, false, similarErr
+	}
+
+	// Combine exact and similar results
+	allResults := append(exactResults, similarResults...)
+
+	// Apply adaptive threshold with performance-aware limits
+	threshold := calculateAdaptiveThresholdOptimized(allResults, "Stage 1 Names", hasExactMatch)
+
+	// Filter by adaptive threshold
+	var filteredResults []SearchResult
+	for _, result := range allResults {
+		if result.Distance <= threshold {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	// Limit results for better stage 2 performance
+	maxCandidates := int(topK * 3) // Cap candidates to improve performance
+	if len(filteredResults) > maxCandidates {
+		// Sort by distance and take best candidates
+		sort.Slice(filteredResults, func(i, j int) bool {
+			return filteredResults[i].Distance < filteredResults[j].Distance
+		})
+		filteredResults = filteredResults[:maxCandidates]
+	}
+
+	log.Printf("Stage 1 (Optimized): Applied threshold %.1f, kept %d/%d candidates",
+		threshold, len(filteredResults), len(allResults))
+
+	return filteredResults, hasExactMatch, nil
+}
+
+// performSimilaritySearchOptimized performs optimized vector similarity search
+func performSimilaritySearchOptimized(client *qdrant.Client, ctx context.Context, collectionName, vectorName, hash string, topK uint64, excludeResults []SearchResult) ([]SearchResult, error) {
+	// Convert hash to dense vector
+	queryVector, err := HexSimhashToVector(hash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting hash to vector: %v", err)
+	}
+
+	// Build optimized filter
+	filter := buildOptimizedFilter(vectorName, excludeResults)
+
+	// Perform search with aggressive optimization parameters
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(queryVector...),
+		Using:          &vectorName,
+		Limit:          qdrant.PtrOf(topK),
+		Filter:         filter,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+		// Aggressive search optimization
+		ScoreThreshold: qdrant.PtrOf(float32(HIGH_SIMILARITY_THRESHOLD)), // Very early filtering
+		Params: &qdrant.SearchParams{
+			HnswEf: qdrant.PtrOf(uint64(64)), // Reduced for speed
+			Exact:  qdrant.PtrOf(false),      // Use approximate search
+		},
+	}
+
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error performing optimized search: %v", err)
+	}
+
+	// Convert results with quality filtering
+	var results []SearchResult
+	for _, point := range searchResp {
+		result := convertPointToResult(point)
+
+		// Apply quality filtering
+		if result.Distance <= LOW_SIMILARITY_THRESHOLD {
+			results = append(results, result)
+		}
+	}
+
+	return results, nil
+}
+
+// buildOptimizedFilter creates an optimized filter for similarity search
+func buildOptimizedFilter(vectorName string, excludeResults []SearchResult) *qdrant.Filter {
+	var mustNotConditions []*qdrant.Condition
+
+	// Always exclude corrupted ffffffffffffffff hashes
+	var payloadField string
+	switch vectorName {
+	case "dirs":
+		payloadField = "hfh_dirs_hash"
+	case "names":
+		payloadField = "hfh_names_hash"
+	case "contents":
+		payloadField = "hfh_contents_hash"
+	default:
+		return nil
+	}
+
+	mustNotConditions = append(mustNotConditions, &qdrant.Condition{
+		ConditionOneOf: &qdrant.Condition_Field{
+			Field: &qdrant.FieldCondition{
+				Key: payloadField,
+				Match: &qdrant.Match{
+					MatchValue: &qdrant.Match_Text{
+						Text: "ffffffffffffffff",
+					},
+				},
+			},
+		},
+	})
+
+	// Exclude already found results (limit to avoid huge filters)
+	if excludeResults != nil && len(excludeResults) > 0 {
+		maxExclusions := 100 // Limit exclusions for performance
+		for i, excludeResult := range excludeResults {
+			if i >= maxExclusions {
+				break
+			}
+			mustNotConditions = append(mustNotConditions, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: []*qdrant.PointId{qdrant.NewIDNum(excludeResult.ID)},
+					},
+				},
+			})
+		}
+	}
+
+	return &qdrant.Filter{
+		MustNot: mustNotConditions,
+	}
+}
+
+// searchStage2DirsOptimized performs optimized directory filtering
+func searchStage2DirsOptimized(client *qdrant.Client, ctx context.Context, config QdrantConfig, dirHash string, stage1Candidates []SearchResult) ([]SearchResult, error) {
+	log.Printf("Stage 2 (Optimized): Directory filtering for hash %s on %d candidates", dirHash, len(stage1Candidates))
+
+	if len(stage1Candidates) == 0 {
+		return stage1Candidates, nil
+	}
+
+	// For small candidate sets, be more permissive
+	if len(stage1Candidates) <= 5 {
+		log.Printf("Stage 2: Small candidate set, skipping dir filtering for performance")
+		return stage1Candidates, nil
+	}
+
+	// Build candidate ID filter (batch efficiently)
+	candidateIDs := make([]*qdrant.PointId, len(stage1Candidates))
+	for i, candidate := range stage1Candidates {
+		candidateIDs[i] = qdrant.NewIDNum(candidate.ID)
+	}
+
+	// Convert dir hash to vector
+	queryVector, err := HexSimhashToVector(dirHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting dir hash to vector: %v", err)
+	}
+
+	// Optimized filter for candidates only
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: candidateIDs,
+					},
+				},
+			},
+		},
+		MustNot: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "hfh_dirs_hash",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: "ffffffffffffffff",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Optimized search with score threshold
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: config.CollectionName,
+		Query:          qdrant.NewQuery(queryVector...),
+		Using:          qdrant.PtrOf("dirs"),
+		Limit:          qdrant.PtrOf(uint64(len(stage1Candidates))),
+		Filter:         filter,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+		ScoreThreshold: qdrant.PtrOf(float32(MEDIUM_SIMILARITY_THRESHOLD)), // Early filtering
+	}
+
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error in optimized stage 2 dir search: %v", err)
+	}
+
+	// Process results with optimized scoring
+	stage1Map := make(map[uint64]SearchResult)
+	for _, candidate := range stage1Candidates {
+		stage1Map[candidate.ID] = candidate
+	}
+
+	var filteredResults []SearchResult
+	for _, point := range searchResp {
+		dirResult := convertPointToResult(point)
+
+		if stage1Result, exists := stage1Map[dirResult.ID]; exists {
+			// Optimized scoring: 70% names, 30% dirs for better performance
+			combinedScore := (stage1Result.Distance * 0.7) + (dirResult.Distance * 0.3)
+			dirResult.Distance = combinedScore
+			filteredResults = append(filteredResults, dirResult)
+		}
+	}
+
+	// Sort by combined score
+	sort.Slice(filteredResults, func(i, j int) bool {
+		return filteredResults[i].Distance < filteredResults[j].Distance
+	})
+
+	log.Printf("Stage 2 (Optimized): Kept %d/%d candidates after dir filtering",
+		len(filteredResults), len(stage1Candidates))
+
+	return filteredResults, nil
+}
+
+// searchStage3ContentsOptimized performs optimized final content tie-breaking
+func searchStage3ContentsOptimized(client *qdrant.Client, ctx context.Context, config QdrantConfig, contentHash string, stage2Candidates []SearchResult, topK uint64) ([]SearchResult, error) {
+	log.Printf("Stage 3 (Optimized): Content tie-breaking for hash %s on %d candidates", contentHash, len(stage2Candidates))
+
+	if len(stage2Candidates) == 0 {
+		return stage2Candidates, nil
+	}
+
+	// For very small sets or if we already have topK, skip content filtering for performance
+	if len(stage2Candidates) <= int(topK) {
+		log.Printf("Stage 3: Candidate count <= topK, returning stage 2 results")
+		if len(stage2Candidates) > int(topK) {
+			return stage2Candidates[:topK], nil
+		}
+		return stage2Candidates, nil
+	}
+
+	// Build candidate ID filter
+	candidateIDs := make([]*qdrant.PointId, len(stage2Candidates))
+	for i, candidate := range stage2Candidates {
+		candidateIDs[i] = qdrant.NewIDNum(candidate.ID)
+	}
+
+	// Convert content hash to vector
+	queryVector, err := HexSimhashToVector(contentHash, VectorDim)
+	if err != nil {
+		return nil, fmt.Errorf("error converting content hash to vector: %v", err)
+	}
+
+	// Optimized filter for final candidates
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: candidateIDs,
+					},
+				},
+			},
+		},
+		MustNot: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "hfh_contents_hash",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: "ffffffffffffffff",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Final optimized search
+	queryReq := &qdrant.QueryPoints{
+		CollectionName: config.CollectionName,
+		Query:          qdrant.NewQuery(queryVector...),
+		Using:          qdrant.PtrOf("contents"),
+		Limit:          qdrant.PtrOf(topK * 2), // Get a bit more for better ranking
+		Filter:         filter,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	}
+
+	searchResp, err := client.Query(ctx, queryReq)
+	if err != nil {
+		return nil, fmt.Errorf("error in optimized stage 3 content search: %v", err)
+	}
+
+	// Final scoring and ranking
+	stage2Map := make(map[uint64]SearchResult)
+	for _, candidate := range stage2Candidates {
+		stage2Map[candidate.ID] = candidate
+	}
+
+	var finalResults []SearchResult
+	for _, point := range searchResp {
+		contentResult := convertPointToResult(point)
+
+		if stage2Result, exists := stage2Map[contentResult.ID]; exists {
+			// Final optimized scoring: 50% previous stages, 50% content
+			finalScore := (stage2Result.Distance * 0.5) + (contentResult.Distance * 0.5)
+			contentResult.Distance = finalScore
+			finalResults = append(finalResults, contentResult)
+		}
+	}
+
+	// Sort by final combined score
+	sort.Slice(finalResults, func(i, j int) bool {
+		return finalResults[i].Distance < finalResults[j].Distance
+	})
+
+	// Return top K results
+	if len(finalResults) > int(topK) {
+		finalResults = finalResults[:topK]
+	}
+
+	log.Printf("Stage 3 (Optimized): Final ranking complete, returning top %d results", len(finalResults))
+
+	return finalResults, nil
+}
+
+// calculateAdaptiveThresholdOptimized calculates performance-aware adaptive threshold
+func calculateAdaptiveThresholdOptimized(results []SearchResult, stageName string, hasExactMatch bool) float32 {
+	if len(results) == 0 {
+		return HIGH_SIMILARITY_THRESHOLD
+	}
+
+	// Sort by distance to analyze distribution
+	sortedResults := make([]SearchResult, len(results))
+	copy(sortedResults, results)
+	sort.Slice(sortedResults, func(i, j int) bool {
+		return sortedResults[i].Distance < sortedResults[j].Distance
+	})
+
+	// Calculate statistics
+	minDist := sortedResults[0].Distance
+	maxDist := sortedResults[len(sortedResults)-1].Distance
+
+	// For performance, use simpler threshold calculation
+	var threshold float32
+
+	if hasExactMatch {
+		// Be very selective when we have exact matches
+		threshold = minDist + 1 // Very tight threshold
+	} else if minDist <= HIGH_SIMILARITY_THRESHOLD {
+		// Good quality results, moderate threshold
+		threshold = minDist + 4
+	} else {
+		// Lower quality, be more permissive but reasonable
+		threshold = float32(math.Min(float64(minDist+8), float64(MEDIUM_SIMILARITY_THRESHOLD)))
+	}
+
+	log.Printf("%s optimized threshold: min=%.1f, max=%.1f → threshold=%.1f (exact: %v)",
+		stageName, minDist, maxDist, threshold, hasExactMatch)
+
+	return threshold
 }
 
 func searchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]SearchResult, error) {
@@ -226,9 +1241,9 @@ func searchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash stri
 		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	log.Printf("Searching collection %s using vector dirs for hash %016x", config.CollectionName, dirHash)
-	log.Printf("Searching collection %s using vector names for hash %016x", config.CollectionName, nameHash)
-	log.Printf("Searching collection %s using vector contents for hash %016x", config.CollectionName, contentHash)
+	log.Printf("Searching collection %s using vector dirs for hash %s", config.CollectionName, dirHash)
+	log.Printf("Searching collection %s using vector names for hash %s", config.CollectionName, nameHash)
+	log.Printf("Searching collection %s using vector contents for hash %s", config.CollectionName, contentHash)
 
 	// Perform the search with score threshold to filter low similarity results
 	queryReq := &qdrant.QueryPoints{
@@ -436,34 +1451,63 @@ func SearchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash stri
 	return componentGroups, nil
 }
 
-// SearchMultiStage performs searches across all three vector types and combines results
+// SearchMultiStage performs optimized adaptive multi-stage search: names → dirs → contents
 func SearchMultiStage(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]ComponentGroup, error) {
-	// Search each vector type
-	dirResults, err := SearchByDirHash(config, dirHash, topK)
+	log.Printf("Starting optimized multi-stage search with adaptive thresholds")
+
+	// Create a single shared client for all stages
+	client := getQdrantClient(config)
+	if client == nil {
+		return nil, fmt.Errorf("failed to create Qdrant client")
+	}
+	defer client.Close()
+	ctx := context.Background()
+
+	// Stage 1: Optimized names search with early exact match detection
+	stage1Candidates, hasExactMatch, err := searchStage1NamesOptimized(client, ctx, config, nameHash, topK)
 	if err != nil {
-		log.Printf("Warning: Dir hash search failed: %v", err)
-		dirResults = []SearchResult{}
+		return nil, fmt.Errorf("stage 1 (names) search failed: %v", err)
 	}
 
-	nameResults, err := SearchByNameHash(config, nameHash, topK)
-	if err != nil {
-		log.Printf("Warning: Name hash search failed: %v", err)
-		nameResults = []SearchResult{}
+	if len(stage1Candidates) == 0 {
+		log.Printf("No candidates found in stage 1, returning empty results")
+		return []ComponentGroup{}, nil
 	}
 
-	contentResults, err := SearchByContentHash(config, contentHash, topK)
-	if err != nil {
-		log.Printf("Warning: Content hash search failed: %v", err)
-		contentResults = []SearchResult{}
+	log.Printf("Stage 1 (names): Found %d candidates (exact match: %v)", len(stage1Candidates), hasExactMatch)
+
+	// Early termination if we have exact match and it's the only result needed
+	if hasExactMatch && topK == 1 && len(stage1Candidates) == 1 {
+		log.Printf("Early termination: exact match found and only 1 result requested")
+		componentGroups := groupByComponent(stage1Candidates)
+		return componentGroups, nil
 	}
 
-	// Combine and deduplicate results
-	allResults := combineResults(dirResults, nameResults, contentResults)
+	// Stage 2: Parallel dir filtering on candidates - structural validation
+	stage2Candidates, err := searchStage2DirsOptimized(client, ctx, config, dirHash, stage1Candidates)
+	if err != nil {
+		log.Printf("Warning: Stage 2 (dirs) failed, using stage 1 results: %v", err)
+		stage2Candidates = stage1Candidates
+	}
+
+	log.Printf("Stage 2 (dirs): Filtered to %d candidates", len(stage2Candidates))
+
+	// Stage 3: Content tie-breaking - final ranking
+	finalResults, err := searchStage3ContentsOptimized(client, ctx, config, contentHash, stage2Candidates, topK)
+	if err != nil {
+		log.Printf("Warning: Stage 3 (contents) failed, using stage 2 results: %v", err)
+		finalResults = stage2Candidates
+		if len(finalResults) > int(topK) {
+			finalResults = finalResults[:topK]
+		}
+	}
+
+	log.Printf("Stage 3 (contents): Final %d results", len(finalResults))
 
 	// Group by component
-	componentGroups := groupByComponent(allResults)
+	componentGroups := groupByComponent(finalResults)
 
-	log.Printf("Combined search found %d total results grouped into %d components", len(allResults), len(componentGroups))
+	log.Printf("Optimized multi-stage search completed: %d results grouped into %d components", len(finalResults), len(componentGroups))
 	return componentGroups, nil
 }
 

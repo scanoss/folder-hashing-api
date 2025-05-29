@@ -56,8 +56,6 @@ func searchCommand() {
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
 	help := searchFlags.Bool("help", false, "Show help message")
-	withPrefetch := searchFlags.Bool("with-prefetch", false, "Combine search with prefetching")
-
 	searchFlags.Parse(os.Args[2:])
 
 	// Show help if requested or no directory specified
@@ -94,9 +92,9 @@ func searchCommand() {
 	}
 
 	fmt.Printf("\nQuery Hashes:\n")
-	fmt.Printf("  Directory Hash:   %016x\n", requestRoot.SimHashDirNames)
-	fmt.Printf("  Names Hash:       %016x\n", requestRoot.SimHashNames)
-	fmt.Printf("  Contents Hash:    %016x\n", requestRoot.SimHashContent)
+	fmt.Printf("  Directory Hash:   %v\n", requestRoot.SimHashDirNames)
+	fmt.Printf("  Names Hash:       %v\n", requestRoot.SimHashNames)
+	fmt.Printf("  Contents Hash:    %v\n", requestRoot.SimHashContent)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
@@ -104,13 +102,7 @@ func searchCommand() {
 	// Search for similar projects in Qdrant using the new simplified approach
 	config := hfh.NewQdrantConfig(*host, *port, "url_collection")
 
-	var componentGroups []hfh.ComponentGroup
-	if *withPrefetch {
-		componentGroups, err = hfh.SearchWithPrefetch(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
-	} else {
-		componentGroups, err = hfh.SearchMultiStage(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
-	}
-
+	componentGroups, err := hfh.SearchMultiStage(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}

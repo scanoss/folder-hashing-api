@@ -39,3 +39,4 @@ pkg/usecase/ldb/test/test_kb/url/00.ldb
 pkg/usecase/test/test_kb
 qdrant_import
 hfh-cli
+__debug*

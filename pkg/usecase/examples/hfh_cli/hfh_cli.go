@@ -45,9 +45,9 @@ func hashCalcFromNode(dirNode *directoryNode) *pb.HFHRequest_Children {
 		return nil
 	}
 	outNode := &pb.HFHRequest_Children{PathId: dirNode.Path,
-		SimHashNames:    fmt.Sprintf("%02x", hash.NameHash),
-		SimHashContent:  fmt.Sprintf("%02x", hash.ContentHash),
-		SimHashDirNames: fmt.Sprintf("%02x", hash.DirHash),
+		SimHashNames:    fmt.Sprintf("%016x", hash.NameHash),
+		SimHashContent:  fmt.Sprintf("%016x", hash.ContentHash),
+		SimHashDirNames: fmt.Sprintf("%016x", hash.DirHash),
 		Children:        make([]*pb.HFHRequest_Children, 0)}
 
 	for _, childNode := range dirNode.Children {
