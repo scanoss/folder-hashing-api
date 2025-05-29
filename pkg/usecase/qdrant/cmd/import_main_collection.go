@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -217,14 +218,15 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	}
 	defer file.Close()
 
-	// Read the CSV file line by line
-	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = 0 // Allow variable number of fields
-
 	var validRecords [][]string
 	var lineNumber int
+	var errorCount int
 
-	// Read records one by one
+	reader := csv.NewReader(file)
+	reader.FieldsPerRecord = 0
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
 	for {
 		lineNumber++
 		record, err := reader.Read()
@@ -232,12 +234,10 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 			if err == io.EOF {
 				break // End of file, exit loop
 			}
-			// Log warning about error in this line but continue
-			log.Printf("WARNING: Error reading line %d in file %s: %v", lineNumber, filePath, err)
+			log.Printf("WARNING: Error reading line %d in file %s: %v - attempting manual parse", lineNumber, filePath, err)
 			continue
 		}
 
-		// Add valid record to our collection
 		validRecords = append(validRecords, record)
 	}
 
@@ -245,6 +245,11 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	if totalRecords == 0 {
 		log.Printf("No valid records found in %s after processing, skipping", filePath)
 		return nil
+	}
+
+	if errorCount > 0 {
+		log.Printf("Processed %s: %d valid records, %d parsing errors (%.1f%% success rate)",
+			filePath, totalRecords, errorCount, float64(totalRecords)*100.0/float64(totalRecords+errorCount))
 	}
 
 	log.Printf("Importing %d valid records from sector %s", totalRecords, sectorName)
@@ -281,16 +286,19 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 
 	// Process each record in the batch
 	for _, record := range batch {
-		if len(record) < 18 { // Ensure record has all 18 fields
+		if len(record) < 17 {
 			log.Printf("WARNING: Skipping incomplete record with %d fields: %v", len(record), record)
 			continue
 		}
 
-		// Parse hash values
+		// Parse hash values based on your CSV structure:
+		// 0=dirs_hash, 1=names_hash, 2=skipped, 3=contents_hash, then 4=url_hash but that's vendor
+		// So url_hash might not exist in your CSV. Let me use contents hash for now.
 		hfhDirsStr := strings.TrimSpace(record[0])
 		hfhNamesStr := strings.TrimSpace(record[1])
 		// Skip record[2] as in previous implementation
 		hfhContentsStr := strings.TrimSpace(record[3])
+		urlHashStr := strings.TrimSpace(record[4])
 
 		dirVector, err := hfh.HexSimhashToVector(hfhDirsStr, VectorDim)
 		if err != nil {
@@ -308,16 +316,12 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 			continue
 		}
 
-		// Parse urlHash from record[4]
-		urlHashStr := strings.TrimSpace(record[4])
-
-		// Parse numeric fields
-		totalFiles, _ := strconv.ParseInt(record[12], 10, 32)
-		indexedFiles, _ := strconv.ParseInt(record[13], 10, 32)
-		sourceFiles, _ := strconv.ParseInt(record[14], 10, 32)
-		ignoredFiles, _ := strconv.ParseInt(record[15], 10, 32)
-		size, _ := strconv.ParseInt(record[16], 10, 32)
-		categoryStr := strings.TrimSpace(record[17])
+		totalFiles, _ := strconv.ParseInt(record[11], 10, 32)
+		indexedFiles, _ := strconv.ParseInt(record[12], 10, 32)
+		sourceFiles, _ := strconv.ParseInt(record[13], 10, 32)
+		ignoredFiles, _ := strconv.ParseInt(record[14], 10, 32)
+		size, _ := strconv.ParseInt(record[15], 10, 32)
+		categoryStr := strings.TrimSpace(record[16])
 
 		// pointId should be a hash of all unique identifiers to ensure uniqueness
 		// Include all hash values to prevent overwrites when records have same url+category but different content
@@ -326,25 +330,42 @@ func insertBatch(ctx context.Context, client *qdrant.Client, batch [][]string) e
 		hasher.Write([]byte(idStringToHash)) // Write expects []byte
 		pointId := hasher.Sum64()
 
-		// Create payload with all metadata
 		payload := map[string]*qdrant.Value{
 			"hfh_dirs_hash":     qdrant.NewValueString(hfhDirsStr),
 			"hfh_names_hash":    qdrant.NewValueString(hfhNamesStr),
 			"hfh_contents_hash": qdrant.NewValueString(hfhContentsStr),
 			"url_hash":          qdrant.NewValueString(urlHashStr),
-			"vendor":            qdrant.NewValueString(strings.TrimSpace(record[5])),
-			"component":         qdrant.NewValueString(strings.TrimSpace(record[6])),
-			"version":           qdrant.NewValueString(strings.TrimSpace(record[7])),
-			"release_date":      qdrant.NewValueString(strings.TrimSpace(record[8])),
-			"license":           qdrant.NewValueString(strings.TrimSpace(record[9])),
-			"purl":              qdrant.NewValueString(strings.TrimSpace(record[10])),
-			"url":               qdrant.NewValueString(strings.TrimSpace(record[11])),
+			"vendor":            qdrant.NewValueString(strings.TrimSpace(record[4])),
+			"component":         qdrant.NewValueString(strings.TrimSpace(record[5])),  // index 5
+			"version":           qdrant.NewValueString(strings.TrimSpace(record[6])),  // index 6
+			"release_date":      qdrant.NewValueString(strings.TrimSpace(record[7])),  // index 7
+			"license":           qdrant.NewValueString(strings.TrimSpace(record[8])),  // index 8
+			"purl":              qdrant.NewValueString(strings.TrimSpace(record[9])),  // index 9
+			"url":               qdrant.NewValueString(strings.TrimSpace(record[10])), // index 10
 			"total_files":       qdrant.NewValueInt(totalFiles),
 			"indexed_files":     qdrant.NewValueInt(indexedFiles),
 			"source_files":      qdrant.NewValueInt(sourceFiles),
 			"ignored_files":     qdrant.NewValueInt(ignoredFiles),
 			"size":              qdrant.NewValueInt(size),
 			"category":          qdrant.NewValueString(categoryStr),
+		}
+
+		if len(record) > 17 && strings.TrimSpace(record[17]) != "" {
+			langExtStr := strings.TrimSpace(record[17])
+
+			var langExtensions map[string]int
+			if err := json.Unmarshal([]byte(langExtStr), &langExtensions); err != nil {
+				log.Printf("WARNING: Failed to parse language_extensions JSON '%s': %v. Storing as string instead.", langExtStr, err)
+				payload["language_extensions"] = qdrant.NewValueString(langExtStr)
+			} else {
+				langExtStruct := make(map[string]*qdrant.Value)
+				for lang, count := range langExtensions {
+					langExtStruct[lang] = qdrant.NewValueInt(int64(count))
+				}
+				payload["language_extensions"] = qdrant.NewValueStruct(&qdrant.Struct{
+					Fields: langExtStruct,
+				})
+			}
 		}
 
 		// Create single point with all three named vectors

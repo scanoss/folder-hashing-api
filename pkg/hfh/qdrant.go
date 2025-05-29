@@ -2,6 +2,7 @@ package hfh
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -18,13 +19,17 @@ const (
 
 	// Manhattan distance thresholds for binary vectors (lower scores = better matches)
 	EXACT_MATCH_THRESHOLD       = 0  // Perfect match (identical vectors)
-	HIGH_SIMILARITY_THRESHOLD   = 4  // 1-4 bit differences
-	MEDIUM_SIMILARITY_THRESHOLD = 12 // 5-12 bit differences
-	LOW_SIMILARITY_THRESHOLD    = 20 // 13-20 bit differences
+	HIGH_SIMILARITY_THRESHOLD   = 3  // 1-3 bit differences (stricter)
+	MEDIUM_SIMILARITY_THRESHOLD = 8  // 4-8 bit differences (stricter)
+	LOW_SIMILARITY_THRESHOLD    = 15 // 9-15 bit differences (stricter)
 
 	// Cache settings
 	CACHE_TTL_MINUTES = 30   // Cache exact matches for 30 minutes
 	MAX_CACHE_SIZE    = 1000 // Maximum cache entries
+
+	// Connection pool settings
+	MAX_POOL_SIZE = 10  // Maximum connections in pool
+	IDLE_TIMEOUT  = 300 // Idle connection timeout in seconds
 )
 
 // Global exact match cache for performance optimization
@@ -40,6 +45,23 @@ type cacheEntry struct {
 
 var globalExactCache = &exactMatchCache{
 	cache: make(map[string]cacheEntry),
+}
+
+// Connection pool for Qdrant clients
+type connectionPool struct {
+	mu          sync.RWMutex
+	connections map[string]*pooledConnection
+	config      QdrantConfig
+}
+
+type pooledConnection struct {
+	client   *qdrant.Client
+	lastUsed time.Time
+	inUse    bool
+}
+
+var globalConnectionPool = &connectionPool{
+	connections: make(map[string]*pooledConnection),
 }
 
 // QdrantConfig holds Qdrant connection configuration for single collection approach
@@ -58,15 +80,19 @@ func NewQdrantConfig(host string, port int, collectionName string) QdrantConfig 
 	}
 }
 
+// LanguageExtensions represents parsed language extension counts
+type LanguageExtensions map[string]int
+
 // SearchResult represents a search result from Qdrant
 type SearchResult struct {
-	Distance  float32                `json:"distance"`
-	ID        uint64                 `json:"id"`
-	Vendor    string                 `json:"vendor"`
-	Component string                 `json:"component"`
-	Version   string                 `json:"version"`
-	URL       string                 `json:"url"`
-	Metadata  map[string]interface{} `json:"metadata"`
+	Distance            float32                `json:"distance"`
+	ID                  uint64                 `json:"id"`
+	Vendor              string                 `json:"vendor"`
+	Component           string                 `json:"component"`
+	Version             string                 `json:"version"`
+	URL                 string                 `json:"url"`
+	LanguageExtensions  LanguageExtensions     `json:"language_extensions,omitempty"`
+	Metadata            map[string]interface{} `json:"metadata"`
 }
 
 // ComponentGroup represents grouped results by component name
@@ -81,10 +107,11 @@ type ComponentGroup struct {
 
 // VersionResult represents a version-specific result within a component group
 type VersionResult struct {
-	Version  string                 `json:"version"`
-	Distance float32                `json:"distance"`
-	URL      string                 `json:"url,omitempty"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Version            string                 `json:"version"`
+	Distance           float32                `json:"distance"`
+	URL                string                 `json:"url,omitempty"`
+	LanguageExtensions LanguageExtensions     `json:"language_extensions,omitempty"`
+	Metadata           map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func HexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
@@ -327,6 +354,27 @@ func searchExactByPayload(client *qdrant.Client, ctx context.Context, collection
 			}
 			if val, exists := point.Payload["url"]; exists {
 				result.URL = val.GetStringValue()
+			}
+
+			// Parse language_extensions if present
+			if val, exists := point.Payload["language_extensions"]; exists {
+				// Try structured format first
+				if structVal := val.GetStructValue(); structVal != nil {
+					langExt := make(LanguageExtensions)
+					for lang, countVal := range structVal.Fields {
+						if intVal := countVal.GetIntegerValue(); intVal != 0 {
+							langExt[lang] = int(intVal)
+						}
+					}
+					if len(langExt) > 0 {
+						result.LanguageExtensions = langExt
+					}
+				} else if langExtStr := val.GetStringValue(); langExtStr != "" {
+					// Fallback to string format for backward compatibility
+					if langExt, err := parseLanguageExtensions(langExtStr); err == nil {
+						result.LanguageExtensions = langExt
+					}
+				}
 			}
 
 			// Store all payload for access to other fields
@@ -759,8 +807,36 @@ func calculateAdaptiveThreshold(results []SearchResult, stageName string) float3
 	return threshold
 }
 
-// getQdrantClient creates a new Qdrant client (helper function)
+// getQdrantClient gets a pooled Qdrant client for optimal performance
 func getQdrantClient(config QdrantConfig) *qdrant.Client {
+	return globalConnectionPool.getClient(config)
+}
+
+// getClient retrieves or creates a pooled connection
+func (pool *connectionPool) getClient(config QdrantConfig) *qdrant.Client {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	// Create connection key
+	key := fmt.Sprintf("%s:%d", config.Host, config.Port)
+
+	// Clean up expired connections
+	pool.cleanupExpired()
+
+	// Try to find an available connection
+	if conn, exists := pool.connections[key]; exists && !conn.inUse {
+		conn.inUse = true
+		conn.lastUsed = time.Now()
+		return conn.client
+	}
+
+	// Check pool size limit
+	if len(pool.connections) >= MAX_POOL_SIZE {
+		// Remove oldest unused connection
+		pool.removeOldestUnused()
+	}
+
+	// Create new connection
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: config.Host,
 		Port: config.Port,
@@ -769,7 +845,56 @@ func getQdrantClient(config QdrantConfig) *qdrant.Client {
 		log.Printf("Error creating Qdrant client: %v", err)
 		return nil
 	}
+
+	// Add to pool
+	pool.connections[key] = &pooledConnection{
+		client:   client,
+		lastUsed: time.Now(),
+		inUse:    true,
+	}
+
 	return client
+}
+
+// returnClient returns a client to the pool
+func (pool *connectionPool) returnClient(config QdrantConfig) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	key := fmt.Sprintf("%s:%d", config.Host, config.Port)
+	if conn, exists := pool.connections[key]; exists {
+		conn.inUse = false
+		conn.lastUsed = time.Now()
+	}
+}
+
+// cleanupExpired removes expired connections from pool
+func (pool *connectionPool) cleanupExpired() {
+	now := time.Now()
+	for key, conn := range pool.connections {
+		if !conn.inUse && now.Sub(conn.lastUsed).Seconds() > IDLE_TIMEOUT {
+			conn.client.Close()
+			delete(pool.connections, key)
+		}
+	}
+}
+
+// removeOldestUnused removes the oldest unused connection
+func (pool *connectionPool) removeOldestUnused() {
+	var oldestKey string
+	var oldestTime time.Time
+
+	for key, conn := range pool.connections {
+		if !conn.inUse && (oldestKey == "" || conn.lastUsed.Before(oldestTime)) {
+			oldestKey = key
+			oldestTime = conn.lastUsed
+		}
+	}
+
+	if oldestKey != "" {
+		pool.connections[oldestKey].client.Close()
+		delete(pool.connections, oldestKey)
+	}
 }
 
 // searchStage1NamesOptimized performs parallel exact + similarity search with connection reuse
@@ -886,8 +1011,8 @@ func performSimilaritySearchOptimized(client *qdrant.Client, ctx context.Context
 		// Aggressive search optimization
 		ScoreThreshold: qdrant.PtrOf(float32(HIGH_SIMILARITY_THRESHOLD)), // Very early filtering
 		Params: &qdrant.SearchParams{
-			HnswEf: qdrant.PtrOf(uint64(64)), // Reduced for speed
-			Exact:  qdrant.PtrOf(false),      // Use approximate search
+			HnswEf: qdrant.PtrOf(uint64(32)), // Optimized for speed vs accuracy
+			Exact:  qdrant.PtrOf(false),      // Use exact search
 		},
 	}
 
@@ -1024,7 +1149,11 @@ func searchStage2DirsOptimized(client *qdrant.Client, ctx context.Context, confi
 		Filter:         filter,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		ScoreThreshold: qdrant.PtrOf(float32(MEDIUM_SIMILARITY_THRESHOLD)), // Early filtering
+		ScoreThreshold: qdrant.PtrOf(float32(HIGH_SIMILARITY_THRESHOLD)), // Aggressive early filtering
+		Params: &qdrant.SearchParams{
+			HnswEf: qdrant.PtrOf(uint64(32)), // Optimized for speed
+			Exact:  qdrant.PtrOf(false),
+		},
 	}
 
 	searchResp, err := client.Query(ctx, queryReq)
@@ -1126,6 +1255,10 @@ func searchStage3ContentsOptimized(client *qdrant.Client, ctx context.Context, c
 		Filter:         filter,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
+		Params: &qdrant.SearchParams{
+			HnswEf: qdrant.PtrOf(uint64(32)), // Fast search for final stage
+			Exact:  qdrant.PtrOf(false),
+		},
 	}
 
 	searchResp, err := client.Query(ctx, queryReq)
@@ -1315,10 +1448,11 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 		}
 
 		versionResult := VersionResult{
-			Version:  result.Version,
-			Distance: result.Distance,
-			URL:      result.URL,
-			Metadata: result.Metadata,
+			Version:            result.Version,
+			Distance:           result.Distance,
+			URL:                result.URL,
+			LanguageExtensions: result.LanguageExtensions,
+			Metadata:           result.Metadata,
 		}
 
 		if group, exists := groups[key]; exists {
@@ -1389,6 +1523,27 @@ func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 		}
 		if val, exists := point.Payload["url"]; exists {
 			result.URL = val.GetStringValue()
+		}
+
+		// Parse language_extensions if present
+		if val, exists := point.Payload["language_extensions"]; exists {
+			// Try structured format first
+			if structVal := val.GetStructValue(); structVal != nil {
+				langExt := make(LanguageExtensions)
+				for lang, countVal := range structVal.Fields {
+					if intVal := countVal.GetIntegerValue(); intVal != 0 {
+						langExt[lang] = int(intVal)
+					}
+				}
+				if len(langExt) > 0 {
+					result.LanguageExtensions = langExt
+				}
+			} else if langExtStr := val.GetStringValue(); langExtStr != "" {
+				// Fallback to string format for backward compatibility
+				if langExt, err := parseLanguageExtensions(langExtStr); err == nil {
+					result.LanguageExtensions = langExt
+				}
+			}
 		}
 
 		// Store all payload for access to other fields
@@ -1548,4 +1703,14 @@ func combineResults(dirResults, nameResults, contentResults []SearchResult) []Se
 	})
 
 	return results
+}
+
+// parseLanguageExtensions parses the stringified JSON language extensions
+func parseLanguageExtensions(langExtStr string) (LanguageExtensions, error) {
+	var langExt LanguageExtensions
+	if err := json.Unmarshal([]byte(langExtStr), &langExt); err != nil {
+		log.Printf("Warning: failed to parse language_extensions '%s': %v", langExtStr, err)
+		return nil, err
+	}
+	return langExt, nil
 }
