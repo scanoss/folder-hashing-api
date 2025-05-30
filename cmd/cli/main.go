@@ -56,7 +56,6 @@ func searchCommand() {
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
 	help := searchFlags.Bool("help", false, "Show help message")
-	collection := searchFlags.String("collection", "url_collection", "Qdrant collection name")
 	searchFlags.Parse(os.Args[2:])
 
 	// Show help if requested or no directory specified
@@ -101,9 +100,9 @@ func searchCommand() {
 	fmt.Println(repeatString("-", 60))
 
 	// Search for similar projects in Qdrant using the new simplified approach
-	config := hfh.NewQdrantConfig(*host, *port, *collection)
+	config := hfh.NewQdrantSeparateConfig(*host, *port)
 
-	componentGroups, err := hfh.SearchMultiStageWithLanguageExtensions(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
+	componentGroups, err := hfh.SearchMultiStageApproximateWithLanguageExtensions(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
