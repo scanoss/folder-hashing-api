@@ -1,6 +1,7 @@
 package hfh_cli
 
 import (
+	"encoding/json"
 	"log"
 	"path/filepath"
 	"sort"
@@ -10,9 +11,10 @@ import (
 )
 
 type HFHhash struct {
-	NameHash    uint64
-	ContentHash uint64
-	DirHash     uint64
+	NameHash           uint64
+	ContentHash        uint64
+	DirHash            uint64
+	LanguageExtensions map[string]int // Count of files by extension
 }
 
 /* Calc hash head */
@@ -31,11 +33,13 @@ func HashCalc(node *directoryNode) *HFHhash {
 	var selectedNames []string
 	fileMapUnique := make(map[string]bool)
 	dirMapUnique := make(map[string]bool)
+	langExtensions := make(map[string]int)
 
 	if len(node.Files) < 10 {
 		return nil
 	}
 	for _, file := range node.Files {
+
 		if _, processed := processedHashes[file.KeyStr]; processed {
 			continue
 		}
@@ -51,6 +55,11 @@ func HashCalc(node *directoryNode) *HFHhash {
 			continue
 		}
 		extension := filepath.Ext(fileName)
+		// Count language extensions (remove the dot and normalize)
+		if extension != "" {
+			normalizedExt := strings.ToLower(strings.TrimPrefix(extension, "."))
+			langExtensions[normalizedExt]++
+		}
 		filenameWithoutExt := strings.TrimSuffix(fileName, extension)
 		fileMapUnique[filenameWithoutExt] = true
 
@@ -115,10 +124,17 @@ func HashCalc(node *directoryNode) *HFHhash {
 		FilesNameSimhash = (FilesNameSimhash & 0x00FFFFFFFFFFFFFF) | (uint64(head) << 56)*/
 	log.Printf("%x/%x - %x\n", FilesNameSimhash, FilesNameSimhashNorm, FilesContentSimhash)
 
+	// Log language extensions found
+	if len(langExtensions) > 0 {
+		langExtJSON, _ := json.Marshal(langExtensions)
+		log.Printf("Language extensions: %s\n", string(langExtJSON))
+	}
+
 	return &HFHhash{
-		NameHash:    FilesNameSimhashNorm,
-		ContentHash: FilesContentSimhash,
-		DirHash:     DirsSimhashNorm,
+		NameHash:           FilesNameSimhashNorm,
+		ContentHash:        FilesContentSimhash,
+		DirHash:            DirsSimhashNorm,
+		LanguageExtensions: langExtensions,
 	}
 }
 

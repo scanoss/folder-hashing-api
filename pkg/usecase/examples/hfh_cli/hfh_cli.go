@@ -44,12 +44,17 @@ func hashCalcFromNode(dirNode *directoryNode) *pb.HFHRequest_Children {
 	if hash == nil {
 		return nil
 	}
-	outNode := &pb.HFHRequest_Children{PathId: dirNode.Path,
+	outNode := &pb.HFHRequest_Children{
+		PathId:          dirNode.Path,
 		SimHashNames:    fmt.Sprintf("%016x", hash.NameHash),
 		SimHashContent:  fmt.Sprintf("%016x", hash.ContentHash),
 		SimHashDirNames: fmt.Sprintf("%016x", hash.DirHash),
-		Children:        make([]*pb.HFHRequest_Children, 0)}
-
+		Children:        make([]*pb.HFHRequest_Children, 0),
+		LangExtensions:  make(map[string]int32),
+	}
+	for k, v := range hash.LanguageExtensions {
+		outNode.LangExtensions[k] = int32(v)
+	}
 	for _, childNode := range dirNode.Children {
 		childHashNode := hashCalcFromNode(childNode)
 		if childHashNode == nil {

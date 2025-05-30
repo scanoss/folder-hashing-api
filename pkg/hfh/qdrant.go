@@ -899,6 +899,11 @@ func (pool *connectionPool) removeOldestUnused() {
 
 // searchStage1NamesOptimized performs parallel exact + similarity search with connection reuse
 func searchStage1NamesOptimized(client *qdrant.Client, ctx context.Context, config QdrantConfig, nameHash string, topK uint64) ([]SearchResult, bool, error) {
+	return searchStage1NamesOptimizedWithLanguageExtensions(client, ctx, config, nameHash, nil, topK)
+}
+
+// searchStage1NamesOptimizedWithLanguageExtensions performs parallel exact + similarity search with language extension filtering
+func searchStage1NamesOptimizedWithLanguageExtensions(client *qdrant.Client, ctx context.Context, config QdrantConfig, nameHash string, queryLangExt LanguageExtensions, topK uint64) ([]SearchResult, bool, error) {
 	log.Printf("Stage 1 (Optimized): Names search for hash %s", nameHash)
 
 	// Use channels for parallel exact and similarity searches
@@ -916,14 +921,14 @@ func searchStage1NamesOptimized(client *qdrant.Client, ctx context.Context, conf
 		resultChan <- searchResult{results: exactResults, isExact: true, err: err}
 	}()
 
-	// Launch similarity search in parallel with adaptive limit
+	// Launch similarity search in parallel with adaptive limit and language extension filtering
 	go func() {
 		adaptiveLimit := topK * 5 // Start with smaller limit for better performance
 		if topK <= 3 {
 			adaptiveLimit = topK * 10 // Increase for small topK
 		}
 
-		similarResults, err := performSimilaritySearchOptimized(client, ctx, config.CollectionName, "names", nameHash, adaptiveLimit, nil)
+		similarResults, err := performSimilaritySearchOptimizedWithLanguageExtensions(client, ctx, config.CollectionName, "names", nameHash, queryLangExt, adaptiveLimit, nil)
 		resultChan <- searchResult{results: similarResults, isExact: false, err: err}
 	}()
 
@@ -990,14 +995,19 @@ func searchStage1NamesOptimized(client *qdrant.Client, ctx context.Context, conf
 
 // performSimilaritySearchOptimized performs optimized vector similarity search
 func performSimilaritySearchOptimized(client *qdrant.Client, ctx context.Context, collectionName, vectorName, hash string, topK uint64, excludeResults []SearchResult) ([]SearchResult, error) {
+	return performSimilaritySearchOptimizedWithLanguageExtensions(client, ctx, collectionName, vectorName, hash, nil, topK, excludeResults)
+}
+
+// performSimilaritySearchOptimizedWithLanguageExtensions performs optimized vector similarity search with language extension filtering
+func performSimilaritySearchOptimizedWithLanguageExtensions(client *qdrant.Client, ctx context.Context, collectionName, vectorName, hash string, queryLangExt LanguageExtensions, topK uint64, excludeResults []SearchResult) ([]SearchResult, error) {
 	// Convert hash to dense vector
 	queryVector, err := HexSimhashToVector(hash, VectorDim)
 	if err != nil {
 		return nil, fmt.Errorf("error converting hash to vector: %v", err)
 	}
 
-	// Build optimized filter
-	filter := buildOptimizedFilter(vectorName, excludeResults)
+	// Build optimized filter with language extension filtering
+	filter := buildOptimizedFilterWithLanguageExtensions(vectorName, queryLangExt, excludeResults)
 
 	// Perform search with aggressive optimization parameters
 	queryReq := &qdrant.QueryPoints{
@@ -1021,13 +1031,25 @@ func performSimilaritySearchOptimized(client *qdrant.Client, ctx context.Context
 		return nil, fmt.Errorf("error performing optimized search: %v", err)
 	}
 
-	// Convert results with quality filtering
+	// Convert results with quality filtering and language extension scoring
 	var results []SearchResult
 	for _, point := range searchResp {
 		result := convertPointToResult(point)
 
 		// Apply quality filtering
 		if result.Distance <= LOW_SIMILARITY_THRESHOLD {
+			// If language extensions are provided and this is a names search, adjust score based on language similarity
+			if len(queryLangExt) > 0 && vectorName == "names" && len(result.LanguageExtensions) > 0 {
+				langSimilarity := calculateLanguageExtensionSimilarity(queryLangExt, result.LanguageExtensions)
+				// Boost results with high language similarity (lower distance is better)
+				langBoost := (1.0 - langSimilarity) * 2.0 // Up to 2 points boost for perfect language match
+				result.Distance = result.Distance - langBoost
+				if result.Distance < 0 {
+					result.Distance = 0
+				}
+				log.Printf("Language similarity boost: %s %s (lang_sim: %.3f, new_dist: %.3f)", 
+					result.Component, result.Version, langSimilarity, result.Distance)
+			}
 			results = append(results, result)
 		}
 	}
@@ -1037,6 +1059,11 @@ func performSimilaritySearchOptimized(client *qdrant.Client, ctx context.Context
 
 // buildOptimizedFilter creates an optimized filter for similarity search
 func buildOptimizedFilter(vectorName string, excludeResults []SearchResult) *qdrant.Filter {
+	return buildOptimizedFilterWithLanguageExtensions(vectorName, nil, excludeResults)
+}
+
+// buildOptimizedFilterWithLanguageExtensions creates an optimized filter with language extension filtering
+func buildOptimizedFilterWithLanguageExtensions(vectorName string, queryLangExt LanguageExtensions, excludeResults []SearchResult) *qdrant.Filter {
 	var mustNotConditions []*qdrant.Condition
 
 	// Always exclude corrupted ffffffffffffffff hashes
@@ -1082,9 +1109,32 @@ func buildOptimizedFilter(vectorName string, excludeResults []SearchResult) *qdr
 		}
 	}
 
-	return &qdrant.Filter{
+	// Build filter with must conditions for language extensions (if provided)
+	var mustConditions []*qdrant.Condition
+	if len(queryLangExt) > 0 && vectorName == "names" {
+		// Only apply language extension filtering to names search for better matching
+		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 30.0) // 30% tolerance
+		if len(langExtConditions) > 0 {
+			// At least one language should match within tolerance
+			mustConditions = append(mustConditions, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_Filter{
+					Filter: &qdrant.Filter{
+						Should: langExtConditions,
+					},
+				},
+			})
+		}
+	}
+
+	filter := &qdrant.Filter{
 		MustNot: mustNotConditions,
 	}
+	
+	if len(mustConditions) > 0 {
+		filter.Must = mustConditions
+	}
+	
+	return filter
 }
 
 // searchStage2DirsOptimized performs optimized directory filtering
@@ -1608,6 +1658,11 @@ func SearchWithPrefetch(config QdrantConfig, dirHash, nameHash, contentHash stri
 
 // SearchMultiStage performs optimized adaptive multi-stage search: names → dirs → contents
 func SearchMultiStage(config QdrantConfig, dirHash, nameHash, contentHash string, topK uint64) ([]ComponentGroup, error) {
+	return SearchMultiStageWithLanguageExtensions(config, dirHash, nameHash, contentHash, nil, topK)
+}
+
+// SearchMultiStageWithLanguageExtensions performs optimized adaptive multi-stage search with language extension filtering
+func SearchMultiStageWithLanguageExtensions(config QdrantConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
 	log.Printf("Starting optimized multi-stage search with adaptive thresholds")
 
 	// Create a single shared client for all stages
@@ -1618,8 +1673,8 @@ func SearchMultiStage(config QdrantConfig, dirHash, nameHash, contentHash string
 	defer client.Close()
 	ctx := context.Background()
 
-	// Stage 1: Optimized names search with early exact match detection
-	stage1Candidates, hasExactMatch, err := searchStage1NamesOptimized(client, ctx, config, nameHash, topK)
+	// Stage 1: Optimized names search with early exact match detection and language extension filtering
+	stage1Candidates, hasExactMatch, err := searchStage1NamesOptimizedWithLanguageExtensions(client, ctx, config, nameHash, queryLangExt, topK)
 	if err != nil {
 		return nil, fmt.Errorf("stage 1 (names) search failed: %v", err)
 	}
@@ -1713,4 +1768,89 @@ func parseLanguageExtensions(langExtStr string) (LanguageExtensions, error) {
 		return nil, err
 	}
 	return langExt, nil
+}
+
+// calculateLanguageExtensionSimilarity calculates similarity score between two language extension maps
+// Returns a score from 0.0 (no similarity) to 1.0 (perfect match)
+func calculateLanguageExtensionSimilarity(query, candidate LanguageExtensions) float32 {
+	if len(query) == 0 && len(candidate) == 0 {
+		return 1.0 // Both empty, perfect match
+	}
+	if len(query) == 0 || len(candidate) == 0 {
+		return 0.0 // One empty, no similarity
+	}
+
+	// Get all unique languages
+	allLangs := make(map[string]bool)
+	for lang := range query {
+		allLangs[lang] = true
+	}
+	for lang := range candidate {
+		allLangs[lang] = true
+	}
+
+	var similarity float64
+	var totalWeight float64
+
+	for lang := range allLangs {
+		queryCount := float64(query[lang])
+		candidateCount := float64(candidate[lang])
+		
+		// Weight by the maximum count to give more importance to languages with more files
+		weight := math.Max(queryCount, candidateCount)
+		if weight == 0 {
+			continue
+		}
+		
+		// Calculate similarity for this language (1.0 - normalized difference)
+		diff := math.Abs(queryCount - candidateCount)
+		maxCount := math.Max(queryCount, candidateCount)
+		langSimilarity := 1.0 - (diff / maxCount)
+		
+		similarity += langSimilarity * weight
+		totalWeight += weight
+	}
+
+	if totalWeight == 0 {
+		return 0.0
+	}
+
+	return float32(similarity / totalWeight)
+}
+
+// buildLanguageExtensionFilter creates Qdrant filters for language extension similarity
+func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePercent float32) []*qdrant.Condition {
+	if len(queryLangExt) == 0 {
+		return nil
+	}
+
+	var conditions []*qdrant.Condition
+	
+	// For each language in query, create range filters
+	for lang, count := range queryLangExt {
+		if count <= 0 {
+			continue
+		}
+		
+		// Calculate tolerance range (e.g., ±30% of the count)
+		tolerance := float32(count) * tolerancePercent / 100.0
+		minCount := int64(math.Max(0, float64(count)-float64(tolerance)))
+		maxCount := int64(float64(count) + float64(tolerance))
+		
+		// Create range condition for this language
+		condition := &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "language_extensions." + lang,
+					Range: &qdrant.Range{
+						Gte: qdrant.PtrOf(float64(minCount)),
+						Lte: qdrant.PtrOf(float64(maxCount)),
+					},
+				},
+			},
+		}
+		conditions = append(conditions, condition)
+	}
+	
+	return conditions
 }
