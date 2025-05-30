@@ -233,6 +233,42 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			log.Printf("Created index for field: %s in %s", field, collectionName)
 		}
 	}
+
+	// Index for language extension fields for faster filtering. Move this to a const array
+	langExtensions := []string{
+		// Web/Frontend
+		"ts", "js", "jsx", "tsx", "html", "css", "scss", "less", "vue", "svelte",
+		// Backend/General
+		"py", "java", "class", "jar", "go", "rb", "php", "cs", "rs", "scala", "kt", "groovy", "clj", "ex", "exs",
+		// C-family
+		"c", "h", "cpp", "cxx", "cc", "hpp", "hxx", "m", "mm", "swift",
+		// Shell/Scripts
+		"sh", "bash", "zsh", "ps1", "bat", "cmd", "pl", "pm", "t",
+		// Data/Config
+		"json", "yaml", "yml", "xml", "toml", "ini", "conf", "cfg", "properties",
+		// Documentation
+		"md", "rst", "txt", "tex", "adoc", "wiki",
+		// Mobile
+		"dart", "kotlin", "swift", "gradle",
+		// Database
+		"sql", "graphql", "prisma",
+		// Other
+		"lua", "r", "d", "fs", "f", "f90", "hs", "erl", "elm", "lisp", "jl",
+		// Empty extension (for files without extension)
+		"",
+	}
+	for _, field := range langExtensions {
+		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+			CollectionName: collectionName,
+			FieldName:      fmt.Sprintf("language_extensions.%s", field),
+			FieldType:      qdrant.PtrOf(qdrant.FieldType_FieldTypeInteger),
+		})
+		if err != nil {
+			log.Printf("Warning: Could not create index for %s in %s: %v", field, collectionName, err)
+		} else {
+			log.Printf("Created index for field: %s in %s", field, collectionName)
+		}
+	}
 }
 
 // Import data from a CSV file to separate collections
