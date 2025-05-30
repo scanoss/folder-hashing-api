@@ -264,21 +264,21 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 
 		// Quality indicators
 		fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
-		if group.BestMatch.Distance <= hfh.EXACT_MATCH_THRESHOLD {
+		if group.BestMatch.Distance == 0 {
 			fmt.Printf("     ✅ Very High Similarity Match\n")
-		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
+		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
 			fmt.Printf("     ✅ High Similarity Match\n")
-		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD {
+		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
 			fmt.Printf("     ⚠️  Medium Similarity Match\n")
 		} else {
 			fmt.Printf("     ⚠️  Low Similarity Match\n")
 		}
 
-		if group.BestMatch.Distance <= hfh.EXACT_MATCH_THRESHOLD {
+		if group.BestMatch.Distance == 0 {
 			fmt.Printf("     🎯 Perfect Match\n")
-		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
+		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
 			fmt.Printf("     🎯 Very Similar Structure\n")
-		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD {
+		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
 			fmt.Printf("     🔍 Similar Structure\n")
 		} else {
 			fmt.Printf("     🔍 Loosely Similar\n")
@@ -311,7 +311,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
 		totalSupportingResults += group.ResultCount
-		if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD {
+		if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
 			highScoreCount++
 		}
 		if group.ResultCount > 1 {
@@ -329,7 +329,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		fmt.Printf("• Best overall match: %s %s (%.4f distance)\n",
 			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Distance)
 
-		if bestMatch.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD && bestMatch.ResultCount > 2 {
+		if bestMatch.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX && bestMatch.ResultCount > 2 {
 			fmt.Printf("• 🎯 Strong recommendation: High similarity with multiple supporting results for %s\n", bestMatch.Component)
 		}
 	}

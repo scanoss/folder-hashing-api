@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -26,6 +27,29 @@ const (
 	MEDIUM_SIMILARITY_THRESHOLD_APPROX = 12 // 6-12 bit differences (moderate)
 	LOW_SIMILARITY_THRESHOLD_APPROX    = 20 // 13-20 bit differences (permissive)
 )
+
+var IndexedLangExtensions = []string{
+	// Web/Frontend
+	"ts", "js", "jsx", "tsx", "html", "css", "scss", "less", "vue", "svelte",
+	// Backend/General
+	"py", "java", "class", "jar", "go", "rb", "php", "cs", "rs", "scala", "kt", "groovy", "clj", "ex", "exs",
+	// C-family
+	"c", "h", "cpp", "cxx", "cc", "hpp", "hxx", "m", "mm", "swift",
+	// Shell/Scripts
+	"sh", "bash", "zsh", "ps1", "bat", "cmd", "pl", "pm", "t",
+	// Data/Config
+	"json", "yaml", "yml", "xml", "toml", "ini", "conf", "cfg", "properties",
+	// Documentation
+	"md", "rst", "txt", "tex", "adoc", "wiki",
+	// Mobile
+	"dart", "kotlin", "swift", "gradle",
+	// Database
+	"sql", "graphql", "prisma",
+	// Other
+	"lua", "r", "d", "fs", "f", "f90", "hs", "erl", "elm", "lisp", "jl",
+	// Empty extension (for files without extension)
+	"",
+}
 
 // QdrantSeparateConfig holds configuration for separate collections approach
 type QdrantSeparateConfig struct {
@@ -118,7 +142,14 @@ func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePerc
 	var conditions []*qdrant.Condition
 
 	// For each language in query, create range filters
-	for lang, count := range queryLangExt {
+	for extension, count := range queryLangExt {
+		if extension == "" {
+			continue
+		}
+		// If extension is not in IndexedLangExtensions, skip it
+		if !slices.Contains(IndexedLangExtensions, extension) {
+			continue
+		}
 		if count <= 0 {
 			continue
 		}
@@ -132,7 +163,7 @@ func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePerc
 		condition := &qdrant.Condition{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
-					Key: "language_extensions." + lang,
+					Key: "language_extensions." + extension,
 					Range: &qdrant.Range{
 						Gte: qdrant.PtrOf(float64(minCount)),
 						Lte: qdrant.PtrOf(float64(maxCount)),
@@ -177,9 +208,8 @@ func performApproximateSearchWithLanguageExtensions(client *qdrant.Client, ctx c
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 		Params: &qdrant.SearchParams{
-			HnswEf:      qdrant.PtrOf(uint64(128)), // Moderate ef for balance of speed/quality
-			Exact:       qdrant.PtrOf(false),       // Always approximate
-			IndexedOnly: qdrant.PtrOf(true),        // Only search indexed data
+			HnswEf: qdrant.PtrOf(uint64(128)), // Moderate ef for balance of speed/quality
+			Exact:  qdrant.PtrOf(false),       // Always approximate
 		},
 	}
 
@@ -273,11 +303,6 @@ func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	return result
 }
 
-// searchStage1NamesApproximate performs stage 1 with only approximate search
-func searchStage1NamesApproximate(client *qdrant.Client, ctx context.Context, config QdrantSeparateConfig, nameHash string, topK uint64) ([]SearchResult, error) {
-	return searchStage1NamesApproximateWithLanguageExtensions(client, ctx, config, nameHash, nil, topK)
-}
-
 // searchStage1NamesApproximateWithLanguageExtensions performs stage 1 with language extension filtering
 func searchStage1NamesApproximateWithLanguageExtensions(client *qdrant.Client, ctx context.Context, config QdrantSeparateConfig, nameHash string, queryLangExt LanguageExtensions, topK uint64) ([]SearchResult, error) {
 	log.Printf("Stage 1 (Approximate): Names search for hash %s with language extensions", nameHash)
@@ -363,9 +388,8 @@ func searchStage2DirsApproximate(client *qdrant.Client, ctx context.Context, con
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 		Params: &qdrant.SearchParams{
-			HnswEf:      qdrant.PtrOf(uint64(128)),
-			Exact:       qdrant.PtrOf(false),
-			IndexedOnly: qdrant.PtrOf(true),
+			HnswEf: qdrant.PtrOf(uint64(128)),
+			Exact:  qdrant.PtrOf(false),
 		},
 	}
 
@@ -450,9 +474,8 @@ func searchStage3ContentsApproximate(client *qdrant.Client, ctx context.Context,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 		Params: &qdrant.SearchParams{
-			HnswEf:      qdrant.PtrOf(uint64(128)),
-			Exact:       qdrant.PtrOf(false),
-			IndexedOnly: qdrant.PtrOf(true),
+			HnswEf: qdrant.PtrOf(uint64(128)),
+			Exact:  qdrant.PtrOf(false),
 		},
 	}
 

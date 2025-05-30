@@ -235,29 +235,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	}
 
 	// Index for language extension fields for faster filtering. Move this to a const array
-	langExtensions := []string{
-		// Web/Frontend
-		"ts", "js", "jsx", "tsx", "html", "css", "scss", "less", "vue", "svelte",
-		// Backend/General
-		"py", "java", "class", "jar", "go", "rb", "php", "cs", "rs", "scala", "kt", "groovy", "clj", "ex", "exs",
-		// C-family
-		"c", "h", "cpp", "cxx", "cc", "hpp", "hxx", "m", "mm", "swift",
-		// Shell/Scripts
-		"sh", "bash", "zsh", "ps1", "bat", "cmd", "pl", "pm", "t",
-		// Data/Config
-		"json", "yaml", "yml", "xml", "toml", "ini", "conf", "cfg", "properties",
-		// Documentation
-		"md", "rst", "txt", "tex", "adoc", "wiki",
-		// Mobile
-		"dart", "kotlin", "swift", "gradle",
-		// Database
-		"sql", "graphql", "prisma",
-		// Other
-		"lua", "r", "d", "fs", "f", "f90", "hs", "erl", "elm", "lisp", "jl",
-		// Empty extension (for files without extension)
-		"",
-	}
-	for _, field := range langExtensions {
+
+	for _, field := range hfh.IndexedLangExtensions {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
 			FieldName:      fmt.Sprintf("language_extensions.%s", field),
