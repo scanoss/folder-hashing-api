@@ -103,7 +103,7 @@ func searchCommand() {
 	// Search for similar projects in Qdrant using the new simplified approach
 	config := hfh.NewQdrantConfig(*host, *port, *collection)
 
-	componentGroups, err := hfh.SearchMultiStage(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, uint64(*topK))
+	componentGroups, err := hfh.SearchMultiStageWithLanguageExtensions(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -186,7 +186,7 @@ func showSearchHelp() {
 
 func repeatString(s string, count int) string {
 	result := ""
-	for i := 0; i < count; i++ {
+	for range count {
 		result += s
 	}
 	return result

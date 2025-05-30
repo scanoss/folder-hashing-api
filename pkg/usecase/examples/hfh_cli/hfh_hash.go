@@ -17,16 +17,6 @@ type HFHhash struct {
 	LanguageExtensions map[string]int // Count of files by extension
 }
 
-/* Calc hash head */
-func headCalc(simHash uint64) byte {
-	var sum int
-	for i := 0; i < 8; i++ {
-		b := byte((simHash >> (i * 8)) & 0xFF)
-		sum += int(b) * 2
-	}
-	return byte(sum >> 4 & 0xFF)
-}
-
 func HashCalc(node *directoryNode) *HFHhash {
 	processedHashes := make(map[string]bool)
 	var fileHashesList [][]byte
@@ -38,6 +28,23 @@ func HashCalc(node *directoryNode) *HFHhash {
 	if len(node.Files) < 10 {
 		return nil
 	}
+	
+	// Get the root directory to exclude it from dir names
+	var rootDir string
+	if len(node.Files) > 0 {
+		// Use the first file to determine the root directory
+		firstFileDir := filepath.Dir(node.Files[0].Path)
+		if firstFileDir == "." {
+			rootDir = ""
+		} else {
+			// Find the common root by getting the topmost directory
+			parts := strings.Split(filepath.ToSlash(firstFileDir), "/")
+			if len(parts) > 0 {
+				rootDir = parts[0]
+			}
+		}
+	}
+	
 	for _, file := range node.Files {
 
 		if _, processed := processedHashes[file.KeyStr]; processed {
@@ -65,7 +72,10 @@ func HashCalc(node *directoryNode) *HFHhash {
 
 		dir := filepath.Dir(file.Path)
 		lastFolder := filepath.Base(dir)
-		dirMapUnique[lastFolder] = true
+		// Only add directory names that are not the root directory and not current/parent dir markers
+		if lastFolder != "." && lastFolder != ".." && lastFolder != rootDir {
+			dirMapUnique[lastFolder] = true
+		}
 
 		processedHashes[file.KeyStr] = true
 		selectedNames = append(selectedNames, fileName)
