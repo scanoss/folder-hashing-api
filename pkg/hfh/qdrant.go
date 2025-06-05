@@ -548,7 +548,7 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 	for _, point := range searchResp {
 		result := convertPointToResult(point)
 
-		if result.Score > LOW_SIMILARITY_THRESHOLD {
+		if result.Score >= LOW_SIMILARITY_THRESHOLD {
 			log.Printf("Quality match in %s: %s %s (score: %.3f)", collectionName, result.Component, result.Version, result.Score)
 			results = append(results, result)
 		}
