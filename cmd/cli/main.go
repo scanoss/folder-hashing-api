@@ -55,7 +55,6 @@ func searchCommand() {
 	host := searchFlags.String("host", "localhost", "Qdrant server host")
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
-	weighted := searchFlags.Bool("weighted", false, "Use weighted fusion variant (experimental)")
 	help := searchFlags.Bool("help", false, "Show help message")
 	searchFlags.Parse(os.Args[2:])
 
@@ -113,14 +112,7 @@ func searchCommand() {
 	}
 
 	// Choose search variant based on user preference
-	var componentGroups []hfh.ComponentGroup
-	if *weighted {
-		fmt.Printf("Using weighted fusion variant...\n")
-		componentGroups, err = hfh.SearchLanguageBasedApproximateWeighted(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
-	} else {
-		fmt.Printf("Using RRF hybrid search...\n")
-		componentGroups, err = hfh.SearchLanguageBasedApproximate(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
-	}
+	componentGroups, err := hfh.SearchLanguageBasedApproximate(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -285,28 +277,6 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 				}
 			}
 		}
-
-		// // Quality indicators
-		// fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
-		// if group.BestMatch.Score == 0 {
-		// 	fmt.Printf("     ✅ Very High Similarity Match\n")
-		// } else if group.BestMatch.Score <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
-		// 	fmt.Printf("     ✅ High Similarity Match\n")
-		// } else if group.BestMatch.Score <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
-		// 	fmt.Printf("     ⚠️  Medium Similarity Match\n")
-		// } else {
-		// 	fmt.Printf("     ⚠️  Low Similarity Match\n")
-		// }
-
-		// if group.BestMatch.Distance == 0 {
-		// 	fmt.Printf("     🎯 Perfect Match\n")
-		// } else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
-		// 	fmt.Printf("     🎯 Very Similar Structure\n")
-		// } else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
-		// 	fmt.Printf("     🔍 Similar Structure\n")
-		// } else {
-		// 	fmt.Printf("     🔍 Loosely Similar\n")
-		// }
 
 		if len(group.AllVersions) > 1 {
 			fmt.Printf("     📚 Multiple Versions Available (%d)\n", len(group.AllVersions))

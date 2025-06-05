@@ -259,6 +259,40 @@ func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePerc
 	return conditions
 }
 
+// buildExcludedLanguageExtensionFilter creates conditions to exclude entries that have extensions not in the query
+// For example, if querying a Python project (py, md, sh), exclude entries that also have c, h, java, etc.
+func buildExcludedLanguageExtensionFilter(queryLangExt LanguageExtensions) []*qdrant.Condition {
+	var conditions []*qdrant.Condition
+
+	// Get all possible indexed extensions that are NOT in our query
+	for _, extension := range IndexedLangExtensions {
+		// Skip if this extension is in our query (we want to allow these)
+		if _, exists := queryLangExt[extension]; exists {
+			continue
+		}
+
+		// Skip empty extension check as it's common
+		if extension == "" {
+			continue
+		}
+
+		// Create condition to exclude entries that have this extension with count > 0
+		condition := &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "language_extensions." + extension,
+					Range: &qdrant.Range{
+						Gt: qdrant.PtrOf(float64(0)), // Exclude if this extension count > 0
+					},
+				},
+			},
+		}
+		conditions = append(conditions, condition)
+	}
+
+	return conditions
+}
+
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
 func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	result := SearchResult{
@@ -400,150 +434,9 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 	return groupSlice
 }
 
-// SearchLanguageBasedApproximate performs optimized search using language-based collections with named vectors
+// SearchLanguageBasedApproximate performs optimized search using RRF
 func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
-	log.Printf("Starting language-based search with named vectors")
-
-	// Determine target collection based on primary language
-	collectionName := GetCollectionNameFromLanguageExtensions(queryLangExt)
-	log.Printf("Using collection: %s for language extensions: %v", collectionName, queryLangExt)
-
-	// Create a single shared client
-	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: config.Host,
-		Port: config.Port,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Qdrant client: %v", err)
-	}
-	defer client.Close()
-
-	// Set context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	// Check if collection exists
-	exists, err := client.CollectionExists(ctx, collectionName)
-	if err != nil {
-		return nil, fmt.Errorf("error checking collection %s: %v", collectionName, err)
-	}
-	if !exists {
-		log.Printf("Collection %s does not exist, falling back to misc_collection", collectionName)
-		collectionName = "misc_collection"
-
-		// Check if misc collection exists
-		exists, err = client.CollectionExists(ctx, collectionName)
-		if err != nil || !exists {
-			return nil, fmt.Errorf("fallback collection %s also does not exist", collectionName)
-		}
-	}
-
-	// Convert hashes to vectors
-	dirVector, err := HexSimhashToVector(dirHash, VectorDim)
-	if err != nil {
-		return nil, fmt.Errorf("error converting dir hash to vector: %v", err)
-	}
-	nameVector, err := HexSimhashToVector(nameHash, VectorDim)
-	if err != nil {
-		return nil, fmt.Errorf("error converting name hash to vector: %v", err)
-	}
-	contentVector, err := HexSimhashToVector(contentHash, VectorDim)
-	if err != nil {
-		return nil, fmt.Errorf("error converting content hash to vector: %v", err)
-	}
-
-	// Build language extension filter for additional filtering
-	var filter *qdrant.Filter
-	if len(queryLangExt) > 0 {
-		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 10.0) // More tolerant for language-based collections
-		if len(langExtConditions) > 0 {
-			filter = &qdrant.Filter{
-				Must: langExtConditions,
-			}
-		}
-	}
-
-	// Use hybrid query to search all three named vectors in a single query with fusion
-	log.Printf("Performing hybrid search on all three vectors: names, dirs, contents")
-
-	// Create prefetch queries for each named vector
-	prefetchQueries := []*qdrant.PrefetchQuery{
-		{
-			// Names vector query (highest weight)
-			Query: qdrant.NewQuery(nameVector...),
-			Using: qdrant.PtrOf("names"),
-			Limit: qdrant.PtrOf(topK * 2),
-		},
-		{
-			// Dirs vector query
-			Query: qdrant.NewQuery(dirVector...),
-			Using: qdrant.PtrOf("dirs"),
-			Limit: qdrant.PtrOf(topK * 2),
-		},
-		{
-			// Contents vector query
-			Query: qdrant.NewQuery(contentVector...),
-			Using: qdrant.PtrOf("contents"),
-			Limit: qdrant.PtrOf(topK * 2),
-		},
-	}
-
-	// Create hybrid query with RRF (Reciprocal Rank Fusion)
-	// Alternative: can also use weighted fusion by setting weights in prefetch queries
-	hybridQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query: &qdrant.Query{
-			Variant: &qdrant.Query_Fusion{
-				Fusion: qdrant.Fusion_RRF, // Reciprocal Rank Fusion for balanced results
-			},
-		},
-		Prefetch:    prefetchQueries,
-		Limit:       qdrant.PtrOf(topK),
-		Filter:      filter,
-		WithPayload: qdrant.NewWithPayload(true),
-		WithVectors: qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			HnswEf: qdrant.PtrOf(uint64(128)),
-			Exact:  qdrant.PtrOf(false),
-		},
-	}
-
-	searchResp, err := client.Query(ctx, hybridQuery)
-	if err != nil {
-		return nil, fmt.Errorf("error performing hybrid search in %s: %v", collectionName, err)
-	}
-
-	// Convert results and apply quality filtering
-	var results []SearchResult
-	for _, point := range searchResp {
-		result := convertPointToResult(point)
-
-		// // Apply quality thresholds (more lenient for language-based approach)
-		// if result.Distance <= HIGH_SIMILARITY_THRESHOLD_APPROX*1.5 {
-		// 	log.Printf("High quality match in %s: %s %s (distance: %.3f)", collectionName, result.Component, result.Version, result.Distance)
-		// 	results = append(results, result)
-		// } else if result.Distance <= MEDIUM_SIMILARITY_THRESHOLD_APPROX*1.5 {
-		// 	log.Printf("Medium quality match in %s: %s %s (distance: %.3f)", collectionName, result.Component, result.Version, result.Distance)
-		// 	results = append(results, result)
-		// } else if result.Distance <= LOW_SIMILARITY_THRESHOLD_APPROX*1.5 {
-		// 	log.Printf("Lower quality match in %s: %s %s (distance: %.3f)", collectionName, result.Component, result.Version, result.Distance)
-		// 	results = append(results, result)
-		// }
-		results = append(results, result)
-	}
-
-	log.Printf("Language-based search found %d quality results in %s", len(results), collectionName)
-
-	// Group by component
-	componentGroups := groupByComponent(results)
-
-	log.Printf("Language-based search completed: %d results grouped into %d components", len(results), len(componentGroups))
-	return componentGroups, nil
-}
-
-// SearchLanguageBasedApproximateWeighted performs optimized search using weighted fusion instead of RRF
-func SearchLanguageBasedApproximateWeighted(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
-	log.Printf("Starting language-based search with weighted fusion")
+	log.Printf("Starting language-based search with RRF fusion")
 
 	// Determine target collection based on primary language
 	collectionName := GetCollectionNameFromLanguageExtensions(queryLangExt)
@@ -597,9 +490,11 @@ func SearchLanguageBasedApproximateWeighted(config QdrantSeparateConfig, dirHash
 	var extensionsFilter *qdrant.Filter
 	if len(queryLangExt) > 0 {
 		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 5.0) // More tolerant for language-based collections
+		excludedExtConditions := buildExcludedLanguageExtensionFilter(queryLangExt)
 		if len(langExtConditions) > 0 {
 			extensionsFilter = &qdrant.Filter{
-				Must: langExtConditions,
+				Must:    langExtConditions,
+				MustNot: excludedExtConditions,
 			}
 		}
 	}
@@ -610,21 +505,21 @@ func SearchLanguageBasedApproximateWeighted(config QdrantSeparateConfig, dirHash
 			// Names vector query
 			Query:  qdrant.NewQuery(nameVector...),
 			Using:  qdrant.PtrOf("names"),
-			Limit:  qdrant.PtrOf(uint64(1000)),
+			Limit:  qdrant.PtrOf(topK * 2),
 			Filter: extensionsFilter,
 		},
 		{
 			// Dirs vector query
 			Query:  qdrant.NewQuery(dirVector...),
 			Using:  qdrant.PtrOf("dirs"),
-			Limit:  qdrant.PtrOf(uint64(1000)),
+			Limit:  qdrant.PtrOf(topK * 2),
 			Filter: extensionsFilter,
 		},
 		{
 			// Contents vector query
 			Query:  qdrant.NewQuery(contentVector...),
 			Using:  qdrant.PtrOf("contents"),
-			Limit:  qdrant.PtrOf(uint64(1000)),
+			Limit:  qdrant.PtrOf(topK * 2),
 			Filter: extensionsFilter,
 		},
 	}
@@ -638,8 +533,8 @@ func SearchLanguageBasedApproximateWeighted(config QdrantSeparateConfig, dirHash
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 		Params: &qdrant.SearchParams{
-			HnswEf: qdrant.PtrOf(uint64(256)),
-			Exact:  qdrant.PtrOf(true),
+			HnswEf: qdrant.PtrOf(uint64(128)),
+			Exact:  qdrant.PtrOf(false),
 		},
 	}
 
@@ -653,11 +548,10 @@ func SearchLanguageBasedApproximateWeighted(config QdrantSeparateConfig, dirHash
 	for _, point := range searchResp {
 		result := convertPointToResult(point)
 
-		if result.Score >= LOW_SIMILARITY_THRESHOLD {
+		if result.Score > LOW_SIMILARITY_THRESHOLD {
 			log.Printf("Quality match in %s: %s %s (score: %.3f)", collectionName, result.Component, result.Version, result.Score)
 			results = append(results, result)
 		}
-
 	}
 
 	log.Printf("Weighted hybrid search found %d quality results in %s", len(results), collectionName)
