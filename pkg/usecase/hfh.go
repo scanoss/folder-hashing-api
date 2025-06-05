@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 	myconfig "scanoss.com/hfh-api/pkg/config"
 	"scanoss.com/hfh-api/pkg/dtos"
+	"scanoss.com/hfh-api/pkg/hfh"
 	mv "scanoss.com/hfh-api/pkg/usecase/milvus"
 	pp "scanoss.com/hfh-api/pkg/usecase/prefered_purls"
 )
@@ -36,6 +37,8 @@ type HFHscan struct {
 // scan config structure, is defined when the service starts
 type HFHscanConfig struct {
 	mvDb             *mv.MilvusDb
+	qdrantConfig     *hfh.QdrantSeparateConfig // Qdrant configuration
+	useQdrant        bool                      // Flag to use Qdrant instead of Milvus
 	Dmax             int
 	UrlsLimit        int
 	ThStage1         float32
@@ -88,6 +91,17 @@ func HFHScanInit(config *myconfig.ServerConfig, testMode bool) *HFHscanConfig {
 	if err != nil {
 		log.Printf("Milvus setup is not valid: %s", err)
 		return nil
+	}
+
+	// Initialize Qdrant configuration if needed
+	// For now, we'll add a simple flag check. In production, this would be configured via environment variables
+	scanner.useQdrant = false // Default to Milvus for now, can be changed via config
+	if scanner.useQdrant {
+		scanner.qdrantConfig = &hfh.QdrantSeparateConfig{
+			Host: "localhost", // Could be configurable
+			Port: 6334,        // Could be configurable
+		}
+		log.Printf("HFH scanner configured to use Qdrant language-based collections")
 	}
 
 	return &scanner
@@ -458,7 +472,20 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 		for _, h := range nameHashes {
 			dirHashes = append(dirHashes, s.namesDirsContents[h][0])
 		}
-		//look for coincidences
+		//look for coincidences using either Qdrant language-based or Milvus approach
+		if s.Config.useQdrant {
+			// Use new language-based Qdrant search
+			err := s.performLanguageBasedSearch(nameHashes, level)
+			if err != nil {
+				s.s.Errorf("Language-based search failed: %v, falling back to Milvus", err)
+				// Fall back to Milvus if Qdrant fails
+				s.Config.useQdrant = false
+			} else {
+				continue // Successfully processed with Qdrant, continue to next level
+			}
+		}
+		
+		// Original Milvus search (either as primary method or fallback)
 		distances, urls, contentsHashes, err := s.Config.mvDb.Mainsearch(nameHashes, dirHashes, 0, s.Config.preferedPurlList)
 		if err != nil {
 			return err
@@ -748,4 +775,172 @@ func (s *HFHscan) produceResults(node *dtos.HFHScanInputChildren, results *[]*dt
 		s.produceResults(child, results)
 	}
 	return nil
+}
+
+// performLanguageBasedSearch performs search using Qdrant language-based collections with language extension inference
+func (s *HFHscan) performLanguageBasedSearch(nameHashes []uint64, level int) error {
+	for _, nameHash := range nameHashes {
+		dirHash := s.namesDirsContents[nameHash][0]
+		contentHash := s.namesDirsContents[nameHash][1]
+
+		// Convert uint64 hashes to hex strings for Qdrant
+		nameHashHex := fmt.Sprintf("%016x", nameHash)
+		dirHashHex := fmt.Sprintf("%016x", dirHash)
+		contentHashHex := fmt.Sprintf("%016x", contentHash)
+
+		// For language-based search, we need to infer language extensions from the path
+		// This is a simplified approach - in practice, you might want to collect this during scanning
+		pathId := s.nameHashPath[nameHash]
+		inferredLangExt := s.inferLanguageExtensionsFromPath(pathId)
+
+		s.s.Infof("Performing language-based search for path: %s with inferred extensions: %v", pathId, inferredLangExt)
+
+		// Perform language-based Qdrant search
+		componentGroups, err := hfh.SearchLanguageBasedApproximate(
+			*s.Config.qdrantConfig,
+			dirHashHex,
+			nameHashHex,
+			contentHashHex,
+			inferredLangExt,
+			uint64(s.Config.UrlsLimit),
+		)
+		if err != nil {
+			return fmt.Errorf("Qdrant search failed for path %s: %v", pathId, err)
+		}
+
+		if len(componentGroups) > 0 {
+			// Convert Qdrant results to expected format
+			components := s.convertQdrantResults(componentGroups, s.Config.UrlsLimit)
+			
+			// Calculate probability based on best match distance (lower distance = higher probability)
+			var probability float32 = 50.0 // Default moderate probability
+			if len(componentGroups) > 0 {
+				// Convert distance to probability (invert and scale)
+				bestDistance := componentGroups[0].BestMatch.Distance
+				// Scale distance (assuming max meaningful distance is around 20)
+				probability = (1 - (bestDistance / 20.0)) * 100
+				if probability < 0 {
+					probability = 10.0 // Minimum probability
+				}
+				if probability > 100 {
+					probability = 100.0 // Maximum probability
+				}
+			}
+
+			s.resultsMap[pathId] = HFHscanResult{
+				Components:  components,
+				Probability: probability,
+				Stage:       1,
+			}
+
+			s.s.Infof("Language-based search found %d components for %s with probability %.2f%%",
+				len(components), pathId, probability)
+		} else {
+			s.s.Debugf("No matches found for path: %s", pathId)
+		}
+	}
+	return nil
+}
+
+// inferLanguageExtensionsFromPath attempts to infer language extensions from file paths
+// This is a simplified implementation - in practice, you'd collect this during file scanning
+func (s *HFHscan) inferLanguageExtensionsFromPath(pathId string) hfh.LanguageExtensions {
+	extensions := make(hfh.LanguageExtensions)
+	
+	// Simple heuristic: analyze the path string for known patterns
+	pathLower := strings.ToLower(pathId)
+	
+	// Basic language detection based on path patterns
+	if strings.Contains(pathLower, "python") || strings.Contains(pathLower, ".py") {
+		extensions["py"] = 10
+	} else if strings.Contains(pathLower, "javascript") || strings.Contains(pathLower, "js") || strings.Contains(pathLower, "node") {
+		extensions["js"] = 10
+	} else if strings.Contains(pathLower, "java") || strings.Contains(pathLower, ".java") {
+		extensions["java"] = 10
+	} else if strings.Contains(pathLower, "golang") || strings.Contains(pathLower, ".go") {
+		extensions["go"] = 10
+	} else if strings.Contains(pathLower, "rust") || strings.Contains(pathLower, ".rs") {
+		extensions["rs"] = 10
+	} else if strings.Contains(pathLower, "cpp") || strings.Contains(pathLower, "c++") {
+		extensions["cpp"] = 10
+	} else if strings.Contains(pathLower, ".c") || strings.Contains(pathLower, "src") {
+		extensions["c"] = 10
+	} else {
+		// Default to misc if no specific language detected
+		extensions[""] = 5
+	}
+	
+	return extensions
+}
+
+// Convert Qdrant ComponentGroups to HFHscanResultItems
+func (s *HFHscan) convertQdrantResults(componentGroups []hfh.ComponentGroup, limit int) []HFHscanResultItem {
+	if len(componentGroups) == 0 {
+		return nil
+	}
+
+	results := make([]HFHscanResultItem, 0, len(componentGroups))
+	
+	for i, group := range componentGroups {
+		if i >= limit {
+			break
+		}
+
+		// Extract component and vendor from the best match
+		component := group.Component
+		vendor := group.Vendor
+		
+		// Create PURL format similar to existing logic
+		var purl string
+		if vendor != "" && component != "" {
+			purl = fmt.Sprintf("pkg:github/%s/%s@%s", vendor, component, group.BestMatch.Version)
+		} else if component != "" {
+			purl = fmt.Sprintf("pkg:github/%s@%s", component, group.BestMatch.Version)
+		} else {
+			continue // Skip if no component info
+		}
+
+		// Collect all versions
+		versions := make([]string, 0, len(group.AllVersions))
+		for _, v := range group.AllVersions {
+			versions = append(versions, v.Version)
+		}
+		
+		// Limit versions to reportedVersionsNumber
+		if len(versions) > reportedVersionsNumber {
+			versions = versions[:reportedVersionsNumber]
+		}
+
+		// Calculate rank based on distance (lower distance = better rank)
+		rank := int32(math.Round(float64(group.BestMatch.Distance)))
+		if rank < 1 {
+			rank = 1
+		}
+
+		// Parse date if available in metadata, otherwise use current time
+		var date time.Time = time.Now()
+		if releaseDateStr, exists := group.BestMatch.Metadata["release_date"]; exists {
+			if dateStr, ok := releaseDateStr.(string); ok {
+				if parsedDate, err := time.Parse("2006-01-02", dateStr); err == nil {
+					date = parsedDate
+				}
+			}
+		}
+
+		result := HFHscanResultItem{
+			Purl:     purl,
+			Versions: versions,
+			Rank:     rank,
+			Date:     date,
+		}
+		
+		results = append(results, result)
+	}
+
+	// Sort by rank (lower is better)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Rank < results[j].Rank
+	})
+
+	return results
 }

@@ -71,8 +71,9 @@ func main() {
 	}()
 	log.Println("Connected to Qdrant server successfully")
 
-	// Collection names
-	collections := []string{DirsCollectionName, NamesCollectionName, ContentsCollectionName}
+	collections := hfh.GetAllSupportedCollections()
+
+	log.Printf("Will create/check %d language-based collections: %v", len(collections), collections)
 
 	// Check and create collections
 	for _, collectionName := range collections {
@@ -180,22 +181,45 @@ func main() {
 	}
 }
 
-// Create a single collection optimized for large-scale approximate search
+// Create a language-based collection with named vectors (dirs, names, contents)
 func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
-	log.Printf("Creating optimized collection: %s", collectionName)
+	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
 
-	// Create collection with aggressive optimization for large collections
-	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: collectionName,
-		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+	// Create named vectors configuration for dirs, names, and contents
+	namedVectors := map[string]*qdrant.VectorParams{
+		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),     // Higher M for better connectivity
-				EfConstruct:       qdrant.PtrOf(uint64(500)),    // Higher construction for better index quality
-				FullScanThreshold: qdrant.PtrOf(uint64(100000)), // Much higher threshold - no full scans
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
-		}),
+		},
+		"names": {
+			Size:     VectorDim,
+			Distance: qdrant.Distance_Manhattan,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+			},
+		},
+		"contents": {
+			Size:     VectorDim,
+			Distance: qdrant.Distance_Manhattan,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+			},
+		},
+	}
+
+	// Create collection with named vectors and aggressive optimization
+	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
+		CollectionName: collectionName,
+		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
 		// Aggressive optimization for large collections
 		OptimizersConfig: &qdrant.OptimizersConfigDiff{
 			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
@@ -214,7 +238,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	if err != nil {
 		log.Fatalf("Error creating collection %s: %v", collectionName, err)
 	}
-	log.Printf("Collection '%s' created successfully", collectionName)
+	log.Printf("Collection '%s' with named vectors created successfully", collectionName)
 
 	// Create indexes for faster filtering
 	log.Printf("Creating payload indexes for collection %s...", collectionName)
@@ -319,9 +343,10 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-// Insert a batch of records to separate collections in parallel
+// Insert a batch of records to language-based collections
 func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client, batch [][]string) error {
-	var dirsPoints, namesPoints, contentsPoints []*qdrant.PointStruct
+	// Group points by collection (language)
+	collectionPoints := make(map[string][]*qdrant.PointStruct)
 
 	// Process each record in the batch
 	for _, record := range batch {
@@ -385,13 +410,15 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 			"category":      qdrant.NewValueString(categoryStr),
 		}
 
-		// Parse language extensions if present (column 17)
+		// Parse language extensions if present (column 17) to determine target collection
+		var targetCollection string = "misc_collection" // default fallback
+		var langExtensions map[string]int
+
 		if len(record) > 17 && strings.TrimSpace(record[17]) != "" {
 			langExtStr := strings.TrimSpace(record[17])
 
-			var langExtensions map[string]int
 			if err := json.Unmarshal([]byte(langExtStr), &langExtensions); err != nil {
-				log.Printf("WARNING: Failed to parse language_extensions JSON '%s': %v. Storing as string instead.", langExtStr, err)
+				log.Printf("WARNING: Failed to parse language_extensions JSON '%s': %v. Using misc_collection.", langExtStr, err)
 				payload["language_extensions"] = qdrant.NewValueString(langExtStr)
 			} else {
 				// Convert to Qdrant struct format for proper indexing
@@ -402,75 +429,58 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 				payload["language_extensions"] = qdrant.NewValueStruct(&qdrant.Struct{
 					Fields: langExtStruct,
 				})
+
+				// Determine target collection based on language extensions
+				langExt := make(hfh.LanguageExtensions)
+				for lang, count := range langExtensions {
+					langExt[lang] = int32(count)
+				}
+				targetCollection = hfh.GetCollectionNameFromLanguageExtensions(langExt)
 			}
 		}
 
-		// Create points for each collection
-		dirsPoints = append(dirsPoints, &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(pointId),
-			Vectors: qdrant.NewVectors(dirVector...),
-			Payload: payload,
-		})
+		// Create point with named vectors for the target collection
+		vectorsMap := map[string]*qdrant.Vector{
+			"dirs":     qdrant.NewVector(dirVector...),
+			"names":    qdrant.NewVector(nameVector...),
+			"contents": qdrant.NewVector(contentVector...),
+		}
 
-		namesPoints = append(namesPoints, &qdrant.PointStruct{
+		point := &qdrant.PointStruct{
 			Id:      qdrant.NewIDNum(pointId),
-			Vectors: qdrant.NewVectors(nameVector...),
+			Vectors: qdrant.NewVectorsMap(vectorsMap),
 			Payload: payload,
-		})
+		}
 
-		contentsPoints = append(contentsPoints, &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(pointId),
-			Vectors: qdrant.NewVectors(contentVector...),
-			Payload: payload,
-		})
+		// Add to the appropriate collection bucket
+		collectionPoints[targetCollection] = append(collectionPoints[targetCollection], point)
 	}
 
-	if len(dirsPoints) == 0 {
+	if len(collectionPoints) == 0 {
 		return nil
 	}
 
-	// Insert to all collections in parallel using goroutines
+	// Insert to language-based collections in parallel using goroutines
 	var wg sync.WaitGroup
-	errChan := make(chan error, 3)
+	errChan := make(chan error, len(collectionPoints))
 
-	// Insert dirs
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-			CollectionName: DirsCollectionName,
-			Points:         dirsPoints,
-		})
-		if err != nil {
-			errChan <- fmt.Errorf("error inserting to dirs collection: %v", err)
+	for collectionName, points := range collectionPoints {
+		if len(points) > 0 {
+			wg.Add(1)
+			go func(colName string, pts []*qdrant.PointStruct) {
+				defer wg.Done()
+				_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
+					CollectionName: colName,
+					Points:         pts,
+				})
+				if err != nil {
+					errChan <- fmt.Errorf("error inserting to %s collection: %v", colName, err)
+				} else {
+					log.Printf("Successfully inserted %d points to %s", len(pts), colName)
+				}
+			}(collectionName, points)
 		}
-	}()
-
-	// Insert names
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-			CollectionName: NamesCollectionName,
-			Points:         namesPoints,
-		})
-		if err != nil {
-			errChan <- fmt.Errorf("error inserting to names collection: %v", err)
-		}
-	}()
-
-	// Insert contents
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-			CollectionName: ContentsCollectionName,
-			Points:         contentsPoints,
-		})
-		if err != nil {
-			errChan <- fmt.Errorf("error inserting to contents collection: %v", err)
-		}
-	}()
+	}
 
 	wg.Wait()
 	close(errChan)

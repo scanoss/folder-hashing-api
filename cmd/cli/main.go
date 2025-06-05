@@ -55,6 +55,7 @@ func searchCommand() {
 	host := searchFlags.String("host", "localhost", "Qdrant server host")
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
+	weighted := searchFlags.Bool("weighted", false, "Use weighted fusion variant (experimental)")
 	help := searchFlags.Bool("help", false, "Show help message")
 	searchFlags.Parse(os.Args[2:])
 
@@ -99,10 +100,27 @@ func searchCommand() {
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
 	fmt.Println(repeatString("-", 60))
 
-	// Search for similar projects in Qdrant using the new simplified approach
+	// Search for similar projects in Qdrant using the new language-based hybrid search
 	config := hfh.NewQdrantSeparateConfig(*host, *port)
 
-	componentGroups, err := hfh.SearchMultiStageApproximateWithLanguageExtensions(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
+	// Display language extensions detected
+	if len(requestRoot.LangExtensions) > 0 {
+		fmt.Printf("Language Extensions Detected: %v\n", requestRoot.LangExtensions)
+		targetCollection := hfh.GetCollectionNameFromLanguageExtensions(requestRoot.LangExtensions)
+		fmt.Printf("Target Collection: %s\n", targetCollection)
+	} else {
+		fmt.Printf("No language extensions detected, using misc_collection\n")
+	}
+
+	// Choose search variant based on user preference
+	var componentGroups []hfh.ComponentGroup
+	if *weighted {
+		fmt.Printf("Using weighted fusion variant...\n")
+		componentGroups, err = hfh.SearchLanguageBasedApproximateWeighted(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
+	} else {
+		fmt.Printf("Using RRF hybrid search...\n")
+		componentGroups, err = hfh.SearchLanguageBasedApproximate(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
+	}
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -117,70 +135,76 @@ func searchCommand() {
 }
 
 func showHelp() {
-	fmt.Println("HFH CLI - Hierarchical Folder Hashing Tool with Qdrant Search")
-	fmt.Println("=============================================================")
+	fmt.Println("HFH CLI - Hierarchical Folder Hashing Tool with Language-Based Qdrant Search")
+	fmt.Println("=============================================================================")
 	fmt.Println()
-	fmt.Println("This tool can calculate folder hashes and search for similar projects in Qdrant.")
-	fmt.Println("The search uses a consensus-based approach:")
-	fmt.Println("  1. Exact hash matching - finds identical projects")
-	fmt.Println("  2. Progressive similarity search with strict thresholds")
-	fmt.Println("  3. Component consensus analysis - ranks results by agreement across multiple matches")
+	fmt.Println("This tool calculates folder hashes and searches for similar projects using language-based collections.")
+	fmt.Println("The search uses an advanced hybrid approach:")
+	fmt.Println("  1. Language detection - automatically determines target collection (Python, JavaScript, Java, etc.)")
+	fmt.Println("  2. Multi-vector search - combines directory structure, file names, and content hashes")
+	fmt.Println("  3. Hybrid fusion - uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
+	fmt.Println("  4. Extension filtering - applies language-specific filters for higher precision")
 	fmt.Println()
 	fmt.Println("Available subcommands:")
-	fmt.Println("  hash     Calculate hashes for a directory")
-	fmt.Println("  search   Calculate hashes and search for similar projects in Qdrant")
+	fmt.Println("  search   Calculate hashes and search for similar projects in language-based collections")
 	fmt.Println("  help     Show this help message")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  hfh-cli <subcommand> [options]")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  hfh-cli hash -dir /path/to/project")
-	fmt.Println("  hfh-cli search -dir /path/to/project -top 5")
-	fmt.Println("  hfh-cli search -dir . -host localhost -port 6334 -collection url_collection")
+	fmt.Println("  hfh-cli search -dir /path/to/python-project -top 5")
+	fmt.Println("  hfh-cli search -dir . -host localhost -port 6334")
+	fmt.Println("  hfh-cli search -dir /path/to/js-project -top 10")
 	fmt.Println()
 	fmt.Println("For subcommand-specific help:")
-	fmt.Println("  hfh-cli hash -help")
 	fmt.Println("  hfh-cli search -help")
 }
 
 func showSearchHelp() {
-	fmt.Println("HFH CLI - Search Subcommand")
-	fmt.Println("===========================")
+	fmt.Println("HFH CLI - Language-Based Hybrid Search")
+	fmt.Println("======================================")
 	fmt.Println()
-	fmt.Println("Calculate hashes for a directory and search for similar projects in Qdrant.")
-	fmt.Println("Uses a multi-stage approach with Hamming distance filtering:")
+	fmt.Println("Calculate hashes for a directory and search for similar projects using language-based collections.")
+	fmt.Println("This advanced search approach automatically:")
 	fmt.Println()
-	fmt.Println("Stage 1: Exact hash matching")
-	fmt.Println("  - Searches for projects with identical hashes")
-	fmt.Println("  - Returns immediately if exact matches found")
+	fmt.Println("1. Language Detection:")
+	fmt.Println("   - Analyzes file extensions to determine primary language")
+	fmt.Println("   - Selects appropriate collection (python_collection, javascript_collection, etc.)")
+	fmt.Println("   - Falls back to misc_collection if no language detected")
 	fmt.Println()
-	fmt.Println("Stage 2: Component-aware similarity (≤15 bit differences)")
-	fmt.Println("  - Uses Manhattan distance for better Hamming approximation")
-	fmt.Println("  - Applies strict threshold for high-quality matches")
+	fmt.Println("2. Multi-Vector Hybrid Search:")
+	fmt.Println("   - Directory structure vector (dirs)")
+	fmt.Println("   - File naming patterns vector (names)")
+	fmt.Println("   - Content similarity vector (contents)")
+	fmt.Println("   - Uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
 	fmt.Println()
-	fmt.Println("Stage 3: General similarity (≤30 bit differences)")
-	fmt.Println("  - Fallback search with relaxed threshold")
-	fmt.Println("  - Finds loosely similar projects")
+	fmt.Println("3. Language-Specific Filtering:")
+	fmt.Println("   - Applies extension-based filters for higher precision")
+	fmt.Println("   - Searches within language-specific collections for better performance")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  hfh-cli search -dir <directory_path> [options]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  -dir string         Directory path to hash and search (required)")
-	fmt.Println("  -host string        Qdrant server host (default: localhost)")
-	fmt.Println("  -port int           Qdrant server port (default: 6334)")
-	fmt.Println("  -collection string  Qdrant collection name (default: url_collection)")
-	fmt.Println("  -top int            Number of top similar results to return (default: 10)")
-	fmt.Println("  -help              Show this help message")
+	fmt.Println("  -dir string      Directory path to hash and search (required)")
+	fmt.Println("  -host string     Qdrant server host (default: localhost)")
+	fmt.Println("  -port int        Qdrant server port (default: 6334)")
+	fmt.Println("  -top int         Number of top similar results to return (default: 10)")
+	fmt.Println("  -weighted        Use weighted fusion variant instead of RRF (experimental)")
+	fmt.Println("  -help           Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  hfh-cli search -dir /path/to/project")
+	fmt.Println("  hfh-cli search -dir /path/to/python-project")
 	fmt.Println("  hfh-cli search -dir . -top 5")
-	fmt.Println("  hfh-cli search -dir ../project -host 192.168.1.100 -port 6334")
-	fmt.Println("  hfh-cli search -dir . -collection my_collection -top 20")
+	fmt.Println("  hfh-cli search -dir ../js-project -host 192.168.1.100 -port 6334")
+	fmt.Println("  hfh-cli search -dir /path/to/go-project -top 20 -weighted")
 	fmt.Println()
-	fmt.Println("Note: Requires a running Qdrant server with the specified collection.")
+	fmt.Println("Supported Languages:")
+	fmt.Println("  Python, JavaScript/TypeScript, Java, C/C++, Go, Rust, PHP, Ruby,")
+	fmt.Println("  C#, Scala, Kotlin, Swift, Shell, Web (HTML/CSS), Dart, SQL, Lua, R")
+	fmt.Println()
+	fmt.Println("Note: Requires a running Qdrant server with language-based collections created via the import tool.")
 }
 
 func repeatString(s string, count int) string {
@@ -216,7 +240,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
 		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
-		fmt.Printf("     Distance: %.4f\n", group.BestMatch.Distance)
+		fmt.Printf("     Score: %.4f\n", group.BestMatch.Score)
 
 		if group.BestMatch.URL != "" {
 			fmt.Printf("     URL: %s\n", group.BestMatch.URL)
@@ -245,7 +269,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 				// Find the detailed version info
 				for _, versionDetail := range group.AllVersions {
 					if versionDetail.Version == version {
-						fmt.Printf(" (Distance: %.4f)", versionDetail.Distance)
+						fmt.Printf(" (Score: %.4f)", versionDetail.Score)
 						break
 					}
 				}
@@ -262,27 +286,27 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 			}
 		}
 
-		// Quality indicators
-		fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
-		if group.BestMatch.Distance == 0 {
-			fmt.Printf("     ✅ Very High Similarity Match\n")
-		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
-			fmt.Printf("     ✅ High Similarity Match\n")
-		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
-			fmt.Printf("     ⚠️  Medium Similarity Match\n")
-		} else {
-			fmt.Printf("     ⚠️  Low Similarity Match\n")
-		}
+		// // Quality indicators
+		// fmt.Printf("   \n📊 QUALITY INDICATORS:\n")
+		// if group.BestMatch.Score == 0 {
+		// 	fmt.Printf("     ✅ Very High Similarity Match\n")
+		// } else if group.BestMatch.Score <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
+		// 	fmt.Printf("     ✅ High Similarity Match\n")
+		// } else if group.BestMatch.Score <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
+		// 	fmt.Printf("     ⚠️  Medium Similarity Match\n")
+		// } else {
+		// 	fmt.Printf("     ⚠️  Low Similarity Match\n")
+		// }
 
-		if group.BestMatch.Distance == 0 {
-			fmt.Printf("     🎯 Perfect Match\n")
-		} else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
-			fmt.Printf("     🎯 Very Similar Structure\n")
-		} else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
-			fmt.Printf("     🔍 Similar Structure\n")
-		} else {
-			fmt.Printf("     🔍 Loosely Similar\n")
-		}
+		// if group.BestMatch.Distance == 0 {
+		// 	fmt.Printf("     🎯 Perfect Match\n")
+		// } else if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
+		// 	fmt.Printf("     🎯 Very Similar Structure\n")
+		// } else if group.BestMatch.Distance <= hfh.MEDIUM_SIMILARITY_THRESHOLD_APPROX {
+		// 	fmt.Printf("     🔍 Similar Structure\n")
+		// } else {
+		// 	fmt.Printf("     🔍 Loosely Similar\n")
+		// }
 
 		if len(group.AllVersions) > 1 {
 			fmt.Printf("     📚 Multiple Versions Available (%d)\n", len(group.AllVersions))
@@ -311,7 +335,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
 		totalSupportingResults += group.ResultCount
-		if group.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
+		if group.BestMatch.Score >= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
 			highScoreCount++
 		}
 		if group.ResultCount > 1 {
@@ -326,10 +350,10 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 
 	if len(componentGroups) > 0 {
 		bestMatch := componentGroups[0]
-		fmt.Printf("• Best overall match: %s %s (%.4f distance)\n",
-			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Distance)
+		fmt.Printf("• Best overall match: %s %s (%.4f score)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Score)
 
-		if bestMatch.BestMatch.Distance <= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX && bestMatch.ResultCount > 2 {
+		if bestMatch.BestMatch.Score >= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX && bestMatch.ResultCount > 2 {
 			fmt.Printf("• 🎯 Strong recommendation: High similarity with multiple supporting results for %s\n", bestMatch.Component)
 		}
 	}
