@@ -486,41 +486,60 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 		return nil, fmt.Errorf("error converting content hash to vector: %v", err)
 	}
 
+	var filters *qdrant.Filter
+	mustConditions := []*qdrant.Condition{}
+	mustNotConditions := []*qdrant.Condition{}
+	shouldConditions := []*qdrant.Condition{}
+
 	// Build language extension filter for additional filtering
-	var extensionsFilter *qdrant.Filter
 	if len(queryLangExt) > 0 {
-		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 5.0) // More tolerant for language-based collections
+		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 5.0)
 		excludedExtConditions := buildExcludedLanguageExtensionFilter(queryLangExt)
 		if len(langExtConditions) > 0 {
-			extensionsFilter = &qdrant.Filter{
-				Must:    langExtConditions,
-				MustNot: excludedExtConditions,
-			}
+			mustConditions = append(mustConditions, langExtConditions...)
+		}
+		if len(excludedExtConditions) > 0 {
+			mustNotConditions = append(mustNotConditions, excludedExtConditions...)
 		}
 	}
 
-	// Create prefetch queries for RRF fusion (weights handled by fusion algorithm)
+	// We want to get only 'github_popular' or 'github' category results
+	allowedCategories := []*qdrant.Condition{
+		qdrant.NewMatch("category", "github_popular"),
+		qdrant.NewMatch("category", "github"),
+		qdrant.NewMatch("category", "common"),
+	}
+	shouldConditions = append(shouldConditions, allowedCategories...)
+
+	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
+
+	filters = &qdrant.Filter{
+		Must:    mustConditions,
+		MustNot: mustNotConditions,
+		Should:  shouldConditions,
+	}
+
 	prefetchQueries := []*qdrant.PrefetchQuery{
 		{
 			// Names vector query
 			Query:  qdrant.NewQuery(nameVector...),
 			Using:  qdrant.PtrOf("names"),
 			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: extensionsFilter,
+			Filter: filters,
 		},
 		{
 			// Dirs vector query
 			Query:  qdrant.NewQuery(dirVector...),
 			Using:  qdrant.PtrOf("dirs"),
 			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: extensionsFilter,
+			Filter: filters,
 		},
 		{
 			// Contents vector query
 			Query:  qdrant.NewQuery(contentVector...),
 			Using:  qdrant.PtrOf("contents"),
 			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: extensionsFilter,
+			Filter: filters,
 		},
 	}
 
@@ -532,10 +551,7 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 		Limit:          qdrant.PtrOf(topK),
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			HnswEf: qdrant.PtrOf(uint64(128)),
-			Exact:  qdrant.PtrOf(false),
-		},
+		ScoreThreshold: qdrant.PtrOf(float32(LOW_SIMILARITY_THRESHOLD)),
 	}
 
 	searchResp, err := client.Query(ctx, hybridQuery)
@@ -548,10 +564,7 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 	for _, point := range searchResp {
 		result := convertPointToResult(point)
 
-		if result.Score >= LOW_SIMILARITY_THRESHOLD {
-			log.Printf("Quality match in %s: %s %s (score: %.3f)", collectionName, result.Component, result.Version, result.Score)
-			results = append(results, result)
-		}
+		results = append(results, result)
 	}
 
 	log.Printf("Weighted hybrid search found %d quality results in %s", len(results), collectionName)
