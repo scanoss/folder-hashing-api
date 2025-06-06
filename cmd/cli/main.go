@@ -97,6 +97,7 @@ func searchCommand() {
 	fmt.Printf("  Contents Hash:    %v\n", requestRoot.SimHashContent)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
+	fmt.Printf("Ranking: github_popular > github > common\n")
 	fmt.Println(repeatString("-", 60))
 
 	// Search for similar projects in Qdrant using the new language-based hybrid search
@@ -134,7 +135,7 @@ func showHelp() {
 	fmt.Println("The search uses an advanced hybrid approach:")
 	fmt.Println("  1. Language detection - automatically determines target collection (Python, JavaScript, Java, etc.)")
 	fmt.Println("  2. Multi-vector search - combines directory structure, file names, and content hashes")
-	fmt.Println("  3. Hybrid fusion - uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
+	fmt.Println("  3. Category-based ranking - prioritizes github_popular > github > common sources")
 	fmt.Println("  4. Extension filtering - applies language-specific filters for higher precision")
 	fmt.Println()
 	fmt.Println("Available subcommands:")
@@ -169,9 +170,15 @@ func showSearchHelp() {
 	fmt.Println("   - Directory structure vector (dirs)")
 	fmt.Println("   - File naming patterns vector (names)")
 	fmt.Println("   - Content similarity vector (contents)")
-	fmt.Println("   - Uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
+	fmt.Println("   - Weighted combination (75% names, 15% dirs, 10% contents)")
 	fmt.Println()
-	fmt.Println("3. Language-Specific Filtering:")
+	fmt.Println("3. Category-Based Ranking:")
+	fmt.Println("   - github_popular: Popular GitHub repositories (highest priority)")
+	fmt.Println("   - github: Standard GitHub repositories")
+	fmt.Println("   - common: Common/general repositories (lowest priority)")
+	fmt.Println("   - Results sorted first by category, then by similarity score")
+	fmt.Println()
+	fmt.Println("4. Language-Specific Filtering:")
 	fmt.Println("   - Applies extension-based filters for higher precision")
 	fmt.Println("   - Searches within language-specific collections for better performance")
 	fmt.Println()
@@ -207,6 +214,20 @@ func repeatString(s string, count int) string {
 	return result
 }
 
+// getCategoryEmoji returns an appropriate emoji for the category
+func getCategoryEmoji(category string) string {
+	switch category {
+	case "github_popular":
+		return "🌟"
+	case "github":
+		return "🔹"
+	case "common":
+		return "📦"
+	default:
+		return "❓"
+	}
+}
+
 // displayGroupedResults displays grouped search results
 func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	fmt.Printf("\nFound %d component group(s):\n", len(componentGroups))
@@ -216,6 +237,13 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		// Display component header
 		fmt.Printf("\n%d. Component: %s\n", i+1, group.Component)
 		fmt.Printf("   Vendor: %s\n", group.Vendor)
+
+		// Display category information from best match
+		if category, ok := group.BestMatch.Metadata["category"]; ok && category != "" {
+			categoryEmoji := getCategoryEmoji(category.(string))
+			fmt.Printf("   %s Category: %s\n", categoryEmoji, category)
+		}
+
 		fmt.Printf("   📊 Result Count: %d supporting results\n", group.ResultCount)
 
 		// Add quality indicator based on result count
@@ -232,7 +260,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
 		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
-		fmt.Printf("     Score: %.4f\n", group.BestMatch.Score)
+		fmt.Printf("     Distance: %.4f\n", group.BestMatch.Distance)
 
 		if group.BestMatch.URL != "" {
 			fmt.Printf("     URL: %s\n", group.BestMatch.URL)
@@ -251,6 +279,9 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		if releaseDate, ok := group.BestMatch.Metadata["release_date"]; ok && releaseDate != "" {
 			fmt.Printf("     Release Date: %v\n", releaseDate)
 		}
+		if purl, ok := group.BestMatch.Metadata["purl"]; ok && purl != "" {
+			fmt.Printf("     PURL: %v\n", purl)
+		}
 
 		// Display other versions if available
 		if len(group.OtherVersions) > 0 {
@@ -261,7 +292,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 				// Find the detailed version info
 				for _, versionDetail := range group.AllVersions {
 					if versionDetail.Version == version {
-						fmt.Printf(" (Score: %.4f)", versionDetail.Score)
+						fmt.Printf(" (Distance: %.4f)", versionDetail.Distance)
 						break
 					}
 				}
@@ -298,33 +329,70 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	fmt.Printf("• Found %d unique component(s)\n", len(componentGroups))
 
 	totalVersions := 0
-	highScoreCount := 0
+	highQualityCount := 0
 	multiResultCount := 0
 	totalSupportingResults := 0
+	categoryCount := make(map[string]int)
 
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
 		totalSupportingResults += group.ResultCount
-		if group.BestMatch.Score >= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX {
-			highScoreCount++
+
+		// Count high quality matches based on category instead of score
+		if category, ok := group.BestMatch.Metadata["category"]; ok {
+			if category == "github_popular" || (category == "github" && group.ResultCount > 1) {
+				highQualityCount++
+			}
 		}
+
 		if group.ResultCount > 1 {
 			multiResultCount++
+		}
+
+		// Count categories
+		if category, ok := group.BestMatch.Metadata["category"]; ok && category != "" {
+			categoryCount[category.(string)]++
+		} else {
+			categoryCount["unknown"]++
 		}
 	}
 
 	fmt.Printf("• Total versions discovered: %d\n", totalVersions)
 	fmt.Printf("• Total supporting search results: %d\n", totalSupportingResults)
-	fmt.Printf("• High similarity matches: %d\n", highScoreCount)
+	fmt.Printf("• High quality matches: %d\n", highQualityCount)
 	fmt.Printf("• Components with multiple results: %d\n", multiResultCount)
+
+	// Display category distribution
+	if len(categoryCount) > 0 {
+		fmt.Printf("• Category distribution:\n")
+		// Order categories by priority
+		categoryOrder := []string{"github_popular", "github", "common", "unknown"}
+		for _, category := range categoryOrder {
+			if count, exists := categoryCount[category]; exists && count > 0 {
+				emoji := getCategoryEmoji(category)
+				fmt.Printf("  %s %s: %d\n", emoji, category, count)
+			}
+		}
+	}
 
 	if len(componentGroups) > 0 {
 		bestMatch := componentGroups[0]
-		fmt.Printf("• Best overall match: %s %s (%.4f score)\n",
-			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Score)
+		bestCategory := "unknown"
+		if category, ok := bestMatch.BestMatch.Metadata["category"]; ok && category != "" {
+			bestCategory = category.(string)
+		}
 
-		if bestMatch.BestMatch.Score >= hfh.HIGH_SIMILARITY_THRESHOLD_APPROX && bestMatch.ResultCount > 2 {
-			fmt.Printf("• 🎯 Strong recommendation: High similarity with multiple supporting results for %s\n", bestMatch.Component)
+		fmt.Printf("• Best overall match: %s %s (%.4f distance, %s %s)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Distance,
+			getCategoryEmoji(bestCategory), bestCategory)
+
+		// Strong recommendation based on category and supporting results
+		if bestCategory == "github_popular" && bestMatch.ResultCount > 1 {
+			fmt.Printf("• 🎯 Strong recommendation: Popular GitHub component with multiple supporting results for %s\n", bestMatch.Component)
+		} else if bestCategory == "github" && bestMatch.ResultCount > 2 {
+			fmt.Printf("• 🎯 Strong recommendation: GitHub component with strong supporting evidence for %s\n", bestMatch.Component)
+		} else if bestMatch.ResultCount > 3 {
+			fmt.Printf("• 🎯 Strong recommendation: Multiple supporting results provide strong evidence for %s\n", bestMatch.Component)
 		}
 	}
 }

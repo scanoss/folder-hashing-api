@@ -100,7 +100,7 @@ type LanguageExtensions map[string]int32
 
 // SearchResult represents a search result from Qdrant
 type SearchResult struct {
-	Score              float32            `json:"score"`
+	Distance           float32            `json:"distance"`
 	ID                 uint64             `json:"id"`
 	Vendor             string             `json:"vendor"`
 	Component          string             `json:"component"`
@@ -123,7 +123,7 @@ type ComponentGroup struct {
 // VersionResult represents a version-specific result within a component group
 type VersionResult struct {
 	Version            string             `json:"version"`
-	Score              float32            `json:"score"`
+	Distance           float32            `json:"distance"`
 	URL                string             `json:"url,omitempty"`
 	LanguageExtensions LanguageExtensions `json:"language_extensions,omitempty"`
 	Metadata           map[string]any     `json:"metadata,omitempty"`
@@ -291,7 +291,7 @@ func buildExcludedLanguageExtensionFilter(queryLangExt LanguageExtensions) []*qd
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
 func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	result := SearchResult{
-		Score:    point.Score,
+		Distance: point.Score,
 		ID:       point.Id.GetNum(),
 		Metadata: make(map[string]any),
 	}
@@ -360,6 +360,21 @@ func parseLanguageExtensions(langExtStr string) (LanguageExtensions, error) {
 	return langExt, nil
 }
 
+// getCategoryRankValue returns a numeric rank for category-based sorting
+// Lower values indicate higher priority (github_popular > github > common)
+func getCategoryRankValue(category string) int {
+	switch category {
+	case "github_popular":
+		return 1
+	case "github":
+		return 2
+	case "common":
+		return 3
+	default:
+		return 4 // For any unknown categories
+	}
+}
+
 // combineWeightedResults combines results from three separate queries with weights
 func combineWeightedResults(namesResp, dirsResp, contentsResp []*qdrant.ScoredPoint, namesWeight, dirsWeight, contentsWeight float32, topK uint64) []SearchResult {
 	combinedDistances := make(map[uint64]float32)
@@ -390,25 +405,41 @@ func combineWeightedResults(namesResp, dirsResp, contentsResp []*qdrant.ScoredPo
 		}
 	}
 
-	// Convert to slice and sort by combined distance
+	// Convert to slice and sort by category rank, then by combined distance
 	type distanceResult struct {
-		id       uint64
-		distance float32
-		point    *qdrant.ScoredPoint
+		id           uint64
+		distance     float32
+		point        *qdrant.ScoredPoint
+		categoryRank int
 	}
 
 	var distanceResults []distanceResult
 	for id, distance := range combinedDistances {
+		point := pointMap[id]
+		categoryRank := 4 // Default rank for unknown/missing category
+
+		// Extract category from point payload
+		if point.Payload != nil {
+			if val, exists := point.Payload["category"]; exists {
+				category := val.GetStringValue()
+				categoryRank = getCategoryRankValue(category)
+			}
+		}
+
 		distanceResults = append(distanceResults, distanceResult{
-			id:       id,
-			distance: distance,
-			point:    pointMap[id],
+			id:           id,
+			distance:     distance,
+			point:        point,
+			categoryRank: categoryRank,
 		})
 	}
 
-	// Sort by combined distance (ascending - lower distance is better)
+	// Sort by category rank first (ascending - lower rank is better), then by combined distance (ascending - lower distance is better)
 	sort.Slice(distanceResults, func(i, j int) bool {
-		return distanceResults[i].distance < distanceResults[j].distance
+		if distanceResults[i].categoryRank == distanceResults[j].categoryRank {
+			return distanceResults[i].distance < distanceResults[j].distance
+		}
+		return distanceResults[i].categoryRank < distanceResults[j].categoryRank
 	})
 
 	// Convert to SearchResult and limit to topK
@@ -444,7 +475,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 
 		versionResult := VersionResult{
 			Version:            result.Version,
-			Score:              result.Score,
+			Distance:           result.Distance,
 			URL:                result.URL,
 			LanguageExtensions: result.LanguageExtensions,
 			Metadata:           result.Metadata,
@@ -456,7 +487,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 			group.ResultCount++
 
 			// Update best match if this version has a better distance (lower is better)
-			if versionResult.Score < group.BestMatch.Score {
+			if versionResult.Distance < group.BestMatch.Distance {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -476,12 +507,12 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 	for _, group := range groups {
 		// Sort versions within group by distance (lower distance is better)
 		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Score < group.AllVersions[j].Score
+			return group.AllVersions[i].Distance < group.AllVersions[j].Distance
 		})
 
 		// Create other versions list (excluding best match)
 		for _, version := range group.AllVersions {
-			if version.Version != group.BestMatch.Version || version.Score != group.BestMatch.Score {
+			if version.Version != group.BestMatch.Version || version.Distance != group.BestMatch.Distance {
 				group.OtherVersions = append(group.OtherVersions, version.Version)
 			}
 		}
@@ -491,7 +522,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 
 	// Sort groups by best match distance (lower distance is better)
 	sort.Slice(groupSlice, func(i, j int) bool {
-		return groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score
+		return groupSlice[i].BestMatch.Distance < groupSlice[j].BestMatch.Distance
 	})
 
 	return groupSlice

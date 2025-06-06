@@ -243,8 +243,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	// Create indexes for faster filtering
 	log.Printf("Creating payload indexes for collection %s...", collectionName)
 
-	// Index for component fields for faster grouping
-	textFields := []string{"component", "vendor", "version", "url"}
+	// Index for component fields and category for faster grouping and filtering
+	textFields := []string{"component", "vendor", "version", "url", "category"}
 	for _, field := range textFields {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
@@ -387,8 +387,15 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		size, _ := strconv.ParseInt(record[15], 10, 32)
 		categoryStr := strings.TrimSpace(record[16])
 
-		// Generate point ID
-		idStringToHash := urlHashStr + categoryStr + hfhDirsStr + hfhNamesStr + hfhContentsStr
+		// Generate unique point ID based on metadata to handle re-imports gracefully
+		// Include component, vendor, version, and URL to create a truly unique identifier
+		component := strings.TrimSpace(record[5])
+		vendor := strings.TrimSpace(record[4])
+		version := strings.TrimSpace(record[6])
+		url := strings.TrimSpace(record[10])
+
+		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s",
+			vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash))
 		pointId := hasher.Sum64()
