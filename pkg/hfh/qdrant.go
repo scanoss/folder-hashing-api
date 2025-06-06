@@ -23,12 +23,7 @@ const (
 	NamesCollectionName    = "names_collection"
 	ContentsCollectionName = "contents_collection"
 
-	LOW_SIMILARITY_THRESHOLD = 0.5
-
-	// Optimized thresholds for approximate search only
-	HIGH_SIMILARITY_THRESHOLD_APPROX   = 5  // 1-5 bit differences (very strict)
-	MEDIUM_SIMILARITY_THRESHOLD_APPROX = 12 // 6-12 bit differences (moderate)
-	LOW_SIMILARITY_THRESHOLD_APPROX    = 20 // 13-20 bit differences (permissive)
+	ADAPTIVE_THRESHOLD_PERCENTAGE = 0.5 // Use 50% of the distance range as threshold
 )
 
 // Language-based collection names (new approach)
@@ -365,6 +360,74 @@ func parseLanguageExtensions(langExtStr string) (LanguageExtensions, error) {
 	return langExt, nil
 }
 
+// combineWeightedResults combines results from three separate queries with weights
+func combineWeightedResults(namesResp, dirsResp, contentsResp []*qdrant.ScoredPoint, namesWeight, dirsWeight, contentsWeight float32, topK uint64) []SearchResult {
+	combinedDistances := make(map[uint64]float32)
+	pointMap := make(map[uint64]*qdrant.ScoredPoint)
+
+	// Process names results (75% weight) - lower distance is better
+	for _, point := range namesResp {
+		id := point.Id.GetNum()
+		combinedDistances[id] += point.Score * namesWeight
+		pointMap[id] = point
+	}
+
+	// Process dirs results (15% weight) - lower distance is better
+	for _, point := range dirsResp {
+		id := point.Id.GetNum()
+		combinedDistances[id] += point.Score * dirsWeight
+		if _, exists := pointMap[id]; !exists {
+			pointMap[id] = point
+		}
+	}
+
+	// Process contents results (10% weight) - lower distance is better
+	for _, point := range contentsResp {
+		id := point.Id.GetNum()
+		combinedDistances[id] += point.Score * contentsWeight
+		if _, exists := pointMap[id]; !exists {
+			pointMap[id] = point
+		}
+	}
+
+	// Convert to slice and sort by combined distance
+	type distanceResult struct {
+		id       uint64
+		distance float32
+		point    *qdrant.ScoredPoint
+	}
+
+	var distanceResults []distanceResult
+	for id, distance := range combinedDistances {
+		distanceResults = append(distanceResults, distanceResult{
+			id:       id,
+			distance: distance,
+			point:    pointMap[id],
+		})
+	}
+
+	// Sort by combined distance (ascending - lower distance is better)
+	sort.Slice(distanceResults, func(i, j int) bool {
+		return distanceResults[i].distance < distanceResults[j].distance
+	})
+
+	// Convert to SearchResult and limit to topK
+	var results []SearchResult
+	limit := int(topK)
+	if limit > len(distanceResults) {
+		limit = len(distanceResults)
+	}
+
+	for i := 0; i < limit; i++ {
+		// Update the point's score to the combined distance
+		distanceResults[i].point.Score = distanceResults[i].distance
+		result := convertPointToResult(distanceResults[i].point)
+		results = append(results, result)
+	}
+
+	return results
+}
+
 // groupByComponent groups results by component name
 func groupByComponent(results []SearchResult) []ComponentGroup {
 	if len(results) == 0 {
@@ -392,8 +455,8 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 			group.AllVersions = append(group.AllVersions, versionResult)
 			group.ResultCount++
 
-			// Update best match if this version has a better score
-			if versionResult.Score > group.BestMatch.Score {
+			// Update best match if this version has a better distance (lower is better)
+			if versionResult.Score < group.BestMatch.Score {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -411,9 +474,9 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 	// Convert to slice and finalize
 	var groupSlice []ComponentGroup
 	for _, group := range groups {
-		// Sort versions within group by score (higher score is better)
+		// Sort versions within group by distance (lower distance is better)
 		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Score > group.AllVersions[j].Score
+			return group.AllVersions[i].Score < group.AllVersions[j].Score
 		})
 
 		// Create other versions list (excluding best match)
@@ -426,17 +489,17 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 		groupSlice = append(groupSlice, *group)
 	}
 
-	// Sort groups by best match score (higher is better because of RRF)
+	// Sort groups by best match distance (lower distance is better)
 	sort.Slice(groupSlice, func(i, j int) bool {
-		return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
+		return groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score
 	})
 
 	return groupSlice
 }
 
-// SearchLanguageBasedApproximate performs optimized search using RRF
+// SearchLanguageBasedApproximate performs adaptive threshold search with progressive filtering
 func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
-	log.Printf("Starting language-based search with RRF fusion")
+	log.Printf("Starting adaptive threshold search (names→dirs→contents with 75%%/15%%/10%% weights)")
 
 	// Determine target collection based on primary language
 	collectionName := GetCollectionNameFromLanguageExtensions(queryLangExt)
@@ -519,57 +582,117 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 		Should:  shouldConditions,
 	}
 
-	prefetchQueries := []*qdrant.PrefetchQuery{
-		{
-			// Names vector query
-			Query:  qdrant.NewQuery(nameVector...),
-			Using:  qdrant.PtrOf("names"),
-			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: filters,
-		},
-		{
-			// Dirs vector query
-			Query:  qdrant.NewQuery(dirVector...),
-			Using:  qdrant.PtrOf("dirs"),
-			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: filters,
-		},
-		{
-			// Contents vector query
-			Query:  qdrant.NewQuery(contentVector...),
-			Using:  qdrant.PtrOf("contents"),
-			Limit:  qdrant.PtrOf(topK * 2),
-			Filter: filters,
-		},
-	}
-
-	// Create hybrid query with weighted fusion
-	hybridQuery := &qdrant.QueryPoints{
+	// Execute names query
+	namesQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
-		Prefetch:       prefetchQueries,
-		Limit:          qdrant.PtrOf(topK),
+		Query:          qdrant.NewQuery(nameVector...),
+		Using:          qdrant.PtrOf("names"),
+		Filter:         filters,
+		Limit:          qdrant.PtrOf(topK * 3),
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		ScoreThreshold: qdrant.PtrOf(float32(LOW_SIMILARITY_THRESHOLD)),
 	}
 
-	searchResp, err := client.Query(ctx, hybridQuery)
+	// Execute dirs query with names prefetch
+	dirsQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(dirVector...),
+		Using:          qdrant.PtrOf("dirs"),
+		Limit:          qdrant.PtrOf(topK * 2),
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	}
+
+	// Execute contents query with names prefetch
+	contentsQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(contentVector...),
+		Using:          qdrant.PtrOf("contents"),
+		Limit:          qdrant.PtrOf(topK * 2),
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+	}
+
+	// Step 1: Execute names query and calculate adaptive threshold
+	namesResp, err := client.Query(ctx, namesQuery)
 	if err != nil {
-		return nil, fmt.Errorf("error performing weighted hybrid search in %s: %v", collectionName, err)
+		return nil, fmt.Errorf("error performing names query in %s: %v", collectionName, err)
 	}
 
-	// Convert results and apply quality filtering
-	var results []SearchResult
-	for _, point := range searchResp {
-		result := convertPointToResult(point)
-
-		results = append(results, result)
+	if len(namesResp) == 0 {
+		log.Printf("No results found in names query for %s", collectionName)
+		return []ComponentGroup{}, nil
 	}
 
-	log.Printf("Weighted hybrid search found %d quality results in %s", len(results), collectionName)
+	// Calculate adaptive threshold from names results
+	minDistance := namesResp[0].Score
+	maxDistance := namesResp[0].Score
+	for _, point := range namesResp {
+		if point.Score < minDistance {
+			minDistance = point.Score
+		}
+		if point.Score > maxDistance {
+			maxDistance = point.Score
+		}
+	}
 
-	// Group by component
+	// Calculate adaptive threshold: min + percentage of the range (configurable)
+	adaptiveThreshold := minDistance + (maxDistance-minDistance)*ADAPTIVE_THRESHOLD_PERCENTAGE
+	log.Printf("Names adaptive threshold: min=%.3f, max=%.3f, threshold=%.3f", minDistance, maxDistance, adaptiveThreshold)
+
+	// Filter names results by adaptive threshold
+	var filteredNamesResp []*qdrant.ScoredPoint
+	for _, point := range namesResp {
+		if point.Score <= adaptiveThreshold {
+			filteredNamesResp = append(filteredNamesResp, point)
+		}
+	}
+	log.Printf("Names results: %d total, %d after adaptive threshold", len(namesResp), len(filteredNamesResp))
+
+	// Step 2: Execute dirs query with filtered names as constraint
+	dirsResp, err := client.Query(ctx, dirsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("error performing dirs query in %s: %v", collectionName, err)
+	}
+
+	// Filter dirs results to only include IDs from filtered names
+	namesIDSet := make(map[uint64]bool)
+	for _, point := range filteredNamesResp {
+		namesIDSet[point.Id.GetNum()] = true
+	}
+
+	var filteredDirsResp []*qdrant.ScoredPoint
+	for _, point := range dirsResp {
+		if namesIDSet[point.Id.GetNum()] {
+			filteredDirsResp = append(filteredDirsResp, point)
+		}
+	}
+	log.Printf("Dirs results: %d total, %d matching names threshold", len(dirsResp), len(filteredDirsResp))
+
+	// Step 3: Execute contents query for final tie-breaking on dirs-filtered results
+	contentsResp, err := client.Query(ctx, contentsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("error performing contents query in %s: %v", collectionName, err)
+	}
+
+	// Create ID set from dirs results for final filtering
+	dirsIDSet := make(map[uint64]bool)
+	for _, point := range filteredDirsResp {
+		dirsIDSet[point.Id.GetNum()] = true
+	}
+
+	var filteredContentsResp []*qdrant.ScoredPoint
+	for _, point := range contentsResp {
+		if dirsIDSet[point.Id.GetNum()] {
+			filteredContentsResp = append(filteredContentsResp, point)
+		}
+	}
+	log.Printf("Contents results: %d total, %d matching dirs threshold", len(contentsResp), len(filteredContentsResp))
+
+	results := combineWeightedResults(filteredNamesResp, filteredDirsResp, filteredContentsResp, 0.75, 0.15, 0.10, topK)
+
+	log.Printf("Adaptive threshold search found %d results in %s (names→dirs→contents with 75%%+15%%+10%% weights)", len(results), collectionName)
+
 	componentGroups := groupByComponent(results)
 
 	log.Printf("Weighted hybrid search completed: %d results grouped into %d components", len(results), len(componentGroups))
