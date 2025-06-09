@@ -257,10 +257,14 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 			fmt.Printf("   ❓ Limited Evidence - Single result for this component\n")
 		}
 
+		// Get confidence level for the best match
+		confidenceLevel, confidenceDesc := hfh.GetConfidenceLevel(group.BestMatch.Distance, group.ResultCount)
+
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
 		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
 		fmt.Printf("     Distance: %.4f\n", group.BestMatch.Distance)
+		fmt.Printf("     Confidence: %s (%s)\n", confidenceLevel, confidenceDesc)
 
 		if group.BestMatch.URL != "" {
 			fmt.Printf("     URL: %s\n", group.BestMatch.URL)

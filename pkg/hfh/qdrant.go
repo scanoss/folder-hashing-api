@@ -403,8 +403,8 @@ func boostDistanceByCategory(point *qdrant.ScoredPoint) float32 {
 	return originalDistance
 }
 
-// calculateDistributionAwareThreshold calculates adaptive threshold based on score distribution
-func calculateDistributionAwareThreshold(distances []float32) float32 {
+// calculateGapBasedThreshold calculates adaptive threshold using gap-based analysis for better filtering
+func calculateGapBasedThreshold(distances []float32) float32 {
 	if len(distances) == 0 {
 		return 0
 	}
@@ -419,47 +419,56 @@ func calculateDistributionAwareThreshold(distances []float32) float32 {
 
 	var adaptiveThreshold float32
 
-	if len(distances) <= 3 {
-		// For very few results, use a higher threshold to be more inclusive
-		adaptiveThreshold = minDistance + (maxDistance-minDistance)*0.8
+	// Gap-based filtering for better quality control
+	if minDistance < 1.0 {
+		// Very good match - be very selective
+		adaptiveThreshold = float32(math.Min(float64(minDistance*3.0), 4.0))
+		log.Printf("High-quality match detected (distance < 1.0), using restrictive threshold: %.4f", adaptiveThreshold)
+	} else if minDistance < 5.0 {
+		// Good match - moderately selective
+		adaptiveThreshold = float32(math.Min(float64(minDistance*2.0), 5.0))
+		log.Printf("Good quality match detected (distance < 5.0), using moderate threshold: %.4f", adaptiveThreshold)
 	} else {
-		// Calculate percentile-based threshold
-		// Use 40th percentile (keep best 40% of results) for better distribution-aware filtering
-		percentileIndex := int(float32(len(distances)) * 0.4)
-		if percentileIndex >= len(distances) {
-			percentileIndex = len(distances) - 1
+		// No clear winner - use distribution analysis but cap at reasonable distance
+		if len(distances) <= 3 {
+			adaptiveThreshold = float32(math.Min(float64(minDistance+(maxDistance-minDistance)*0.6), 8.0))
+		} else {
+			// Use percentile-based threshold but cap it
+			percentileIndex := int(float32(len(distances)) * 0.3) // More restrictive - keep top 30%
+			if percentileIndex >= len(distances) {
+				percentileIndex = len(distances) - 1
+			}
+			percentileThreshold := distances[percentileIndex]
+
+			// Cap at 8.0 distance maximum
+			adaptiveThreshold = float32(math.Min(float64(percentileThreshold), 8.0))
 		}
-		percentileThreshold := distances[percentileIndex]
-
-		// Also calculate mean and standard deviation for additional context
-		var sum float32
-		for _, distance := range distances {
-			sum += distance
-		}
-		mean := sum / float32(len(distances))
-
-		var variance float32
-		for _, distance := range distances {
-			variance += (distance - mean) * (distance - mean)
-		}
-		stdDev := float32(math.Sqrt(float64(variance / float32(len(distances)))))
-
-		log.Printf("Distance distribution: mean=%.4f, stddev=%.4f, 40th percentile=%.4f", mean, stdDev, percentileThreshold)
-
-		// Use the lower of: 40th percentile or (mean + 0.5*stddev)
-		// This ensures we don't exclude results that are reasonably close to the average
-		meanBasedThreshold := mean + 0.5*stdDev
-		adaptiveThreshold = float32(math.Min(float64(percentileThreshold), float64(meanBasedThreshold)))
-
-		// But don't let the threshold be too high compared to the distance range
-		maxThreshold := minDistance + (maxDistance-minDistance)*0.9
-		if adaptiveThreshold > maxThreshold {
-			adaptiveThreshold = maxThreshold
-		}
+		log.Printf("No clear winner, using distribution-based threshold (capped at 8.0): %.4f", adaptiveThreshold)
 	}
 
-	log.Printf("Calculated adaptive threshold: %.4f (method: distribution-aware)", adaptiveThreshold)
+	// Absolute maximum threshold - never include anything with distance > 8.0
+	if adaptiveThreshold > 8.0 {
+		adaptiveThreshold = 8.0
+		log.Printf("Capping threshold at maximum acceptable distance: %.4f", adaptiveThreshold)
+	}
+
+	log.Printf("Calculated gap-based threshold: %.4f", adaptiveThreshold)
 	return adaptiveThreshold
+}
+
+// GetConfidenceLevel returns a confidence assessment based on distance and evidence count
+func GetConfidenceLevel(distance float32, evidenceCount int) (string, string) {
+	if distance < 1.0 {
+		return "🎯 VERY HIGH", "Excellent match with strong evidence"
+	} else if distance < 2.0 && evidenceCount > 2 {
+		return "🔥 HIGH", "Strong match with good evidence"
+	} else if distance < 4.0 && evidenceCount > 1 {
+		return "✅ MEDIUM", "Good match with moderate evidence"
+	} else if distance < 6.0 {
+		return "⚠️ LOW", "Possible match but limited confidence"
+	} else {
+		return "❓ VERY LOW", "Weak match, likely false positive"
+	}
 }
 
 // combineWeightedResults combines results from three separate queries with weights
@@ -735,8 +744,8 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 		boostedDistances = append(boostedDistances, boostedDistance)
 	}
 
-	// Calculate distribution-aware adaptive threshold using boosted distances
-	adaptiveThreshold := calculateDistributionAwareThreshold(boostedDistances)
+	// Calculate gap-based adaptive threshold using boosted distances
+	adaptiveThreshold := calculateGapBasedThreshold(boostedDistances)
 
 	// Filter names results by adaptive threshold using boosted distances
 	var filteredNamesResp []*qdrant.ScoredPoint
