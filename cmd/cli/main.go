@@ -55,12 +55,6 @@ func searchCommand() {
 	host := searchFlags.String("host", "localhost", "Qdrant server host")
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
-
-	// Language filtering configuration
-	distributionTolerance := searchFlags.Float64("distribution-tolerance", 15.0, "Language distribution tolerance percentage (default: 15.0)")
-	minLanguagePercent := searchFlags.Float64("min-language-percent", 5.0, "Minimum percentage for a language to be considered significant (default: 5.0)")
-	disableLanguageFilter := searchFlags.Bool("disable-language-filter", false, "Disable language extension filtering entirely")
-
 	help := searchFlags.Bool("help", false, "Show help message")
 	searchFlags.Parse(os.Args[2:])
 
@@ -103,7 +97,6 @@ func searchCommand() {
 	fmt.Printf("  Contents Hash:    %v\n", requestRoot.SimHashContent)
 	fmt.Printf("Searching for similar projects in Qdrant...\n")
 	fmt.Printf("Host: %s:%d, Top: %d\n", *host, *port, *topK)
-	fmt.Printf("Ranking: github_popular > github > common\n")
 	fmt.Println(repeatString("-", 60))
 
 	// Search for similar projects in Qdrant using the new language-based hybrid search
@@ -118,23 +111,8 @@ func searchCommand() {
 		fmt.Printf("No language extensions detected, using misc_collection\n")
 	}
 
-	// Create language filter configuration
-	filterConfig := hfh.LanguageFilterConfig{
-		DistributionTolerance: float32(*distributionTolerance),
-		MinLanguagePercent:    float32(*minLanguagePercent),
-		Disabled:              *disableLanguageFilter,
-	}
-
-	// Display filter configuration
-	if *disableLanguageFilter {
-		fmt.Printf("Language Filter: DISABLED (exploratory search)\n")
-	} else {
-		fmt.Printf("Language Filter: Distribution-based (tolerance: %.1f%%, min threshold: %.1f%%)\n",
-			*distributionTolerance, *minLanguagePercent)
-	}
-
-	// Use the new search function with configurable language filtering
-	componentGroups, err := hfh.SearchLanguageBasedApproximateWithFilter(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK), filterConfig)
+	// Choose search variant based on user preference
+	componentGroups, err := hfh.SearchLanguageBasedApproximate(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -156,7 +134,7 @@ func showHelp() {
 	fmt.Println("The search uses an advanced hybrid approach:")
 	fmt.Println("  1. Language detection - automatically determines target collection (Python, JavaScript, Java, etc.)")
 	fmt.Println("  2. Multi-vector search - combines directory structure, file names, and content hashes")
-	fmt.Println("  3. Category-based ranking - prioritizes github_popular > github > common sources")
+	fmt.Println("  3. Hybrid fusion - uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
 	fmt.Println("  4. Extension filtering - applies language-specific filters for higher precision")
 	fmt.Println()
 	fmt.Println("Available subcommands:")
@@ -191,15 +169,9 @@ func showSearchHelp() {
 	fmt.Println("   - Directory structure vector (dirs)")
 	fmt.Println("   - File naming patterns vector (names)")
 	fmt.Println("   - Content similarity vector (contents)")
-	fmt.Println("   - Weighted combination (75% names, 15% dirs, 10% contents)")
+	fmt.Println("   - Uses Qdrant's RRF (Reciprocal Rank Fusion) for optimal ranking")
 	fmt.Println()
-	fmt.Println("3. Category-Based Ranking:")
-	fmt.Println("   - github_popular: Popular GitHub repositories (highest priority)")
-	fmt.Println("   - github: Standard GitHub repositories")
-	fmt.Println("   - common: Common/general repositories (lowest priority)")
-	fmt.Println("   - Results sorted first by category, then by similarity score")
-	fmt.Println()
-	fmt.Println("4. Language-Specific Filtering:")
+	fmt.Println("3. Language-Specific Filtering:")
 	fmt.Println("   - Applies extension-based filters for higher precision")
 	fmt.Println("   - Searches within language-specific collections for better performance")
 	fmt.Println()
@@ -207,43 +179,18 @@ func showSearchHelp() {
 	fmt.Println("  hfh-cli search -dir <directory_path> [options]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  -dir string                  Directory path to hash and search (required)")
-	fmt.Println("  -host string                 Qdrant server host (default: localhost)")
-	fmt.Println("  -port int                    Qdrant server port (default: 6334)")
-	fmt.Println("  -top int                     Number of top similar results to return (default: 10)")
-	fmt.Println("  -distribution-tolerance float Language distribution tolerance percentage (default: 15.0)")
-	fmt.Println("  -min-language-percent float  Minimum percentage for significant languages (default: 5.0)")
-	fmt.Println("  -disable-language-filter     Disable language extension filtering entirely")
-	fmt.Println("  -help                        Show this help message")
-	fmt.Println()
-	fmt.Println("Language Filtering Options:")
-	fmt.Println("  The new distribution-based language filtering improves precision by matching")
-	fmt.Println("  language proportions rather than absolute file counts:")
-	fmt.Println()
-	fmt.Println("  -distribution-tolerance: Controls how flexible the language matching is")
-	fmt.Println("    • Lower values (5-10): Strict matching for precise results")
-	fmt.Println("    • Higher values (20-30): Permissive matching for broader discovery")
-	fmt.Println()
-	fmt.Println("  -min-language-percent: Minimum threshold for languages to be considered")
-	fmt.Println("    • Languages below this percentage are ignored in filtering")
-	fmt.Println("    • Helps focus on dominant languages in the project")
-	fmt.Println()
-	fmt.Println("  -disable-language-filter: Completely disables language filtering")
-	fmt.Println("    • Useful for exploratory searches or diverse projects")
-	fmt.Println("    • May return more results but with lower precision")
+	fmt.Println("  -dir string      Directory path to hash and search (required)")
+	fmt.Println("  -host string     Qdrant server host (default: localhost)")
+	fmt.Println("  -port int        Qdrant server port (default: 6334)")
+	fmt.Println("  -top int         Number of top similar results to return (default: 10)")
+	fmt.Println("  -weighted        Use weighted fusion variant instead of RRF (experimental)")
+	fmt.Println("  -help           Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  # Default behavior (recommended)")
 	fmt.Println("  hfh-cli search -dir /path/to/python-project")
-	fmt.Println()
-	fmt.Println("  # Strict filtering for precise matches")
-	fmt.Println("  hfh-cli search -dir . -distribution-tolerance 10.0 -min-language-percent 3.0")
-	fmt.Println()
-	fmt.Println("  # Permissive filtering for diverse projects")
-	fmt.Println("  hfh-cli search -dir ../js-project -distribution-tolerance 25.0 -min-language-percent 8.0")
-	fmt.Println()
-	fmt.Println("  # Exploratory search without language filtering")
-	fmt.Println("  hfh-cli search -dir /path/to/project -disable-language-filter -top 20")
+	fmt.Println("  hfh-cli search -dir . -top 5")
+	fmt.Println("  hfh-cli search -dir ../js-project -host 192.168.1.100 -port 6334")
+	fmt.Println("  hfh-cli search -dir /path/to/go-project -top 20 -weighted")
 	fmt.Println()
 	fmt.Println("Supported Languages:")
 	fmt.Println("  Python, JavaScript/TypeScript, Java, C/C++, Go, Rust, PHP, Ruby,")
@@ -260,20 +207,6 @@ func repeatString(s string, count int) string {
 	return result
 }
 
-// getCategoryEmoji returns an appropriate emoji for the category
-func getCategoryEmoji(category string) string {
-	switch category {
-	case "github_popular":
-		return "🌟"
-	case "github":
-		return "🔹"
-	case "common":
-		return "📦"
-	default:
-		return "❓"
-	}
-}
-
 // displayGroupedResults displays grouped search results
 func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	fmt.Printf("\nFound %d component group(s):\n", len(componentGroups))
@@ -283,13 +216,6 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		// Display component header
 		fmt.Printf("\n%d. Component: %s\n", i+1, group.Component)
 		fmt.Printf("   Vendor: %s\n", group.Vendor)
-
-		// Display category information from best match
-		if category, ok := group.BestMatch.Metadata["category"]; ok && category != "" {
-			categoryEmoji := getCategoryEmoji(category.(string))
-			fmt.Printf("   %s Category: %s\n", categoryEmoji, category)
-		}
-
 		fmt.Printf("   📊 Result Count: %d supporting results\n", group.ResultCount)
 
 		// Add quality indicator based on result count
@@ -303,14 +229,10 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 			fmt.Printf("   ❓ Limited Evidence - Single result for this component\n")
 		}
 
-		// Get confidence level for the best match
-		confidenceLevel, confidenceDesc := hfh.GetConfidenceLevel(group.BestMatch.Distance, group.ResultCount)
-
 		// Display best match
 		fmt.Printf("   \n🏆 BEST MATCH:\n")
 		fmt.Printf("     Version: %s\n", group.BestMatch.Version)
-		fmt.Printf("     Distance: %.4f\n", group.BestMatch.Distance)
-		fmt.Printf("     Confidence: %s (%s)\n", confidenceLevel, confidenceDesc)
+		fmt.Printf("     Score: %.4f\n", group.BestMatch.Score)
 
 		if group.BestMatch.URL != "" {
 			fmt.Printf("     URL: %s\n", group.BestMatch.URL)
@@ -329,9 +251,6 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 		if releaseDate, ok := group.BestMatch.Metadata["release_date"]; ok && releaseDate != "" {
 			fmt.Printf("     Release Date: %v\n", releaseDate)
 		}
-		if purl, ok := group.BestMatch.Metadata["purl"]; ok && purl != "" {
-			fmt.Printf("     PURL: %v\n", purl)
-		}
 
 		// Display other versions if available
 		if len(group.OtherVersions) > 0 {
@@ -342,7 +261,7 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 				// Find the detailed version info
 				for _, versionDetail := range group.AllVersions {
 					if versionDetail.Version == version {
-						fmt.Printf(" (Distance: %.4f)", versionDetail.Distance)
+						fmt.Printf(" (Score: %.4f)", versionDetail.Score)
 						break
 					}
 				}
@@ -379,70 +298,30 @@ func displayGroupedResults(componentGroups []hfh.ComponentGroup) {
 	fmt.Printf("• Found %d unique component(s)\n", len(componentGroups))
 
 	totalVersions := 0
-	highQualityCount := 0
+	highScoreCount := 0
 	multiResultCount := 0
 	totalSupportingResults := 0
-	categoryCount := make(map[string]int)
 
 	for _, group := range componentGroups {
 		totalVersions += len(group.AllVersions)
 		totalSupportingResults += group.ResultCount
-
-		// Count high quality matches based on category instead of score
-		if category, ok := group.BestMatch.Metadata["category"]; ok {
-			if category == "github_popular" || (category == "github" && group.ResultCount > 1) {
-				highQualityCount++
-			}
-		}
-
 		if group.ResultCount > 1 {
 			multiResultCount++
-		}
-
-		// Count categories
-		if category, ok := group.BestMatch.Metadata["category"]; ok && category != "" {
-			categoryCount[category.(string)]++
-		} else {
-			categoryCount["unknown"]++
 		}
 	}
 
 	fmt.Printf("• Total versions discovered: %d\n", totalVersions)
 	fmt.Printf("• Total supporting search results: %d\n", totalSupportingResults)
-	fmt.Printf("• High quality matches: %d\n", highQualityCount)
+	fmt.Printf("• High similarity matches: %d\n", highScoreCount)
 	fmt.Printf("• Components with multiple results: %d\n", multiResultCount)
-
-	// Display category distribution
-	if len(categoryCount) > 0 {
-		fmt.Printf("• Category distribution:\n")
-		// Order categories by priority
-		categoryOrder := []string{"github_popular", "github", "common", "unknown"}
-		for _, category := range categoryOrder {
-			if count, exists := categoryCount[category]; exists && count > 0 {
-				emoji := getCategoryEmoji(category)
-				fmt.Printf("  %s %s: %d\n", emoji, category, count)
-			}
-		}
-	}
 
 	if len(componentGroups) > 0 {
 		bestMatch := componentGroups[0]
-		bestCategory := "unknown"
-		if category, ok := bestMatch.BestMatch.Metadata["category"]; ok && category != "" {
-			bestCategory = category.(string)
-		}
+		fmt.Printf("• Best overall match: %s %s (%.4f score)\n",
+			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Score)
 
-		fmt.Printf("• Best overall match: %s %s (%.4f distance, %s %s)\n",
-			bestMatch.Component, bestMatch.BestMatch.Version, bestMatch.BestMatch.Distance,
-			getCategoryEmoji(bestCategory), bestCategory)
-
-		// Strong recommendation based on category and supporting results
-		if bestCategory == "github_popular" && bestMatch.ResultCount > 1 {
-			fmt.Printf("• 🎯 Strong recommendation: Popular GitHub component with multiple supporting results for %s\n", bestMatch.Component)
-		} else if bestCategory == "github" && bestMatch.ResultCount > 2 {
-			fmt.Printf("• 🎯 Strong recommendation: GitHub component with strong supporting evidence for %s\n", bestMatch.Component)
-		} else if bestMatch.ResultCount > 3 {
-			fmt.Printf("• 🎯 Strong recommendation: Multiple supporting results provide strong evidence for %s\n", bestMatch.Component)
+		if bestMatch.ResultCount > 2 {
+			fmt.Printf("• 🎯 Strong recommendation: High similarity with multiple supporting results for %s\n", bestMatch.Component)
 		}
 	}
 }

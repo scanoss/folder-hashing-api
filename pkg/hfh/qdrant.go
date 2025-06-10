@@ -17,23 +17,7 @@ import (
 
 const (
 	VectorDim = 64 // Single 64-bit hash per collection
-
-	// Legacy collection names for separate collections approach (deprecated)
-	DirsCollectionName     = "dirs_collection"
-	NamesCollectionName    = "names_collection"
-	ContentsCollectionName = "contents_collection"
-
-	ADAPTIVE_THRESHOLD_PERCENTAGE = 0.5 // Use 50% of the distance range as threshold
 )
-
-// Category scoring weights for boosting distances based on repository category
-// Lower multipliers mean better (smaller) distances after boosting
-var CategoryDistanceBoosts = map[string]float32{
-	"github_popular": 0.7, // 30% improvement (smaller distance) for popular repositories
-	"github":         0.9, // 10% improvement for regular github repositories
-	"common":         1.0, // No change for common repositories
-	"forks":          1.2, // 20% penalty (larger distance) for forks
-}
 
 // Language-based collection names (new approach)
 var PrimaryLanguages = map[string]string{
@@ -109,10 +93,11 @@ type LanguageExtensions map[string]int32
 
 // SearchResult represents a search result from Qdrant
 type SearchResult struct {
-	Distance           float32            `json:"distance"`
+	Score              float32            `json:"score"`
 	ID                 uint64             `json:"id"`
 	Vendor             string             `json:"vendor"`
 	Component          string             `json:"component"`
+	Purl               string             `json:"purl"`
 	Version            string             `json:"version"`
 	URL                string             `json:"url"`
 	LanguageExtensions LanguageExtensions `json:"language_extensions,omitempty"`
@@ -132,7 +117,7 @@ type ComponentGroup struct {
 // VersionResult represents a version-specific result within a component group
 type VersionResult struct {
 	Version            string             `json:"version"`
-	Distance           float32            `json:"distance"`
+	Score              float32            `json:"score"`
 	URL                string             `json:"url,omitempty"`
 	LanguageExtensions LanguageExtensions `json:"language_extensions,omitempty"`
 	Metadata           map[string]any     `json:"metadata,omitempty"`
@@ -219,48 +204,15 @@ func HexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	return vector, nil
 }
 
-// LanguageFilterConfig holds configuration for language extension filtering
-type LanguageFilterConfig struct {
-	DistributionTolerance float32 // Percentage tolerance for language distribution (default: 15.0)
-	MinLanguagePercent    float32 // Minimum percentage for a language to be considered significant (default: 5.0)
-	Disabled              bool    // Disable language extension filtering entirely (default: false)
-}
-
-// NewDefaultLanguageFilterConfig returns a config with sensible defaults
-func NewDefaultLanguageFilterConfig() LanguageFilterConfig {
-	return LanguageFilterConfig{
-		DistributionTolerance: 15.0,
-		MinLanguagePercent:    5.0,
-		Disabled:              false,
-	}
-}
-
-// getTotalFileCount calculates the total number of files from language extensions
-func getTotalFileCount(langExt LanguageExtensions) int32 {
-	var total int32
-	for _, count := range langExt {
-		total += count
-	}
-	return total
-}
-
-// buildLanguageDistributionFilter creates Qdrant filters based on language distribution percentages
-func buildLanguageDistributionFilter(queryLangExt LanguageExtensions, config LanguageFilterConfig) []*qdrant.Condition {
-	if len(queryLangExt) == 0 || config.Disabled {
-		return nil
-	}
-
-	totalFiles := getTotalFileCount(queryLangExt)
-	if totalFiles == 0 {
+// buildLanguageExtensionFilter creates Qdrant filters for language extension similarity
+func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePercent float32) []*qdrant.Condition {
+	if len(queryLangExt) == 0 {
 		return nil
 	}
 
 	var conditions []*qdrant.Condition
 
-	log.Printf("Building distribution-based language filter: total_files=%d, tolerance=%.1f%%, min_threshold=%.1f%%",
-		totalFiles, config.DistributionTolerance, config.MinLanguagePercent)
-
-	// For each language in query, create distribution-based filters
+	// For each language in query, create range filters
 	for extension, count := range queryLangExt {
 		if extension == "" {
 			continue
@@ -273,28 +225,12 @@ func buildLanguageDistributionFilter(queryLangExt LanguageExtensions, config Lan
 			continue
 		}
 
-		// Calculate language percentage in the query project
-		percentage := (float32(count) / float32(totalFiles)) * 100.0
+		// Calculate tolerance range (e.g., ±30% of the count)
+		tolerance := float32(count) * tolerancePercent / 100.0
+		minCount := int64(math.Max(0, float64(count)-float64(tolerance)))
+		maxCount := int64(float64(count) + float64(tolerance))
 
-		// Only filter on significant languages
-		if percentage < config.MinLanguagePercent {
-			log.Printf("Skipping language %s (%.1f%% < %.1f%% threshold)", extension, percentage, config.MinLanguagePercent)
-			continue
-		}
-
-		// Calculate distribution tolerance range
-		minPercentage := math.Max(0, float64(percentage-config.DistributionTolerance))
-		maxPercentage := float64(percentage + config.DistributionTolerance)
-
-		// Convert percentages back to approximate file counts for filtering
-		// We need to be more flexible here since we don't know the exact total files in target repositories
-		minCount := int64(math.Max(1, float64(totalFiles)*minPercentage/100.0*0.5)) // More flexible lower bound
-		maxCount := int64(float64(totalFiles) * maxPercentage / 100.0 * 2.0)        // More flexible upper bound
-
-		log.Printf("Language %s: %.1f%% (±%.1f%%) -> count range [%d, %d]",
-			extension, percentage, config.DistributionTolerance, minCount, maxCount)
-
-		// Create range condition for this language distribution
+		// Create range condition for this language
 		condition := &qdrant.Condition{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
@@ -309,14 +245,13 @@ func buildLanguageDistributionFilter(queryLangExt LanguageExtensions, config Lan
 		conditions = append(conditions, condition)
 	}
 
-	log.Printf("Created %d distribution-based language conditions", len(conditions))
 	return conditions
 }
 
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
 func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 	result := SearchResult{
-		Distance: point.Score,
+		Score:    point.Score,
 		ID:       point.Id.GetNum(),
 		Metadata: make(map[string]any),
 	}
@@ -328,6 +263,9 @@ func convertPointToResult(point *qdrant.ScoredPoint) SearchResult {
 		}
 		if val, exists := point.Payload["component"]; exists {
 			result.Component = val.GetStringValue()
+		}
+		if val, exists := point.Payload["purl"]; exists {
+			result.Purl = val.GetStringValue()
 		}
 		if val, exists := point.Payload["version"]; exists {
 			result.Version = val.GetStringValue()
@@ -385,192 +323,6 @@ func parseLanguageExtensions(langExtStr string) (LanguageExtensions, error) {
 	return langExt, nil
 }
 
-// getCategoryRankValue returns a numeric rank for category-based sorting
-// Lower values indicate higher priority (github_popular > github > common)
-func getCategoryRankValue(category string) int {
-	switch category {
-	case "github_popular":
-		return 1
-	case "github":
-		return 2
-	case "common":
-		return 3
-	default:
-		return 4 // For any unknown categories
-	}
-}
-
-// boostDistanceByCategory applies category-based distance boost to improve ranking
-func boostDistanceByCategory(point *qdrant.ScoredPoint) float32 {
-	originalDistance := point.Score
-
-	// Get category from payload
-	if point.Payload != nil {
-		if val, exists := point.Payload["category"]; exists {
-			category := val.GetStringValue()
-			if boost, exists := CategoryDistanceBoosts[category]; exists {
-				boostedDistance := originalDistance * boost
-				log.Printf("DEBUG: Applied category boost for %s: %.4f -> %.4f (boost: %.1fx)", category, originalDistance, boostedDistance, boost)
-				return boostedDistance
-			}
-		}
-	}
-
-	return originalDistance
-}
-
-// calculateGapBasedThreshold calculates adaptive threshold using gap-based analysis for better filtering
-func calculateGapBasedThreshold(distances []float32) float32 {
-	if len(distances) == 0 {
-		return 0
-	}
-
-	// Sort distances to analyze distribution (ascending - lower distance is better)
-	sort.Slice(distances, func(i, j int) bool {
-		return distances[i] < distances[j]
-	})
-
-	minDistance, maxDistance := distances[0], distances[len(distances)-1]
-	log.Printf("Distance range: min=%.4f, max=%.4f, total results=%d", minDistance, maxDistance, len(distances))
-
-	var adaptiveThreshold float32
-
-	// Gap-based filtering for better quality control
-	if minDistance < 1.0 {
-		// Very good match - be very selective
-		adaptiveThreshold = float32(math.Min(float64(minDistance*3.0), 4.0))
-		log.Printf("High-quality match detected (distance < 1.0), using restrictive threshold: %.4f", adaptiveThreshold)
-	} else if minDistance < 5.0 {
-		// Good match - moderately selective
-		adaptiveThreshold = float32(math.Min(float64(minDistance*2.0), 5.0))
-		log.Printf("Good quality match detected (distance < 5.0), using moderate threshold: %.4f", adaptiveThreshold)
-	} else {
-		// No clear winner - use distribution analysis but cap at reasonable distance
-		if len(distances) <= 3 {
-			adaptiveThreshold = float32(math.Min(float64(minDistance+(maxDistance-minDistance)*0.6), 8.0))
-		} else {
-			// Use percentile-based threshold but cap it
-			percentileIndex := int(float32(len(distances)) * 0.3) // More restrictive - keep top 30%
-			if percentileIndex >= len(distances) {
-				percentileIndex = len(distances) - 1
-			}
-			percentileThreshold := distances[percentileIndex]
-
-			// Cap at 8.0 distance maximum
-			adaptiveThreshold = float32(math.Min(float64(percentileThreshold), 8.0))
-		}
-		log.Printf("No clear winner, using distribution-based threshold (capped at 8.0): %.4f", adaptiveThreshold)
-	}
-
-	// Absolute maximum threshold - never include anything with distance > 8.0
-	if adaptiveThreshold > 8.0 {
-		adaptiveThreshold = 8.0
-		log.Printf("Capping threshold at maximum acceptable distance: %.4f", adaptiveThreshold)
-	}
-
-	log.Printf("Calculated gap-based threshold: %.4f", adaptiveThreshold)
-	return adaptiveThreshold
-}
-
-// GetConfidenceLevel returns a confidence assessment based on distance and evidence count
-func GetConfidenceLevel(distance float32, evidenceCount int) (string, string) {
-	if distance < 1.0 {
-		return "🎯 VERY HIGH", "Excellent match with strong evidence"
-	} else if distance < 2.0 && evidenceCount > 2 {
-		return "🔥 HIGH", "Strong match with good evidence"
-	} else if distance < 4.0 && evidenceCount > 1 {
-		return "✅ MEDIUM", "Good match with moderate evidence"
-	} else if distance < 6.0 {
-		return "⚠️ LOW", "Possible match but limited confidence"
-	} else {
-		return "❓ VERY LOW", "Weak match, likely false positive"
-	}
-}
-
-// combineWeightedResults combines results from three separate queries with weights
-func combineWeightedResults(namesResp, dirsResp, contentsResp []*qdrant.ScoredPoint, namesWeight, dirsWeight, contentsWeight float32, topK uint64) []SearchResult {
-	combinedDistances := make(map[uint64]float32)
-	pointMap := make(map[uint64]*qdrant.ScoredPoint)
-
-	// Process names results (75% weight) - lower distance is better
-	for _, point := range namesResp {
-		id := point.Id.GetNum()
-		combinedDistances[id] += point.Score * namesWeight
-		pointMap[id] = point
-	}
-
-	// Process dirs results (15% weight) - lower distance is better
-	for _, point := range dirsResp {
-		id := point.Id.GetNum()
-		combinedDistances[id] += point.Score * dirsWeight
-		if _, exists := pointMap[id]; !exists {
-			pointMap[id] = point
-		}
-	}
-
-	// Process contents results (10% weight) - lower distance is better
-	for _, point := range contentsResp {
-		id := point.Id.GetNum()
-		combinedDistances[id] += point.Score * contentsWeight
-		if _, exists := pointMap[id]; !exists {
-			pointMap[id] = point
-		}
-	}
-
-	// Convert to slice and sort by category rank, then by combined distance
-	type distanceResult struct {
-		id           uint64
-		distance     float32
-		point        *qdrant.ScoredPoint
-		categoryRank int
-	}
-
-	var distanceResults []distanceResult
-	for id, distance := range combinedDistances {
-		point := pointMap[id]
-		categoryRank := 4 // Default rank for unknown/missing category
-
-		// Extract category from point payload
-		if point.Payload != nil {
-			if val, exists := point.Payload["category"]; exists {
-				category := val.GetStringValue()
-				categoryRank = getCategoryRankValue(category)
-			}
-		}
-
-		distanceResults = append(distanceResults, distanceResult{
-			id:           id,
-			distance:     distance,
-			point:        point,
-			categoryRank: categoryRank,
-		})
-	}
-
-	// Sort by category rank first (ascending - lower rank is better), then by combined distance (ascending - lower distance is better)
-	sort.Slice(distanceResults, func(i, j int) bool {
-		if distanceResults[i].categoryRank == distanceResults[j].categoryRank {
-			return distanceResults[i].distance < distanceResults[j].distance
-		}
-		return distanceResults[i].categoryRank < distanceResults[j].categoryRank
-	})
-
-	// Convert to SearchResult and limit to topK
-	var results []SearchResult
-	limit := int(topK)
-	if limit > len(distanceResults) {
-		limit = len(distanceResults)
-	}
-
-	for i := 0; i < limit; i++ {
-		// Update the point's score to the combined distance
-		distanceResults[i].point.Score = distanceResults[i].distance
-		result := convertPointToResult(distanceResults[i].point)
-		results = append(results, result)
-	}
-
-	return results
-}
-
 // groupByComponent groups results by component name
 func groupByComponent(results []SearchResult) []ComponentGroup {
 	if len(results) == 0 {
@@ -587,7 +339,7 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 
 		versionResult := VersionResult{
 			Version:            result.Version,
-			Distance:           result.Distance,
+			Score:              result.Score,
 			URL:                result.URL,
 			LanguageExtensions: result.LanguageExtensions,
 			Metadata:           result.Metadata,
@@ -598,8 +350,8 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 			group.AllVersions = append(group.AllVersions, versionResult)
 			group.ResultCount++
 
-			// Update best match if this version has a better distance (lower is better)
-			if versionResult.Distance < group.BestMatch.Distance {
+			// Update best match if this version has a better score
+			if versionResult.Score > group.BestMatch.Score {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -617,14 +369,14 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 	// Convert to slice and finalize
 	var groupSlice []ComponentGroup
 	for _, group := range groups {
-		// Sort versions within group by distance (lower distance is better)
+		// Sort versions within group by score (higher score is better)
 		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Distance < group.AllVersions[j].Distance
+			return group.AllVersions[i].Score > group.AllVersions[j].Score
 		})
 
 		// Create other versions list (excluding best match)
 		for _, version := range group.AllVersions {
-			if version.Version != group.BestMatch.Version || version.Distance != group.BestMatch.Distance {
+			if version.Version != group.BestMatch.Version || version.Score != group.BestMatch.Score {
 				group.OtherVersions = append(group.OtherVersions, version.Version)
 			}
 		}
@@ -632,22 +384,17 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 		groupSlice = append(groupSlice, *group)
 	}
 
-	// Sort groups by best match distance (lower distance is better)
+	// Sort groups by best match score (higher is better because of RRF)
 	sort.Slice(groupSlice, func(i, j int) bool {
-		return groupSlice[i].BestMatch.Distance < groupSlice[j].BestMatch.Distance
+		return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
 	})
 
 	return groupSlice
 }
 
-// SearchLanguageBasedApproximate performs adaptive threshold search with progressive filtering
+// SearchLanguageBasedApproximate performs optimized search using RRF
 func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
-	return SearchLanguageBasedApproximateWithFilter(config, dirHash, nameHash, contentHash, queryLangExt, topK, NewDefaultLanguageFilterConfig())
-}
-
-// SearchLanguageBasedApproximateWithFilter performs adaptive threshold search with configurable language filtering
-func SearchLanguageBasedApproximateWithFilter(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64, filterConfig LanguageFilterConfig) ([]ComponentGroup, error) {
-	log.Printf("Starting adaptive threshold search with distribution-based language filtering (names→dirs→contents with 75%%/15%%/10%% weights)")
+	log.Printf("Starting language-based search with RRF fusion")
 
 	// Determine target collection based on primary language
 	collectionName := GetCollectionNameFromLanguageExtensions(queryLangExt)
@@ -702,9 +449,8 @@ func SearchLanguageBasedApproximateWithFilter(config QdrantSeparateConfig, dirHa
 	mustNotConditions := []*qdrant.Condition{}
 	shouldConditions := []*qdrant.Condition{}
 
-	// Build distribution-based language extension filter
 	if len(queryLangExt) > 0 {
-		langExtConditions := buildLanguageDistributionFilter(queryLangExt, filterConfig)
+		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 30.0)
 		if len(langExtConditions) > 0 {
 			mustConditions = append(mustConditions, langExtConditions...)
 		}
@@ -726,119 +472,64 @@ func SearchLanguageBasedApproximateWithFilter(config QdrantSeparateConfig, dirHa
 		Should:  shouldConditions,
 	}
 
-	// Execute names query
-	namesQuery := &qdrant.QueryPoints{
+	prefetchQueries := []*qdrant.PrefetchQuery{
+		{
+			// Names vector query
+			Query: qdrant.NewQuery(nameVector...),
+			Using: qdrant.PtrOf("names"),
+		},
+		{
+			// Dirs vector query
+			Query: qdrant.NewQuery(dirVector...),
+			Using: qdrant.PtrOf("dirs"),
+		},
+		{
+			// Contents vector query
+			Query: qdrant.NewQuery(contentVector...),
+			Using: qdrant.PtrOf("contents"),
+		},
+	}
+
+	// Create hybrid query with weighted fusion
+	hybridQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(nameVector...),
-		Using:          qdrant.PtrOf("names"),
-		Filter:         filters,
-		Limit:          qdrant.PtrOf(uint64(1000)),
+		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
+		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
+		Filter:         filters,
 	}
 
-	// Step 1: Execute names query and calculate distribution-aware adaptive threshold
-	namesResp, err := client.Query(ctx, namesQuery)
+	searchResp, err := client.Query(ctx, hybridQuery)
 	if err != nil {
-		return nil, fmt.Errorf("error performing names query in %s: %v", collectionName, err)
+		return nil, fmt.Errorf("error performing RRF hybrid search in %s: %v", collectionName, err)
 	}
 
-	if len(namesResp) == 0 {
-		log.Printf("No results found in names query for %s", collectionName)
+	// First, collect all results and their scores
+	var allResults []SearchResult
+	var scores []float32
+
+	for _, point := range searchResp {
+		result := convertPointToResult(point)
+		allResults = append(allResults, result)
+		scores = append(scores, point.Score)
+	}
+
+	if len(scores) == 0 {
+		log.Printf("No search results found")
 		return []ComponentGroup{}, nil
 	}
 
-	// Apply category-based distance boosting first, then collect distances for threshold calculation
-	var boostedDistances []float32
-	var boostedNamesResp []*qdrant.ScoredPoint
+	// Sort scores to analyze distribution
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i] > scores[j] // Sort descending
+	})
 
-	for _, point := range namesResp {
-		// Create a copy of the point to avoid modifying the original
-		boostedPoint := *point
-		boostedDistance := boostDistanceByCategory(point)
-		boostedPoint.Score = boostedDistance
-		boostedNamesResp = append(boostedNamesResp, &boostedPoint)
-		boostedDistances = append(boostedDistances, boostedDistance)
-	}
+	log.Printf("RRF hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
 
-	// Calculate gap-based adaptive threshold using boosted distances
-	adaptiveThreshold := calculateGapBasedThreshold(boostedDistances)
+	// Group by component
+	componentGroups := groupByComponent(allResults)
 
-	// Filter names results by adaptive threshold using boosted distances
-	var filteredNamesResp []*qdrant.ScoredPoint
-	for _, point := range boostedNamesResp {
-		if point.Score <= adaptiveThreshold {
-			filteredNamesResp = append(filteredNamesResp, point)
-		}
-	}
-	log.Printf("Names results: %d total, %d after distribution-aware adaptive threshold", len(namesResp), len(filteredNamesResp))
-
-	// Execute dirs query with names prefetch
-	dirsQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(dirVector...),
-		Using:          qdrant.PtrOf("dirs"),
-		Limit:          qdrant.PtrOf(uint64(len(filteredNamesResp))),
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
-	}
-
-	// Execute contents query with names prefetch
-	contentsQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(contentVector...),
-		Using:          qdrant.PtrOf("contents"),
-		Limit:          qdrant.PtrOf(uint64(len(filteredNamesResp))),
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
-	}
-
-	// Step 2: Execute dirs query with filtered names as constraint
-	dirsResp, err := client.Query(ctx, dirsQuery)
-	if err != nil {
-		return nil, fmt.Errorf("error performing dirs query in %s: %v", collectionName, err)
-	}
-
-	// Filter dirs results to only include IDs from filtered names
-	namesIDSet := make(map[uint64]bool)
-	for _, point := range filteredNamesResp {
-		namesIDSet[point.Id.GetNum()] = true
-	}
-
-	var filteredDirsResp []*qdrant.ScoredPoint
-	for _, point := range dirsResp {
-		if namesIDSet[point.Id.GetNum()] {
-			filteredDirsResp = append(filteredDirsResp, point)
-		}
-	}
-	log.Printf("Dirs results: %d total, %d matching names threshold", len(dirsResp), len(filteredDirsResp))
-
-	// Step 3: Execute contents query for final tie-breaking on dirs-filtered results
-	contentsResp, err := client.Query(ctx, contentsQuery)
-	if err != nil {
-		return nil, fmt.Errorf("error performing contents query in %s: %v", collectionName, err)
-	}
-
-	// Create ID set from dirs results for final filtering
-	dirsIDSet := make(map[uint64]bool)
-	for _, point := range filteredDirsResp {
-		dirsIDSet[point.Id.GetNum()] = true
-	}
-
-	var filteredContentsResp []*qdrant.ScoredPoint
-	for _, point := range contentsResp {
-		if dirsIDSet[point.Id.GetNum()] {
-			filteredContentsResp = append(filteredContentsResp, point)
-		}
-	}
-	log.Printf("Contents results: %d total, %d matching dirs threshold", len(contentsResp), len(filteredContentsResp))
-
-	results := combineWeightedResults(filteredNamesResp, filteredDirsResp, filteredContentsResp, 0.50, 0.15, 0.35, topK)
-
-	log.Printf("Adaptive threshold search found %d results in %s (names→dirs→contents with 50%%+15%%+35%% weights)", len(results), collectionName)
-
-	componentGroups := groupByComponent(results)
-
-	log.Printf("Weighted hybrid search completed: %d results grouped into %d components", len(results), len(componentGroups))
+	log.Printf("RRF hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
