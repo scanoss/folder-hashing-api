@@ -219,15 +219,48 @@ func HexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	return vector, nil
 }
 
-// buildLanguageExtensionFilter creates Qdrant filters for language extension similarity
-func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePercent float32) []*qdrant.Condition {
-	if len(queryLangExt) == 0 {
+// LanguageFilterConfig holds configuration for language extension filtering
+type LanguageFilterConfig struct {
+	DistributionTolerance float32 // Percentage tolerance for language distribution (default: 15.0)
+	MinLanguagePercent    float32 // Minimum percentage for a language to be considered significant (default: 5.0)
+	Disabled              bool    // Disable language extension filtering entirely (default: false)
+}
+
+// NewDefaultLanguageFilterConfig returns a config with sensible defaults
+func NewDefaultLanguageFilterConfig() LanguageFilterConfig {
+	return LanguageFilterConfig{
+		DistributionTolerance: 15.0,
+		MinLanguagePercent:    5.0,
+		Disabled:              false,
+	}
+}
+
+// getTotalFileCount calculates the total number of files from language extensions
+func getTotalFileCount(langExt LanguageExtensions) int32 {
+	var total int32
+	for _, count := range langExt {
+		total += count
+	}
+	return total
+}
+
+// buildLanguageDistributionFilter creates Qdrant filters based on language distribution percentages
+func buildLanguageDistributionFilter(queryLangExt LanguageExtensions, config LanguageFilterConfig) []*qdrant.Condition {
+	if len(queryLangExt) == 0 || config.Disabled {
+		return nil
+	}
+
+	totalFiles := getTotalFileCount(queryLangExt)
+	if totalFiles == 0 {
 		return nil
 	}
 
 	var conditions []*qdrant.Condition
 
-	// For each language in query, create range filters
+	log.Printf("Building distribution-based language filter: total_files=%d, tolerance=%.1f%%, min_threshold=%.1f%%",
+		totalFiles, config.DistributionTolerance, config.MinLanguagePercent)
+
+	// For each language in query, create distribution-based filters
 	for extension, count := range queryLangExt {
 		if extension == "" {
 			continue
@@ -240,12 +273,28 @@ func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePerc
 			continue
 		}
 
-		// Calculate tolerance range (e.g., ±30% of the count)
-		tolerance := float32(count) * tolerancePercent / 100.0
-		minCount := int64(math.Max(0, float64(count)-float64(tolerance)))
-		maxCount := int64(float64(count) + float64(tolerance))
+		// Calculate language percentage in the query project
+		percentage := (float32(count) / float32(totalFiles)) * 100.0
 
-		// Create range condition for this language
+		// Only filter on significant languages
+		if percentage < config.MinLanguagePercent {
+			log.Printf("Skipping language %s (%.1f%% < %.1f%% threshold)", extension, percentage, config.MinLanguagePercent)
+			continue
+		}
+
+		// Calculate distribution tolerance range
+		minPercentage := math.Max(0, float64(percentage-config.DistributionTolerance))
+		maxPercentage := float64(percentage + config.DistributionTolerance)
+
+		// Convert percentages back to approximate file counts for filtering
+		// We need to be more flexible here since we don't know the exact total files in target repositories
+		minCount := int64(math.Max(1, float64(totalFiles)*minPercentage/100.0*0.5)) // More flexible lower bound
+		maxCount := int64(float64(totalFiles) * maxPercentage / 100.0 * 2.0)        // More flexible upper bound
+
+		log.Printf("Language %s: %.1f%% (±%.1f%%) -> count range [%d, %d]",
+			extension, percentage, config.DistributionTolerance, minCount, maxCount)
+
+		// Create range condition for this language distribution
 		condition := &qdrant.Condition{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
@@ -260,40 +309,7 @@ func buildLanguageExtensionFilter(queryLangExt LanguageExtensions, tolerancePerc
 		conditions = append(conditions, condition)
 	}
 
-	return conditions
-}
-
-// buildExcludedLanguageExtensionFilter creates conditions to exclude entries that have extensions not in the query
-// For example, if querying a Python project (py, md, sh), exclude entries that also have c, h, java, etc.
-func buildExcludedLanguageExtensionFilter(queryLangExt LanguageExtensions) []*qdrant.Condition {
-	var conditions []*qdrant.Condition
-
-	// Get all possible indexed extensions that are NOT in our query
-	for _, extension := range IndexedLangExtensions {
-		// Skip if this extension is in our query (we want to allow these)
-		if _, exists := queryLangExt[extension]; exists {
-			continue
-		}
-
-		// Skip empty extension check as it's common
-		if extension == "" {
-			continue
-		}
-
-		// Create condition to exclude entries that have this extension with count > 0
-		condition := &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Field{
-				Field: &qdrant.FieldCondition{
-					Key: "language_extensions." + extension,
-					Range: &qdrant.Range{
-						Gt: qdrant.PtrOf(float64(0)), // Exclude if this extension count > 0
-					},
-				},
-			},
-		}
-		conditions = append(conditions, condition)
-	}
-
+	log.Printf("Created %d distribution-based language conditions", len(conditions))
 	return conditions
 }
 
@@ -626,7 +642,12 @@ func groupByComponent(results []SearchResult) []ComponentGroup {
 
 // SearchLanguageBasedApproximate performs adaptive threshold search with progressive filtering
 func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64) ([]ComponentGroup, error) {
-	log.Printf("Starting adaptive threshold search (names→dirs→contents with 75%%/15%%/10%% weights)")
+	return SearchLanguageBasedApproximateWithFilter(config, dirHash, nameHash, contentHash, queryLangExt, topK, NewDefaultLanguageFilterConfig())
+}
+
+// SearchLanguageBasedApproximateWithFilter performs adaptive threshold search with configurable language filtering
+func SearchLanguageBasedApproximateWithFilter(config QdrantSeparateConfig, dirHash, nameHash, contentHash string, queryLangExt LanguageExtensions, topK uint64, filterConfig LanguageFilterConfig) ([]ComponentGroup, error) {
+	log.Printf("Starting adaptive threshold search with distribution-based language filtering (names→dirs→contents with 75%%/15%%/10%% weights)")
 
 	// Determine target collection based on primary language
 	collectionName := GetCollectionNameFromLanguageExtensions(queryLangExt)
@@ -681,16 +702,12 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 	mustNotConditions := []*qdrant.Condition{}
 	shouldConditions := []*qdrant.Condition{}
 
-	// Build language extension filter for additional filtering
+	// Build distribution-based language extension filter
 	if len(queryLangExt) > 0 {
-		langExtConditions := buildLanguageExtensionFilter(queryLangExt, 10.0)
-		// excludedExtConditions := buildExcludedLanguageExtensionFilter(queryLangExt)
+		langExtConditions := buildLanguageDistributionFilter(queryLangExt, filterConfig)
 		if len(langExtConditions) > 0 {
 			mustConditions = append(mustConditions, langExtConditions...)
 		}
-		// if len(excludedExtConditions) > 0 {
-		// 	mustNotConditions = append(mustNotConditions, excludedExtConditions...)
-		// }
 	}
 
 	// We want to get only 'github_popular' or 'github' category results
@@ -715,7 +732,7 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 		Query:          qdrant.NewQuery(nameVector...),
 		Using:          qdrant.PtrOf("names"),
 		Filter:         filters,
-		Limit:          qdrant.PtrOf(uint64(5000)),
+		Limit:          qdrant.PtrOf(uint64(1000)),
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
 	}
@@ -816,9 +833,9 @@ func SearchLanguageBasedApproximate(config QdrantSeparateConfig, dirHash, nameHa
 	}
 	log.Printf("Contents results: %d total, %d matching dirs threshold", len(contentsResp), len(filteredContentsResp))
 
-	results := combineWeightedResults(filteredNamesResp, filteredDirsResp, filteredContentsResp, 0.75, 0.15, 0.10, topK)
+	results := combineWeightedResults(filteredNamesResp, filteredDirsResp, filteredContentsResp, 0.50, 0.15, 0.35, topK)
 
-	log.Printf("Adaptive threshold search found %d results in %s (names→dirs→contents with 75%%+15%%+10%% weights)", len(results), collectionName)
+	log.Printf("Adaptive threshold search found %d results in %s (names→dirs→contents with 50%%+15%%+35%% weights)", len(results), collectionName)
 
 	componentGroups := groupByComponent(results)
 

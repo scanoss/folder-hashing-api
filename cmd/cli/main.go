@@ -55,6 +55,12 @@ func searchCommand() {
 	host := searchFlags.String("host", "localhost", "Qdrant server host")
 	port := searchFlags.Int("port", 6334, "Qdrant server port")
 	topK := searchFlags.Int("top", 10, "Number of top similar results to return")
+
+	// Language filtering configuration
+	distributionTolerance := searchFlags.Float64("distribution-tolerance", 15.0, "Language distribution tolerance percentage (default: 15.0)")
+	minLanguagePercent := searchFlags.Float64("min-language-percent", 5.0, "Minimum percentage for a language to be considered significant (default: 5.0)")
+	disableLanguageFilter := searchFlags.Bool("disable-language-filter", false, "Disable language extension filtering entirely")
+
 	help := searchFlags.Bool("help", false, "Show help message")
 	searchFlags.Parse(os.Args[2:])
 
@@ -112,8 +118,23 @@ func searchCommand() {
 		fmt.Printf("No language extensions detected, using misc_collection\n")
 	}
 
-	// Choose search variant based on user preference
-	componentGroups, err := hfh.SearchLanguageBasedApproximate(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK))
+	// Create language filter configuration
+	filterConfig := hfh.LanguageFilterConfig{
+		DistributionTolerance: float32(*distributionTolerance),
+		MinLanguagePercent:    float32(*minLanguagePercent),
+		Disabled:              *disableLanguageFilter,
+	}
+
+	// Display filter configuration
+	if *disableLanguageFilter {
+		fmt.Printf("Language Filter: DISABLED (exploratory search)\n")
+	} else {
+		fmt.Printf("Language Filter: Distribution-based (tolerance: %.1f%%, min threshold: %.1f%%)\n",
+			*distributionTolerance, *minLanguagePercent)
+	}
+
+	// Use the new search function with configurable language filtering
+	componentGroups, err := hfh.SearchLanguageBasedApproximateWithFilter(config, requestRoot.SimHashDirNames, requestRoot.SimHashNames, requestRoot.SimHashContent, requestRoot.LangExtensions, uint64(*topK), filterConfig)
 	if err != nil {
 		log.Fatalf("Error searching in Qdrant: %v", err)
 	}
@@ -186,18 +207,43 @@ func showSearchHelp() {
 	fmt.Println("  hfh-cli search -dir <directory_path> [options]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  -dir string      Directory path to hash and search (required)")
-	fmt.Println("  -host string     Qdrant server host (default: localhost)")
-	fmt.Println("  -port int        Qdrant server port (default: 6334)")
-	fmt.Println("  -top int         Number of top similar results to return (default: 10)")
-	fmt.Println("  -weighted        Use weighted fusion variant instead of RRF (experimental)")
-	fmt.Println("  -help           Show this help message")
+	fmt.Println("  -dir string                  Directory path to hash and search (required)")
+	fmt.Println("  -host string                 Qdrant server host (default: localhost)")
+	fmt.Println("  -port int                    Qdrant server port (default: 6334)")
+	fmt.Println("  -top int                     Number of top similar results to return (default: 10)")
+	fmt.Println("  -distribution-tolerance float Language distribution tolerance percentage (default: 15.0)")
+	fmt.Println("  -min-language-percent float  Minimum percentage for significant languages (default: 5.0)")
+	fmt.Println("  -disable-language-filter     Disable language extension filtering entirely")
+	fmt.Println("  -help                        Show this help message")
+	fmt.Println()
+	fmt.Println("Language Filtering Options:")
+	fmt.Println("  The new distribution-based language filtering improves precision by matching")
+	fmt.Println("  language proportions rather than absolute file counts:")
+	fmt.Println()
+	fmt.Println("  -distribution-tolerance: Controls how flexible the language matching is")
+	fmt.Println("    • Lower values (5-10): Strict matching for precise results")
+	fmt.Println("    • Higher values (20-30): Permissive matching for broader discovery")
+	fmt.Println()
+	fmt.Println("  -min-language-percent: Minimum threshold for languages to be considered")
+	fmt.Println("    • Languages below this percentage are ignored in filtering")
+	fmt.Println("    • Helps focus on dominant languages in the project")
+	fmt.Println()
+	fmt.Println("  -disable-language-filter: Completely disables language filtering")
+	fmt.Println("    • Useful for exploratory searches or diverse projects")
+	fmt.Println("    • May return more results but with lower precision")
 	fmt.Println()
 	fmt.Println("Examples:")
+	fmt.Println("  # Default behavior (recommended)")
 	fmt.Println("  hfh-cli search -dir /path/to/python-project")
-	fmt.Println("  hfh-cli search -dir . -top 5")
-	fmt.Println("  hfh-cli search -dir ../js-project -host 192.168.1.100 -port 6334")
-	fmt.Println("  hfh-cli search -dir /path/to/go-project -top 20 -weighted")
+	fmt.Println()
+	fmt.Println("  # Strict filtering for precise matches")
+	fmt.Println("  hfh-cli search -dir . -distribution-tolerance 10.0 -min-language-percent 3.0")
+	fmt.Println()
+	fmt.Println("  # Permissive filtering for diverse projects")
+	fmt.Println("  hfh-cli search -dir ../js-project -distribution-tolerance 25.0 -min-language-percent 8.0")
+	fmt.Println()
+	fmt.Println("  # Exploratory search without language filtering")
+	fmt.Println("  hfh-cli search -dir /path/to/project -disable-language-filter -top 20")
 	fmt.Println()
 	fmt.Println("Supported Languages:")
 	fmt.Println("  Python, JavaScript/TypeScript, Java, C/C++, Go, Rust, PHP, Ruby,")
