@@ -1,7 +1,7 @@
 package test
 
 import (
-	"scanoss.com/hfh-api/pkg/dtos"
+	"github.com/scanoss/folder-hashing-api/pkg/dtos"
 )
 
 var Monorepo_root = &dtos.HFHScanInputChildren{

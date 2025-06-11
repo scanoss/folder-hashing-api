@@ -13,12 +13,12 @@ import (
 
 	"time"
 
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
+	"github.com/scanoss/folder-hashing-api/pkg/dtos"
+	"github.com/scanoss/folder-hashing-api/pkg/hfh"
+	mv "github.com/scanoss/folder-hashing-api/pkg/usecase/milvus"
+	pp "github.com/scanoss/folder-hashing-api/pkg/usecase/prefered_purls"
 	"go.uber.org/zap"
-	myconfig "scanoss.com/hfh-api/pkg/config"
-	"scanoss.com/hfh-api/pkg/dtos"
-	"scanoss.com/hfh-api/pkg/hfh"
-	mv "scanoss.com/hfh-api/pkg/usecase/milvus"
-	pp "scanoss.com/hfh-api/pkg/usecase/prefered_purls"
 )
 
 type HFHscan struct {
@@ -484,7 +484,7 @@ func (s *HFHscan) scanTreeFirstStage(node *dtos.HFHScanInputChildren) error {
 				continue // Successfully processed with Qdrant, continue to next level
 			}
 		}
-		
+
 		// Original Milvus search (either as primary method or fallback)
 		distances, urls, contentsHashes, err := s.Config.mvDb.Mainsearch(nameHashes, dirHashes, 0, s.Config.preferedPurlList)
 		if err != nil {
@@ -811,7 +811,7 @@ func (s *HFHscan) performLanguageBasedSearch(nameHashes []uint64, level int) err
 		if len(componentGroups) > 0 {
 			// Convert Qdrant results to expected format
 			components := s.convertQdrantResults(componentGroups, s.Config.UrlsLimit)
-			
+
 			// Calculate probability based on best match distance (lower distance = higher probability)
 			var probability float32 = 50.0 // Default moderate probability
 			if len(componentGroups) > 0 {
@@ -846,10 +846,10 @@ func (s *HFHscan) performLanguageBasedSearch(nameHashes []uint64, level int) err
 // This is a simplified implementation - in practice, you'd collect this during file scanning
 func (s *HFHscan) inferLanguageExtensionsFromPath(pathId string) hfh.LanguageExtensions {
 	extensions := make(hfh.LanguageExtensions)
-	
+
 	// Simple heuristic: analyze the path string for known patterns
 	pathLower := strings.ToLower(pathId)
-	
+
 	// Basic language detection based on path patterns
 	if strings.Contains(pathLower, "python") || strings.Contains(pathLower, ".py") {
 		extensions["py"] = 10
@@ -869,7 +869,7 @@ func (s *HFHscan) inferLanguageExtensionsFromPath(pathId string) hfh.LanguageExt
 		// Default to misc if no specific language detected
 		extensions[""] = 5
 	}
-	
+
 	return extensions
 }
 
@@ -880,7 +880,7 @@ func (s *HFHscan) convertQdrantResults(componentGroups []hfh.ComponentGroup, lim
 	}
 
 	results := make([]HFHscanResultItem, 0, len(componentGroups))
-	
+
 	for i, group := range componentGroups {
 		if i >= limit {
 			break
@@ -889,7 +889,7 @@ func (s *HFHscan) convertQdrantResults(componentGroups []hfh.ComponentGroup, lim
 		// Extract component and vendor from the best match
 		component := group.Component
 		vendor := group.Vendor
-		
+
 		// Create PURL format similar to existing logic
 		var purl string
 		if vendor != "" && component != "" {
@@ -905,7 +905,7 @@ func (s *HFHscan) convertQdrantResults(componentGroups []hfh.ComponentGroup, lim
 		for _, v := range group.AllVersions {
 			versions = append(versions, v.Version)
 		}
-		
+
 		// Limit versions to reportedVersionsNumber
 		if len(versions) > reportedVersionsNumber {
 			versions = versions[:reportedVersionsNumber]
@@ -933,7 +933,7 @@ func (s *HFHscan) convertQdrantResults(componentGroups []hfh.ComponentGroup, lim
 			Rank:     rank,
 			Date:     date,
 		}
-		
+
 		results = append(results, result)
 	}
 

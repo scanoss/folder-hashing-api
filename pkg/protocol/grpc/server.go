@@ -19,11 +19,11 @@
 package grpc
 
 import (
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
 	"github.com/scanoss/go-grpc-helper/pkg/grpc/otel"
 	gs "github.com/scanoss/go-grpc-helper/pkg/grpc/server"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	"google.golang.org/grpc"
-	myconfig "scanoss.com/hfh-api/pkg/config"
 )
 
 // RunServer runs gRPC service to publish.

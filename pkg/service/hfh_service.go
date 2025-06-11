@@ -24,10 +24,10 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
+	u "github.com/scanoss/folder-hashing-api/pkg/usecase"
 	common "github.com/scanoss/papi/api/commonv2"
 	pb "github.com/scanoss/papi/api/scanningv2"
-	myconfig "scanoss.com/hfh-api/pkg/config"
-	u "scanoss.com/hfh-api/pkg/usecase"
 )
 
 type hfhServer struct {

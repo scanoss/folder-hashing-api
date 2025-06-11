@@ -22,10 +22,10 @@ import (
 	"context"
 	"net/http"
 
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
 	gw "github.com/scanoss/go-grpc-helper/pkg/grpc/gateway"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
-	myconfig "scanoss.com/hfh-api/pkg/config"
 )
 
 // RunServer runs REST grpc gateway to forward requests onto the gRPC server.

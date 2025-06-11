@@ -27,13 +27,13 @@ import (
 
 	"github.com/golobby/config/v3"
 	"github.com/golobby/config/v3/pkg/feeder"
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
+	"github.com/scanoss/folder-hashing-api/pkg/protocol/grpc"
+	"github.com/scanoss/folder-hashing-api/pkg/protocol/rest"
+	"github.com/scanoss/folder-hashing-api/pkg/service"
 	"github.com/scanoss/go-grpc-helper/pkg/files"
 	gs "github.com/scanoss/go-grpc-helper/pkg/grpc/server"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
-	myconfig "scanoss.com/hfh-api/pkg/config"
-	"scanoss.com/hfh-api/pkg/protocol/grpc"
-	"scanoss.com/hfh-api/pkg/protocol/rest"
-	"scanoss.com/hfh-api/pkg/service"
 )
 
 //go:generate bash ../../get_version.sh

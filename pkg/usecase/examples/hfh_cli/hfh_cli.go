@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	m "github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
+	"github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli/go-minr-deps/pkg/filter"
+	u "github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli/go-minr-deps/utils"
 	pb "github.com/scanoss/papi/api/scanningv2"
-	m "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
-	"scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/pkg/filter"
-	u "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/utils"
 )
 
 type directoryNode struct {

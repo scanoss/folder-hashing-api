@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
+	cli "github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	cli "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli"
 )
 
 func directoryExists(path string) bool {

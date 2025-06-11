@@ -1,4 +1,4 @@
-module scanoss.com/hfh-api
+module github.com/scanoss/folder-hashing-api
 
 go 1.23.4
 
@@ -67,8 +67,3 @@ require (
 	google.golang.org/protobuf v1.36.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// Details of how to use the "replace" command for local development
-// https://github.com/golang/go/wiki/Modules#when-should-i-use-the-replace-directive
-// ie. replace github.com/scanoss/papi => ../papi
-// require github.com/scanoss/papi v0.0.0-unpublished

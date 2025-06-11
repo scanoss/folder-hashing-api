@@ -24,8 +24,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"scanoss.com/hfh-api/pkg/hfh"
-	hfh_cli "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli"
+	"github.com/scanoss/folder-hashing-api/pkg/hfh"
+	hfh_cli "github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli"
 )
 
 func main() {

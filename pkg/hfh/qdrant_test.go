@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"scanoss.com/hfh-api/pkg/hfh"
+	"github.com/scanoss/folder-hashing-api/pkg/hfh"
 )
 
 func TestHashToDenseVector(t *testing.T) {

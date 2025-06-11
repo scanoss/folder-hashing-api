@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	m "scanoss.com/hfh-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
+	m "github.com/scanoss/folder-hashing-api/pkg/usecase/examples/hfh_cli/go-minr-deps/model"
 )
 
 type FileItem struct {

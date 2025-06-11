@@ -9,11 +9,11 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 
+	myconfig "github.com/scanoss/folder-hashing-api/pkg/config"
+	"github.com/scanoss/folder-hashing-api/pkg/dtos"
+	mv "github.com/scanoss/folder-hashing-api/pkg/usecase/milvus"
+	test "github.com/scanoss/folder-hashing-api/pkg/usecase/test"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
-	myconfig "scanoss.com/hfh-api/pkg/config"
-	"scanoss.com/hfh-api/pkg/dtos"
-	mv "scanoss.com/hfh-api/pkg/usecase/milvus"
-	test "scanoss.com/hfh-api/pkg/usecase/test"
 )
 
 func testScanInitHelper() (*HFHscan, error) {

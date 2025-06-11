@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
-	"scanoss.com/hfh-api/pkg/hfh"
+	"github.com/scanoss/folder-hashing-api/pkg/hfh"
 )
 
 const (

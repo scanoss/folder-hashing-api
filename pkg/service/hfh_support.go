@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/scanoss/folder-hashing-api/pkg/dtos"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
-	"scanoss.com/hfh-api/pkg/dtos"
 )
 
 // Structure for storing OTEL metrics.
@@ -20,7 +20,7 @@ var oltpMetrics = metricsCounters{}
 
 // setupMetrics configures all the metrics recorders for the platform.
 func setupMetrics() {
-	meter := otel.Meter("scanoss.com/hfh-api")
+	meter := otel.Meter("github.com/scanoss/folder-hashing-api")
 	oltpMetrics.hfhScanHistogram, _ = meter.Int64Histogram("hfh.scan.req_time", metric.WithDescription("The time taken to run a hfh scan request (ms)"))
 }
 

@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"scanoss.com/hfh-api/pkg/cmd"
+	"github.com/scanoss/folder-hashing-api/pkg/cmd"
 )
 
 // main starts the gRPC HFH Service.
