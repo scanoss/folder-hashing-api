@@ -15,7 +15,7 @@ RUN go build -o ./scanoss-hfh ./cmd/server
 FROM debian:buster-slim
 
 WORKDIR /app
- 
+
 COPY --from=build /app/scanoss-hfh /app/scanoss-hfh
 
 EXPOSE 50053

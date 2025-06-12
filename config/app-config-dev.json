@@ -1,7 +1,0 @@
-{
-  "App": {
-    "Name": "HFH Service",
-    "Debug": true,
-    "Mode":  "dev"
-  }
-}

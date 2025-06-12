@@ -1,0 +1,27 @@
+package entities
+
+// ScanResponse represents the domain model for folder hash scanning response
+type ScanResponse struct {
+	// List of folders containing unique components
+	Results []*ScanResult
+	// Status information
+	Status *StatusResponse
+}
+
+// ScanResult represents a scan result for a specific path
+type ScanResult struct {
+	// Folder path (can be actual or obfuscated)
+	PathID string
+	// List of matching component groups
+	ComponentGroups []*ComponentGroup
+	// Matching probability
+	Probability float32
+	// Result stage
+	Stage int32
+}
+
+// StatusResponse represents status information
+type StatusResponse struct {
+	Code    int32
+	Message string
+}
