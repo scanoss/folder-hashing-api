@@ -1,11 +1,11 @@
 
 export PATH := /usr/bin/go/bin:$(PATH)
 #vars
-IMAGE_NAME=scanoss-hfh-api
+IMAGE_NAME=folder-hashing-api
 REPO=scanoss
 DOCKER_FULLNAME=${REPO}/${IMAGE_NAME}
 GHCR_FULLNAME=ghcr.io/${REPO}/${IMAGE_NAME}
-VERSION=$(shell ./version.sh)
+VERSION=$(shell git tag --sort=-version:refname | head -n 1)
 
 # HELP
 # This will output the help for each task
@@ -52,11 +52,7 @@ lint_docker: ## Run docker instance of linting across the code base
 
 run_local:  ## Launch the API locally for test
 	@echo "Launching API locally..."
-	go run cmd/server/main.go -json-config config/app-config-dev.json -debug
-
-run_local_env:  ## Launch the API locally using .env for test
-	@echo "Launching API locally using .env ..."
-	go run cmd/server/main.go -env-config .env -debug
+	go run cmd/server/main.go -ldflags "-X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)"
 
 ghcr_build: version  ## Build GitHub container image
 	@echo "Building GHCR container image..."
@@ -75,24 +71,20 @@ ghcr_all: ghcr_build ghcr_tag ghcr_push  ## Execute all GitHub Package container
 
 build_amd: version  ## Build an AMD 64 binary
 	@echo "Building AMD binary $(VERSION)..."
-	go generate ./pkg/cmd/server.go
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./target/scanoss-hfh-api-linux-amd64 ./cmd/server
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./target/scanoss-hfh-api-linux-amd64 ./cmd/server
 
 build_arm: version  ## Build an ARM 64 binary
 	@echo "Building ARM binary $(VERSION)..."
-	go generate ./pkg/cmd/server.go
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./target/scanoss-hfh-api-linux-arm64 ./cmd/server
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./target/scanoss-hfh-api-linux-arm64 ./cmd/server
 
 package: package_amd  ## Build & Package an AMD 64 binary
 
 package_amd: version  ## Build & Package an AMD 64 binary
 	@echo "Building AMD binary $(VERSION) and placing into scripts..."
-	go generate ./pkg/cmd/server.go
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-hfh-api ./cmd/server
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./scripts/scanoss-hfh-api ./cmd/server
 	bash ./package-scripts.sh linux-amd64 $(VERSION)
 
 package_arm: version  ## Build & Package an ARM 64 binary
 	@echo "Building ARM binary $(VERSION) and placing into scripts..."
-	go generate ./pkg/cmd/server.go
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-hfh-api ./cmd/server
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./scripts/scanoss-hfh-api ./cmd/server
 	bash ./package-scripts.sh linux-arm64 $(VERSION)

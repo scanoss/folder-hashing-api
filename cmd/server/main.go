@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/caarlos0/env/v11"
 	"github.com/scanoss/folder-hashing-api/internal/config"
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 	"github.com/scanoss/folder-hashing-api/internal/handler"
@@ -39,9 +38,9 @@ import (
 
 // main starts the gRPC HFH Service.
 func main() {
-	cfg := config.Config{}
-	if err := env.Parse(&cfg); err != nil {
-		log.Fatalf("ERROR: Environment variables parsing error: %v\n", err)
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("ERROR: Configuration loading error: %v\n", err)
 	}
 
 	if err := zlog.SetupAppLogger(cfg.App.Mode, cfg.Logging.ConfigFile, cfg.App.Debug); err != nil {
@@ -87,19 +86,22 @@ func main() {
 	// Start the REST grpc-gateway if requested
 	var srv *http.Server
 	if len(cfg.App.RESTPort) > 0 {
-		if srv, err = rest.RunServer(&cfg, ctx, cfg.App.GRPCPort, cfg.App.RESTPort, allowedIPs, deniedIPs, startTLS); err != nil {
+		if srv, err = rest.RunServer(cfg, ctx, cfg.App.GRPCPort, cfg.App.RESTPort, allowedIPs, deniedIPs, startTLS); err != nil {
 			log.Fatalf("ERROR: REST server setup error: %v\n", err)
 		}
 	}
 
 	// Start the gRPC service
-	server, err := grpc.RunServer(&cfg, scanHandler, cfg.App.GRPCPort, allowedIPs, deniedIPs, startTLS, entities.AppVersion)
+	server, err := grpc.RunServer(cfg, scanHandler, cfg.App.GRPCPort, allowedIPs, deniedIPs, startTLS, entities.AppVersion)
 	if err != nil {
 		log.Fatalf("ERROR: gRPC server setup error: %v\n", err)
 	}
+
+	zlog.S.Infof("SCANOSS HFH Service version %s started", entities.AppVersion)
 
 	// graceful shutdown
 	if err := gs.WaitServerComplete(srv, server); err != nil {
 		log.Fatalf("ERROR: gRPC server shutdown error: %v\n", err)
 	}
+
 }
