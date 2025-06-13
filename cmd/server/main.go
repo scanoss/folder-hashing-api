@@ -103,5 +103,4 @@ func main() {
 	if err := gs.WaitServerComplete(srv, server); err != nil {
 		log.Fatalf("ERROR: gRPC server shutdown error: %v\n", err)
 	}
-
 }

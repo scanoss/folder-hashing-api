@@ -26,24 +26,30 @@ import (
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
+const (
+	defaultGRPCPort   = "50061"
+	defaultRESTPort   = "40061"
+	defaultQdrantPort = 6334
+)
+
 // Config is configuration for Server.
 type Config struct {
 	App struct {
-		Name     string `env:"APP_NAME" envDefault:"SCANOSS HFH Server" json:"Name"`
-		GRPCPort string `env:"APP_PORT" envDefault:"50061" json:"GRPCPort"`
-		RESTPort string `env:"REST_PORT" envDefault:"40061" json:"RESTPort"`
-		Debug    bool   `env:"APP_DEBUG" envDefault:"false" json:"Debug"`
-		Trace    bool   `env:"APP_TRACE" envDefault:"false" json:"Trace"`
-		Mode     string `env:"APP_MODE" envDefault:"dev" json:"Mode"`
+		Name     string `env:"APP_NAME" json:"Name"`
+		GRPCPort string `env:"APP_PORT" json:"GRPCPort"`
+		RESTPort string `env:"REST_PORT" json:"RESTPort"`
+		Debug    bool   `env:"APP_DEBUG" json:"Debug"`
+		Trace    bool   `env:"APP_TRACE" json:"Trace"`
+		Mode     string `env:"APP_MODE" json:"Mode"`
 	} `json:"App"`
 	Logging struct {
-		DynamicLogging bool   `env:"LOG_DYNAMIC" envDefault:"true" json:"DynamicLogging"`
-		DynamicPort    string `env:"LOG_DYNAMIC_PORT" envDefault:"localhost:60061" json:"DynamicPort"`
+		DynamicLogging bool   `env:"LOG_DYNAMIC" json:"DynamicLogging"`
+		DynamicPort    string `env:"LOG_DYNAMIC_PORT" json:"DynamicPort"`
 		ConfigFile     string `env:"LOG_JSON_CONFIG" json:"ConfigFile"`
 	} `json:"Logging"`
 	Telemetry struct {
-		Enabled      bool   `env:"OTEL_ENABLED" envDefault:"false" json:"Enabled"`
-		OltpExporter string `env:"OTEL_EXPORTER_OLTP" envDefault:"0.0.0.0:4317" json:"OltpExporter"` // OTEL OLTP exporter (default 0.0.0.0:4317)
+		Enabled      bool   `env:"OTEL_ENABLED" json:"Enabled"`
+		OltpExporter string `env:"OTEL_EXPORTER_OLTP" json:"OltpExporter"` // OTEL OLTP exporter (default 0.0.0.0:4317)
 	} `json:"Telemetry"`
 	TLS struct {
 		CertFile string `env:"COMP_TLS_CERT" json:"CertFile"` // TLS Certificate
@@ -57,8 +63,8 @@ type Config struct {
 		TrustProxy     bool   `env:"COMP_TRUST_PROXY" json:"TrustProxy"`          // Trust the interim proxy or not (causes the source IP to be validated instead of the proxy)
 	} `json:"Filtering"`
 	Hfh struct {
-		QdrantHost string `env:"QDRANT_HOST" envDefault:"localhost" json:"QdrantHost"`
-		QdrantPort int    `env:"QDRANT_PORT" envDefault:"6334" json:"QdrantPort"`
+		QdrantHost string `env:"QDRANT_HOST" json:"QdrantHost"`
+		QdrantPort int    `env:"QDRANT_PORT" json:"QdrantPort"`
 		// TODO: Discuss what else we need to add here as config options
 	} `json:"Hfh"`
 }
@@ -78,7 +84,9 @@ func LoadConfig() (*Config, error) {
 		os.Exit(1)
 	}
 
+	// Initialize config with default values
 	cfg := &Config{}
+	cfg.SetDefaults()
 
 	c := config.New()
 
@@ -114,6 +122,24 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-func NewConfig(cfg *Config) *Config {
-	return cfg
+func (c *Config) SetDefaults() {
+	// Set App defaults
+	c.App.Name = "SCANOSS HFH Server"
+	c.App.GRPCPort = defaultGRPCPort
+	c.App.RESTPort = defaultRESTPort
+	c.App.Debug = false
+	c.App.Trace = false
+	c.App.Mode = "dev"
+
+	// Set Logging defaults
+	c.Logging.DynamicLogging = true
+	c.Logging.DynamicPort = "localhost:60061"
+
+	// Set Telemetry defaults
+	c.Telemetry.Enabled = false
+	c.Telemetry.OltpExporter = "0.0.0.0:4317"
+
+	// Set Hfh defaults
+	c.Hfh.QdrantHost = "localhost"
+	c.Hfh.QdrantPort = defaultQdrantPort
 }
