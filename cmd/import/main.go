@@ -263,19 +263,6 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			log.Printf("Created index for field: %s in %s", field, collectionName)
 		}
 	}
-
-	for _, field := range entities.IndexedLangExtensions {
-		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
-			CollectionName: collectionName,
-			FieldName:      fmt.Sprintf("language_extensions.%s", field),
-			FieldType:      qdrant.PtrOf(qdrant.FieldType_FieldTypeInteger),
-		})
-		if err != nil {
-			log.Printf("Warning: Could not create index for %s in %s: %v", field, collectionName, err)
-		} else {
-			log.Printf("Created index for field: %s in %s", field, collectionName)
-		}
-	}
 }
 
 // Import data from a CSV file to separate collections
