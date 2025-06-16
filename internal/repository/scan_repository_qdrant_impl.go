@@ -85,41 +85,51 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert content hash to vector: " + err.Error())
 	}
 
-	var filters *qdrant.Filter
 	mustConditions := []*qdrant.Condition{}
 	mustNotConditions := []*qdrant.Condition{}
-	shouldConditions := []*qdrant.Condition{}
 
-	// Conditions to prioritize rank < 5
-	lowerThanRank := float64(5.0)
-	rankConditions := []*qdrant.Condition{
+	allowedCategories := []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
-					Key: "rank",
-					Range: &qdrant.Range{
-						Lt: &lowerThanRank,
+					Key: "category",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keywords{
+							Keywords: &qdrant.RepeatedStrings{
+								Strings: []string{"github_popular", "github"},
+							},
+						},
 					},
 				},
 			},
 		},
 	}
 
-	allowedCategories := []*qdrant.Condition{
-		qdrant.NewMatch("category", "github_popular"),
-		qdrant.NewMatch("category", "github"),
+	// Conditions to exclude forks and common
+	excludedCategories := []*qdrant.Condition{
+		{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "category",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keywords{
+							Keywords: &qdrant.RepeatedStrings{
+								Strings: []string{"forks", "common"},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
-	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
-	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "common"))
+	mustNotConditions = append(mustNotConditions, excludedCategories...)
 
-	mustConditions = append(mustConditions, rankConditions...)
 	mustConditions = append(mustConditions, allowedCategories...)
 
-	filters = &qdrant.Filter{
+	filters := &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
-		Should:  shouldConditions,
 	}
 
 	s.Info("Executing hybrid query")
@@ -157,30 +167,18 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 
 	// First, collect all results and their scores
 	var allResults []entities.SearchResult
-	var scores []float32
 
 	for _, point := range searchResp {
 		result := r.convertPointToResult(point)
 		allResults = append(allResults, result)
-		scores = append(scores, point.Score)
 	}
 
-	if len(scores) == 0 {
-		log.Printf("No search results found")
-		return []entities.ComponentGroup{}, nil
-	}
-
-	// Sort scores to analyze distribution
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i] > scores[j] // Sort descending
-	})
-
-	log.Printf("Hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
+	s.Info("Hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
 
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	log.Printf("Hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
+	s.Info("Hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 

@@ -196,14 +196,29 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+			},
 		},
 		"names": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+			},
 		},
 		"contents": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+			},
 		},
 	}
 
@@ -211,6 +226,20 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
+		// Aggressive optimization for large collections
+		OptimizersConfig: &qdrant.OptimizersConfigDiff{
+			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
+			MaxSegmentSize:       qdrant.PtrOf(uint64(500000)), // Large segments for efficiency
+			IndexingThreshold:    qdrant.PtrOf(uint64(100000)), // High threshold for performance
+		},
+		// Binary quantization for memory efficiency
+		QuantizationConfig: &qdrant.QuantizationConfig{
+			Quantization: &qdrant.QuantizationConfig_Binary{
+				Binary: &qdrant.BinaryQuantization{
+					AlwaysRam: qdrant.PtrOf(true), // Keep quantized vectors in RAM
+				},
+			},
+		},
 	})
 	if err != nil {
 		log.Fatalf("Error creating collection %s: %v", collectionName, err)
