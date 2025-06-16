@@ -196,50 +196,21 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
-			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
-				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
-			},
 		},
 		"names": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
-			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
-				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
-			},
 		},
 		"contents": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
-			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
-				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
-			},
 		},
 	}
 
-	// Create collection with named vectors and aggressive optimization
+	// Create collection with named vectors
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
-		// Aggressive optimization for large collections
-		OptimizersConfig: &qdrant.OptimizersConfigDiff{
-			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
-			MaxSegmentSize:       qdrant.PtrOf(uint64(500000)), // Large segments for efficiency
-			IndexingThreshold:    qdrant.PtrOf(uint64(100000)), // High threshold for performance
-		},
-		// Binary quantization for memory efficiency
-		QuantizationConfig: &qdrant.QuantizationConfig{
-			Quantization: &qdrant.QuantizationConfig_Binary{
-				Binary: &qdrant.BinaryQuantization{
-					AlwaysRam: qdrant.PtrOf(true), // Keep quantized vectors in RAM
-				},
-			},
-		},
 	})
 	if err != nil {
 		log.Fatalf("Error creating collection %s: %v", collectionName, err)
@@ -250,7 +221,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	log.Printf("Creating payload indexes for collection %s...", collectionName)
 
 	// Index for component fields and category for faster grouping and filtering
-	textFields := []string{"purl", "version", "url", "category", "rank"}
+	textFields := []string{"purl", "version", "url", "category"}
 	for _, field := range textFields {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
@@ -262,6 +233,18 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		} else {
 			log.Printf("Created index for field: %s in %s", field, collectionName)
 		}
+	}
+
+	// Create rank index
+	_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+		CollectionName: collectionName,
+		FieldName:      "rank",
+		FieldType:      qdrant.PtrOf(qdrant.FieldType_FieldTypeFloat),
+	})
+	if err != nil {
+		log.Printf("Warning: Could not create index for rank in %s: %v", collectionName, err)
+	} else {
+		log.Printf("Created index for field: rank in %s", collectionName)
 	}
 }
 
@@ -435,6 +418,10 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 			"license":       qdrant.NewValueString(strings.TrimSpace(record[8])),
 			"purl":          qdrant.NewValueString(strings.TrimSpace(record[9])),
 			"url":           qdrant.NewValueString(strings.TrimSpace(record[10])),
+			"url_hash":      qdrant.NewValueString(urlHashStr),
+			"dirs_hash":     qdrant.NewValueString(hfhDirsStr),
+			"names_hash":    qdrant.NewValueString(hfhNamesStr),
+			"contents_hash": qdrant.NewValueString(hfhContentsStr),
 			"total_files":   qdrant.NewValueInt(totalFiles),
 			"indexed_files": qdrant.NewValueInt(indexedFiles),
 			"source_files":  qdrant.NewValueInt(sourceFiles),

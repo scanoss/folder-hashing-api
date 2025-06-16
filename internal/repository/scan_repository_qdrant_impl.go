@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strconv"
 
-	"slices"
-
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
@@ -51,7 +49,7 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 // SearchByHashes performs a search using directory, name, and content hashes
 func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
-	s.Info("Starting language-based search with nested sequential approach")
+	s.Info("Starting language-based search with RRF fusion")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
@@ -93,14 +91,14 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	shouldConditions := []*qdrant.Condition{}
 
 	// Conditions to prioritize rank < 5
-	th := float64(5.0)
+	lowerThanRank := float64(5.0)
 	rankConditions := []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
 					Key: "rank",
 					Range: &qdrant.Range{
-						Lt: &th,
+						Lt: &lowerThanRank,
 					},
 				},
 			},
@@ -111,12 +109,12 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		qdrant.NewMatch("category", "github_popular"),
 		qdrant.NewMatch("category", "github"),
 	}
-	shouldConditions = append(shouldConditions, allowedCategories...)
-	shouldConditions = append(shouldConditions, rankConditions...)
 
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "common"))
+
 	mustConditions = append(mustConditions, rankConditions...)
+	mustConditions = append(mustConditions, allowedCategories...)
 
 	filters = &qdrant.Filter{
 		Must:    mustConditions,
@@ -124,81 +122,40 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		Should:  shouldConditions,
 	}
 
-	filters2 := &qdrant.Filter{
-		Must:    mustConditions,
-		MustNot: mustNotConditions,
-	}
-
-	// Contents has minimal influence - only as a pre-filter
-	s.Info("Executing nested prefetch query: names -> dirs -> contents (minimal influence)")
-	nestedQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Prefetch: []*qdrant.PrefetchQuery{
-			{
-				// Level 3: Prefetch priority with filter2
-				Prefetch: []*qdrant.PrefetchQuery{
-					{
-						// Level 2: Filter by dirs of the candidates of names
-						Prefetch: []*qdrant.PrefetchQuery{
-							{
-								// Level 1: Search candidates by names with filter2 (high priority)
-								Query:          qdrant.NewQuery(nameVector...),
-								Using:          qdrant.PtrOf("names"),
-								Filter:         filters2,                  // Filter priority
-								Limit:          qdrant.PtrOf(uint64(100)), // Generous limit for filter2
-								ScoreThreshold: qdrant.PtrOf(float32(30.0)),
-							},
-						},
-						Query:          qdrant.NewQuery(dirVector...),
-						Using:          qdrant.PtrOf("dirs"),
-						Limit:          qdrant.PtrOf(uint64(50)),
-						ScoreThreshold: qdrant.PtrOf(float32(10.0)),
-					},
-				},
-				Query:          qdrant.NewQuery(contentVector...),
-				Using:          qdrant.PtrOf("contents"),
-				Limit:          qdrant.PtrOf(uint64(25)), // Less candidates than the priority group
-				ScoreThreshold: qdrant.PtrOf(float32(50.0)),
-			},
-			{
-				// Secondary prefetch with filter1 (filler)
-				Prefetch: []*qdrant.PrefetchQuery{
-					{
-						Prefetch: []*qdrant.PrefetchQuery{
-							{
-								Query:          qdrant.NewQuery(nameVector...),
-								Using:          qdrant.PtrOf("names"),
-								Filter:         filters,                     // Secondary filter
-								Limit:          qdrant.PtrOf(uint64(200)),   // Less limit
-								ScoreThreshold: qdrant.PtrOf(float32(15.0)), // More strict threshold
-							},
-						},
-						Query:          qdrant.NewQuery(dirVector...),
-						Using:          qdrant.PtrOf("dirs"),
-						Limit:          qdrant.PtrOf(uint64(100)),
-						ScoreThreshold: qdrant.PtrOf(float32(50.0)),
-					},
-				},
-				Query:          qdrant.NewQuery(contentVector...),
-				Using:          qdrant.PtrOf("contents"),
-				Limit:          qdrant.PtrOf(uint64(50)), // More candidates than the secondary group
-				ScoreThreshold: qdrant.PtrOf(float32(50.0)),
-			},
+	s.Info("Executing hybrid query")
+	prefetchQueries := []*qdrant.PrefetchQuery{
+		{
+			// Names vector query
+			Query: qdrant.NewQuery(nameVector...),
+			Using: qdrant.PtrOf("names"),
 		},
-		// Final query: rank by names
-		Query:       qdrant.NewQuery(nameVector...),
-		Using:       qdrant.PtrOf("names"),
-		WithPayload: qdrant.NewWithPayload(true),
-		WithVectors: qdrant.NewWithVectors(false),
-		Limit:       qdrant.PtrOf(topK),
-		// No final filter to allow both groups
-	}
-	searchResp, err := r.client.Query(ctx, nestedQuery)
-	if err != nil {
-		return nil, fmt.Errorf("error performing nested prefetch search in %s: %v", collectionName, err)
+		{
+			// Dirs vector query
+			Query: qdrant.NewQuery(dirVector...),
+			Using: qdrant.PtrOf("dirs"),
+		},
+		{
+			// Contents vector query
+			Query: qdrant.NewQuery(contentVector...),
+			Using: qdrant.PtrOf("contents"),
+		},
 	}
 
-	// Collect all results and their scores
+	hybridQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
+		Prefetch:       prefetchQueries,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
+		Filter:         filters,
+	}
+
+	searchResp, err := r.client.Query(ctx, hybridQuery)
+	if err != nil {
+		return nil, fmt.Errorf("error performing hybrid search in %s: %v", collectionName, err)
+	}
+
+	// First, collect all results and their scores
 	var allResults []entities.SearchResult
 	var scores []float32
 
@@ -209,19 +166,21 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 
 	if len(scores) == 0 {
-		s.Info("No final results found")
+		log.Printf("No search results found")
 		return []entities.ComponentGroup{}, nil
 	}
 
 	// Sort scores to analyze distribution
-	slices.Sort(scores)
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i] > scores[j] // Sort descending
+	})
 
-	s.Info("Nested sequential search found %d quality results in %s", len(allResults), collectionName)
+	log.Printf("Hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
 
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	s.Info("Nested sequential search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
+	log.Printf("Hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 
@@ -396,7 +355,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 			group.ResultCount++
 
 			// Update best match if this version has a better score
-			if versionResult.Score < group.BestMatch.Score {
+			if versionResult.Score > group.BestMatch.Score {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -417,7 +376,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 	for _, group := range groups {
 		// Sort versions within group by score (higher score is better)
 		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Score < group.AllVersions[j].Score
+			return group.AllVersions[i].Score > group.AllVersions[j].Score
 		})
 
 		// Create other versions list (excluding best match)
@@ -435,19 +394,9 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 		if math.Abs(float64(groupSlice[i].BestMatch.Score-groupSlice[j].BestMatch.Score)) < 5 && groupSlice[i].Rank < groupSlice[j].Rank {
 			return true
 		} else {
-			return groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score
+			return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
 		}
 	})
 
 	return groupSlice
-}
-
-func (r *ScanRepositoryQdrantImpl) getPointIds(results []*qdrant.ScoredPoint) []*qdrant.PointId {
-	var ids []*qdrant.PointId
-	for _, point := range results {
-		if point.Id != nil {
-			ids = append(ids, point.Id)
-		}
-	}
-	return ids
 }

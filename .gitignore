@@ -35,4 +35,6 @@ local-build-commands.txt
 *.zip
 
 __debug*
-scanoss-hfh
+qdrant_import
+server
+hfh-cli
