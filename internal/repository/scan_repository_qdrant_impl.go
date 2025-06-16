@@ -3,17 +3,17 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"slices"
 	"sort"
 	"strconv"
-	"time"
 
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
-	domainErrors "github.com/scanoss/folder-hashing-api/internal/domain/errors"
 )
 
 const (
@@ -38,7 +38,7 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 		Port: config.Port,
 	})
 	if err != nil {
-		return nil, domainErrors.NewRepositoryFailureError("connect", err)
+		return nil, errors.New("failed to connect to Qdrant: " + err.Error())
 	}
 
 	return &ScanRepositoryQdrantImpl{
@@ -48,50 +48,44 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 }
 
 // SearchByHashes performs a search using directory, name, and content hashes
-func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string,
-	langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
-
-	log.Printf("Starting language-based search with RRF fusion")
+func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
+	s := ctxzap.Extract(ctx).Sugar()
+	s.Info("Starting language-based search with RRF fusion")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
-	log.Printf("Using collection: %s for language extensions: %v", collectionName, langExt)
-
-	// Set context with timeout
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	s.Info("Using collection: %s for language extensions: %v", collectionName, langExt)
 
 	// Check if collection exists
 	exists, err := r.client.CollectionExists(ctx, collectionName)
 	if err != nil {
-		return nil, domainErrors.NewRepositoryFailureError("check_collection", err)
+		return nil, errors.New("failed to check collection: " + err.Error())
 	}
 	if !exists {
-		log.Printf("Collection %s does not exist, falling back to misc_collection", collectionName)
+		s.Warn("Collection %s does not exist, falling back to misc_collection", collectionName)
 		collectionName = "misc_collection"
 
 		// Check if misc collection exists
 		exists, err = r.client.CollectionExists(ctx, collectionName)
 		if err != nil || !exists {
-			return nil, domainErrors.NewCollectionNotFoundError(collectionName)
+			return nil, errors.New("collection " + collectionName + " does not exist")
 		}
 	}
 
 	// Convert hashes to vectors
-	dirVector, err := hexSimhashToVector(dirHash, VectorDim)
+	dirVector, err := r.hexSimhashToVector(dirHash, VectorDim)
 	if err != nil {
-		return nil, domainErrors.NewInvalidHashError("dir", dirHash)
+		return nil, errors.New("failed to convert directory hash to vector: " + err.Error())
 	}
-	nameVector, err := hexSimhashToVector(nameHash, VectorDim)
+	nameVector, err := r.hexSimhashToVector(nameHash, VectorDim)
 	if err != nil {
-		return nil, domainErrors.NewInvalidHashError("name", nameHash)
+		return nil, errors.New("failed to convert name hash to vector: " + err.Error())
 	}
-	contentVector, err := hexSimhashToVector(contentHash, VectorDim)
+	contentVector, err := r.hexSimhashToVector(contentHash, VectorDim)
 	if err != nil {
-		return nil, domainErrors.NewInvalidHashError("content", contentHash)
+		return nil, errors.New("failed to convert content hash to vector: " + err.Error())
 	}
 
-	var filters *qdrant.Filter
 	mustConditions := []*qdrant.Condition{}
 	mustNotConditions := []*qdrant.Condition{}
 	shouldConditions := []*qdrant.Condition{}
@@ -113,7 +107,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 
-	filters = &qdrant.Filter{
+	filters := &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
 		Should:  shouldConditions,
@@ -149,35 +143,23 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 
 	searchResp, err := r.client.Query(ctx, hybridQuery)
 	if err != nil {
-		return nil, domainErrors.NewRepositoryFailureError("search", err)
+		return nil, errors.New("failed to perform search: " + err.Error())
 	}
 
 	// First, collect all results and their scores
 	var allResults []entities.SearchResult
-	var scores []float32
 
 	for _, point := range searchResp {
 		result := r.convertPointToResult(point)
 		allResults = append(allResults, result)
-		scores = append(scores, point.Score)
 	}
 
-	if len(scores) == 0 {
-		log.Printf("No search results found")
-		return []entities.ComponentGroup{}, nil
-	}
-
-	// Sort scores to analyze distribution
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i] > scores[j] // Sort descending
-	})
-
-	log.Printf("RRF hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
+	s.Info("RRF hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
 
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	log.Printf("RRF hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
+	s.Info("RRF hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 
@@ -185,7 +167,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 func (r *ScanRepositoryQdrantImpl) GetCollectionStats(ctx context.Context, collectionName string) (*CollectionStats, error) {
 	info, err := r.client.GetCollectionInfo(ctx, collectionName)
 	if err != nil {
-		return nil, domainErrors.NewRepositoryFailureError("get_collection_info", err)
+		return nil, errors.New("failed to get collection info: " + err.Error())
 	}
 
 	pointsCount := uint64(0)
@@ -205,7 +187,7 @@ func (r *ScanRepositoryQdrantImpl) GetCollectionStats(ctx context.Context, colle
 func (r *ScanRepositoryQdrantImpl) CollectionExists(ctx context.Context, collectionName string) (bool, error) {
 	exists, err := r.client.CollectionExists(ctx, collectionName)
 	if err != nil {
-		return false, domainErrors.NewRepositoryFailureError("check_collection_exists", err)
+		return false, errors.New("failed to check collection exists: " + err.Error())
 	}
 	return exists, nil
 }
@@ -216,7 +198,7 @@ func (r *ScanRepositoryQdrantImpl) GetAllSupportedCollections() []string {
 }
 
 // hexSimhashToVector converts hex hash string to vector
-func hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
+func (r *ScanRepositoryQdrantImpl) hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	if hexHashString == "" {
 		return nil, fmt.Errorf("input hex string cannot be empty")
 	}

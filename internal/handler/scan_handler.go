@@ -8,6 +8,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/scanoss/folder-hashing-api/internal/mapper"
 	"github.com/scanoss/folder-hashing-api/internal/service"
+	"github.com/scanoss/folder-hashing-api/internal/validation"
 	"github.com/scanoss/papi/api/commonv2"
 	"github.com/scanoss/papi/api/scanningv2"
 )
@@ -52,6 +53,16 @@ func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHReq
 			Message: "Failed to process request",
 		}
 		return &scanningv2.HFHResponse{Status: &statusResp}, errors.New("failed to process request")
+	}
+
+	// Validate domain request
+	if err := validation.ValidateStruct(domainRequest); err != nil {
+		s.Errorf("validation error: %v", err)
+		statusResp := commonv2.StatusResponse{
+			Status:  commonv2.StatusCode_FAILED,
+			Message: "Invalid request: " + err.Error(),
+		}
+		return &scanningv2.HFHResponse{Status: &statusResp}, err
 	}
 
 	s.Info("Scan starts")

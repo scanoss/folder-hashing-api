@@ -14,10 +14,6 @@ type ScanResult struct {
 	PathID string
 	// List of matching component groups
 	ComponentGroups []*ComponentGroup
-	// Matching probability
-	Probability float32
-	// Result stage
-	Stage int32
 }
 
 // StatusResponse represents status information
