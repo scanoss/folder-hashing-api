@@ -50,7 +50,7 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 // SearchByHashes performs a search using directory, name, and content hashes
 func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
-	s.Info("Starting language-based search with RRF fusion")
+	s.Info("Starting language-based search with nested sequential approach")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
@@ -86,80 +86,160 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert content hash to vector: " + err.Error())
 	}
 
+	var filters *qdrant.Filter
 	mustConditions := []*qdrant.Condition{}
 	mustNotConditions := []*qdrant.Condition{}
 	shouldConditions := []*qdrant.Condition{}
 
-	if len(langExt) > 0 {
-		langExtConditions := r.buildLanguageExtensionFilter(langExt, 30.0)
-		if len(langExtConditions) > 0 {
-			mustConditions = append(mustConditions, langExtConditions...)
-		}
+	// Conditions to prioritize rank < 5
+	th := float64(3.0)
+	rankConditions := []*qdrant.Condition{
+		{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "rank",
+					Range: &qdrant.Range{
+						Lt: &th,
+					},
+				},
+			},
+		},
 	}
 
-	// We want to get only 'github_popular' or 'github' category results
 	allowedCategories := []*qdrant.Condition{
 		qdrant.NewMatch("category", "github_popular"),
 		qdrant.NewMatch("category", "github"),
-		qdrant.NewMatch("category", "common"),
 	}
 	shouldConditions = append(shouldConditions, allowedCategories...)
+	shouldConditions = append(shouldConditions, rankConditions...)
+	mustConditions = append(mustConditions, rankConditions...)
 
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
+	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "common"))
 
-	filters := &qdrant.Filter{
+	filters = &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
 		Should:  shouldConditions,
 	}
 
-	prefetchQueries := []*qdrant.PrefetchQuery{
-		{
-			// Names vector query
-			Query: qdrant.NewQuery(nameVector...),
-			Using: qdrant.PtrOf("names"),
-		},
-		{
-			// Dirs vector query
-			Query: qdrant.NewQuery(dirVector...),
-			Using: qdrant.PtrOf("dirs"),
-		},
-		{
-			// Contents vector query
-			Query: qdrant.NewQuery(contentVector...),
-			Using: qdrant.PtrOf("contents"),
-		},
-	}
-
-	// Create hybrid query with weighted fusion
-	hybridQuery := &qdrant.QueryPoints{
+	// Step 1: Search candidates by names similarity
+	s.Info("Step 1: Searching candidates by names similarity")
+	step1Query := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
-		Prefetch:       prefetchQueries,
-		WithPayload:    qdrant.NewWithPayload(true),
+		Query:          qdrant.NewQuery(nameVector...),
+		Using:          qdrant.PtrOf("names"),
+		Filter:         filters, // Aplicar filtros originales
+		WithPayload:    qdrant.NewWithPayload(false),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         filters,
+		Limit:          qdrant.PtrOf(uint64(10000)), // Obtener candidatos iniciales
+		ScoreThreshold: qdrant.PtrOf(float32(0.7)),  // Solo candidatos con buena similitud
 	}
 
-	searchResp, err := r.client.Query(ctx, hybridQuery)
+	step1Results, err := r.client.Query(ctx, step1Query)
 	if err != nil {
-		return nil, errors.New("failed to perform search: " + err.Error())
+		return nil, fmt.Errorf("error in step 1 (names search): %v", err)
 	}
 
-	// First, collect all results and their scores
+	if len(step1Results) == 0 {
+		s.Info("No candidates found in step 1 (names search)")
+		return []entities.ComponentGroup{}, nil
+	}
+
+	candidateIDs := r.getPointIds(step1Results)
+	s.Info("Step 1 completed: Found %d candidates by names", len(candidateIDs))
+
+	// Step 2: Filter candidates by dirs similarity
+	s.Info("Step 2: Filtering candidates by dirs similarity")
+	step2Query := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(dirVector...),
+		Using:          qdrant.PtrOf("dirs"),
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_HasId{
+						HasId: &qdrant.HasIdCondition{
+							HasId: candidateIDs,
+						},
+					},
+				},
+			},
+			Should: shouldConditions,
+		},
+		WithPayload:    qdrant.NewWithPayload(false),
+		WithVectors:    qdrant.NewWithVectors(false),
+		Limit:          qdrant.PtrOf(uint64(100)),  // Reducir candidatos
+		ScoreThreshold: qdrant.PtrOf(float32(0.9)), // Umbral para dirs
+	}
+
+	step2Results, err := r.client.Query(ctx, step2Query)
+	if err != nil {
+		return nil, fmt.Errorf("error in step 2 (dirs search): %v", err)
+	}
+
+	if len(step2Results) == 0 {
+		s.Info("No candidates found in step 2 (dirs search)")
+		return []entities.ComponentGroup{}, nil
+	}
+
+	step2IDs := r.getPointIds(step2Results)
+	s.Info("Step 2 completed: Filtered to %d candidates by dirs", len(step2IDs))
+
+	// Step 3: Final ranking by contents similarity
+	s.Info("Step 3: Final ranking by contents similarity")
+	finalQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(contentVector...),
+		Using:          qdrant.PtrOf("contents"),
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_HasId{
+						HasId: &qdrant.HasIdCondition{
+							HasId: step2IDs,
+						},
+					},
+				},
+			},
+			Should: shouldConditions,
+		},
+		WithPayload: qdrant.NewWithPayload(true),
+		WithVectors: qdrant.NewWithVectors(false),
+		Limit:       qdrant.PtrOf(topK), // Usar el topK solicitado
+	}
+
+	searchResp, err := r.client.Query(ctx, finalQuery)
+	if err != nil {
+		return nil, fmt.Errorf("error in step 3 (contents ranking): %v", err)
+	}
+
+	// Collect all results and their scores
 	var allResults []entities.SearchResult
+	var scores []float32
 
 	for _, point := range searchResp {
 		result := r.convertPointToResult(point)
 		allResults = append(allResults, result)
+		scores = append(scores, point.Score)
 	}
 
-	s.Info("RRF hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
+	if len(scores) == 0 {
+		s.Info("No final results found")
+		return []entities.ComponentGroup{}, nil
+	}
+
+	// Sort scores to analyze distribution
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i] > scores[j] // Sort descending
+	})
+
+	log.Printf("Nested sequential search found %d quality results in %s", len(allResults), collectionName)
 
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	s.Info("RRF hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
+	log.Printf("Nested sequential search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 
@@ -296,6 +376,9 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 		if val, exists := point.Payload["url"]; exists {
 			result.URL = val.GetStringValue()
 		}
+		if val, exists := point.Payload["rank"]; exists {
+			result.Rank = int(val.GetIntegerValue())
+		}
 
 		// Parse language_extensions if present
 		if val, exists := point.Payload["language_extensions"]; exists {
@@ -355,7 +438,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 	groups := make(map[string]*entities.ComponentGroup)
 
 	for _, result := range results {
-		key := result.Component
+		key := result.Purl
 		if key == "" {
 			key = "unknown"
 		}
@@ -364,6 +447,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 			Version:            result.Version,
 			Score:              result.Score,
 			URL:                result.URL,
+			Purl:               result.Purl,
 			LanguageExtensions: result.LanguageExtensions,
 			Metadata:           result.Metadata,
 		}
@@ -374,7 +458,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 			group.ResultCount++
 
 			// Update best match if this version has a better score
-			if versionResult.Score > group.BestMatch.Score {
+			if versionResult.Score < group.BestMatch.Score {
 				group.BestMatch = versionResult
 			}
 		} else {
@@ -385,6 +469,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 				BestMatch:   versionResult,
 				AllVersions: []entities.VersionResult{versionResult},
 				ResultCount: 1,
+				Rank:        result.Rank,
 			}
 		}
 	}
@@ -394,7 +479,7 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 	for _, group := range groups {
 		// Sort versions within group by score (higher score is better)
 		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Score > group.AllVersions[j].Score
+			return group.AllVersions[i].Score < group.AllVersions[j].Score
 		})
 
 		// Create other versions list (excluding best match)
@@ -407,10 +492,29 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 		groupSlice = append(groupSlice, *group)
 	}
 
-	// Sort groups by best match score (higher is better because of RRF)
+	// Sort groups by best match score
 	sort.Slice(groupSlice, func(i, j int) bool {
-		return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
+		if math.Abs(float64(groupSlice[i].BestMatch.Score-groupSlice[j].BestMatch.Score)) < 5 && groupSlice[i].Rank < groupSlice[j].Rank {
+			return true
+		} else {
+			return groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score
+		}
+
+		/*if groupSlice[i].Rank == groupSlice[j].Rank && groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score {
+			return true
+		}*/
+		//	return false
 	})
 
 	return groupSlice
+}
+
+func (r *ScanRepositoryQdrantImpl) getPointIds(results []*qdrant.ScoredPoint) []*qdrant.PointId {
+	var ids []*qdrant.PointId
+	for _, point := range results {
+		if point.Id != nil {
+			ids = append(ids, point.Id)
+		}
+	}
+	return ids
 }

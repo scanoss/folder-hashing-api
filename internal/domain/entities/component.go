@@ -8,6 +8,7 @@ type ComponentGroup struct {
 	OtherVersions []string        `json:"other_versions,omitempty"`
 	AllVersions   []VersionResult `json:"all_versions,omitempty"`
 	ResultCount   int             `json:"result_count"`
+	Rank          int             `json:"rank"`
 }
 
 // VersionResult represents a version-specific result within a component group
@@ -15,6 +16,7 @@ type VersionResult struct {
 	Version            string             `json:"version"`
 	Score              float32            `json:"score"`
 	URL                string             `json:"url,omitempty"`
+	Purl               string             `json:"purl,omitempty"`
 	LanguageExtensions LanguageExtensions `json:"language_extensions,omitempty"`
 	Metadata           map[string]any     `json:"metadata,omitempty"`
 }
@@ -30,6 +32,7 @@ type SearchResult struct {
 	URL                string             `json:"url"`
 	LanguageExtensions LanguageExtensions `json:"language_extensions,omitempty"`
 	Metadata           map[string]any     `json:"metadata"`
+	Rank               int                `json:"rank"`
 }
 
 // Component represents a component match result for protobuf compatibility
