@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -28,10 +29,12 @@ const (
 	VectorDim  = 64   // Single 64-bit hash per collection
 )
 
+var rankMap map[string]bool
+
 func main() {
-	// Process command line arguments
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
-	overwriteFlag := flag.Bool("overwrite", false, "If true, delete existing collections before import")
+	overwrite := flag.Bool("overwrite", false, "If true, delete existing collections before import")
+	topPurlsPath := flag.String("top-purls", "", "File with top rated purls (required)")
 
 	flag.Parse()
 
@@ -39,9 +42,19 @@ func main() {
 		log.Fatal("Error: You must specify a directory with the -dir option")
 	}
 
+	if *topPurlsPath == "" {
+		log.Fatal("Error: You must specify a file with the -top-purls option")
+	}
+
 	// Verify that the directory exists
 	if _, err := os.Stat(*csvDir); os.IsNotExist(err) {
 		log.Fatalf("Error: Directory %s does not exist", *csvDir)
+	}
+
+	var err error
+	rankMap, err = initPurlMap(*topPurlsPath)
+	if err != nil {
+		log.Println("Warning: ", err)
 	}
 
 	// Start the timer to measure performance
@@ -76,7 +89,7 @@ func main() {
 			log.Fatalf("Error checking if collection %s exists: %v", collectionName, err)
 		}
 
-		if *overwriteFlag && collectionExists {
+		if *overwrite && collectionExists {
 			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
 			err = client.DeleteCollection(ctx, collectionName)
 			if err != nil {
@@ -237,7 +250,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	log.Printf("Creating payload indexes for collection %s...", collectionName)
 
 	// Index for component fields and category for faster grouping and filtering
-	textFields := []string{"component", "vendor", "version", "url", "category"}
+	textFields := []string{"purl", "version", "url", "category", "rank"}
 	for _, field := range textFields {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
@@ -251,7 +264,6 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		}
 	}
 
-	// Index for language extension fields for faster filtering
 	for _, field := range entities.IndexedLangExtensions {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
@@ -380,8 +392,8 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		// Parse hash values
 		hfhDirsStr := strings.TrimSpace(record[0])
 		hfhNamesStr := strings.TrimSpace(record[1])
-		hfhContentsStr := strings.TrimSpace(record[3])
-		urlHashStr := strings.TrimSpace(record[4])
+		hfhContentsStr := strings.TrimSpace(record[2])
+		urlHashStr := strings.TrimSpace(record[3])
 
 		// Skip if any critical hash is invalid
 		if hfhDirsStr == "" || hfhNamesStr == "" || hfhContentsStr == "" {
@@ -415,8 +427,14 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		version := strings.TrimSpace(record[6])
 		url := strings.TrimSpace(record[10])
 
-		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s",
-			vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
+		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s", vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
+		rank := 5
+		if rankMap != nil {
+			prefered := rankMap[strings.TrimSpace(record[9])]
+			if prefered {
+				rank = 1
+			}
+		}
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash))
 		pointId := hasher.Sum64()
@@ -436,6 +454,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 			"ignored_files": qdrant.NewValueInt(ignoredFiles),
 			"size":          qdrant.NewValueInt(size),
 			"category":      qdrant.NewValueString(categoryStr),
+			"rank":          qdrant.NewValueInt(int64(rank)),
 		}
 
 		// Parse language extensions if present (column 17) to determine target collection
@@ -536,4 +555,32 @@ func showCollectionStats(ctx context.Context, client *qdrant.Client, collectionN
 	log.Printf("  Status: %s", info.Status)
 	log.Printf("  Points count: %d", info.PointsCount)
 	log.Printf("  Segments count: %d", info.SegmentsCount)
+}
+
+func initPurlMap(filename string) (map[string]bool, error) {
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(absPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	repoMap := make(map[string]bool)
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			repoMap[line] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return repoMap, nil
 }

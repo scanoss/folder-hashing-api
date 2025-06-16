@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"slices"
 	"sort"
 	"strconv"
+
+	"slices"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/qdrant/go-client/qdrant"
@@ -92,7 +93,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	shouldConditions := []*qdrant.Condition{}
 
 	// Conditions to prioritize rank < 5
-	th := float64(3.0)
+	th := float64(5.0)
 	rankConditions := []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
@@ -112,10 +113,10 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 	shouldConditions = append(shouldConditions, allowedCategories...)
 	shouldConditions = append(shouldConditions, rankConditions...)
-	mustConditions = append(mustConditions, rankConditions...)
 
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "common"))
+	mustConditions = append(mustConditions, rankConditions...)
 
 	filters = &qdrant.Filter{
 		Must:    mustConditions,
@@ -123,95 +124,78 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		Should:  shouldConditions,
 	}
 
-	// Step 1: Search candidates by names similarity
-	s.Info("Step 1: Searching candidates by names similarity")
-	step1Query := &qdrant.QueryPoints{
+	filters2 := &qdrant.Filter{
+		Must:    mustConditions,
+		MustNot: mustNotConditions,
+	}
+
+	// Contents has minimal influence - only as a pre-filter
+	s.Info("Executing nested prefetch query: names -> dirs -> contents (minimal influence)")
+	nestedQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(nameVector...),
-		Using:          qdrant.PtrOf("names"),
-		Filter:         filters, // Aplicar filtros originales
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Limit:          qdrant.PtrOf(uint64(10000)), // Obtener candidatos iniciales
-		ScoreThreshold: qdrant.PtrOf(float32(0.7)),  // Solo candidatos con buena similitud
-	}
-
-	step1Results, err := r.client.Query(ctx, step1Query)
-	if err != nil {
-		return nil, fmt.Errorf("error in step 1 (names search): %v", err)
-	}
-
-	if len(step1Results) == 0 {
-		s.Info("No candidates found in step 1 (names search)")
-		return []entities.ComponentGroup{}, nil
-	}
-
-	candidateIDs := r.getPointIds(step1Results)
-	s.Info("Step 1 completed: Found %d candidates by names", len(candidateIDs))
-
-	// Step 2: Filter candidates by dirs similarity
-	s.Info("Step 2: Filtering candidates by dirs similarity")
-	step2Query := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(dirVector...),
-		Using:          qdrant.PtrOf("dirs"),
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				{
-					ConditionOneOf: &qdrant.Condition_HasId{
-						HasId: &qdrant.HasIdCondition{
-							HasId: candidateIDs,
+		Prefetch: []*qdrant.PrefetchQuery{
+			{
+				// Level 3: Prefetch priority with filter2
+				Prefetch: []*qdrant.PrefetchQuery{
+					{
+						// Level 2: Filter by dirs of the candidates of names
+						Prefetch: []*qdrant.PrefetchQuery{
+							{
+								// Level 1: Search candidates by names with filter2 (high priority)
+								Query:          qdrant.NewQuery(nameVector...),
+								Using:          qdrant.PtrOf("names"),
+								Filter:         filters2,                  // Filter priority
+								Limit:          qdrant.PtrOf(uint64(100)), // Generous limit for filter2
+								ScoreThreshold: qdrant.PtrOf(float32(30.0)),
+							},
 						},
+						Query:          qdrant.NewQuery(dirVector...),
+						Using:          qdrant.PtrOf("dirs"),
+						Limit:          qdrant.PtrOf(uint64(50)),
+						ScoreThreshold: qdrant.PtrOf(float32(10.0)),
 					},
 				},
+				Query:          qdrant.NewQuery(contentVector...),
+				Using:          qdrant.PtrOf("contents"),
+				Limit:          qdrant.PtrOf(uint64(25)), // Less candidates than the priority group
+				ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 			},
-			Should: shouldConditions,
-		},
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Limit:          qdrant.PtrOf(uint64(100)),  // Reducir candidatos
-		ScoreThreshold: qdrant.PtrOf(float32(0.9)), // Umbral para dirs
-	}
-
-	step2Results, err := r.client.Query(ctx, step2Query)
-	if err != nil {
-		return nil, fmt.Errorf("error in step 2 (dirs search): %v", err)
-	}
-
-	if len(step2Results) == 0 {
-		s.Info("No candidates found in step 2 (dirs search)")
-		return []entities.ComponentGroup{}, nil
-	}
-
-	step2IDs := r.getPointIds(step2Results)
-	s.Info("Step 2 completed: Filtered to %d candidates by dirs", len(step2IDs))
-
-	// Step 3: Final ranking by contents similarity
-	s.Info("Step 3: Final ranking by contents similarity")
-	finalQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(contentVector...),
-		Using:          qdrant.PtrOf("contents"),
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				{
-					ConditionOneOf: &qdrant.Condition_HasId{
-						HasId: &qdrant.HasIdCondition{
-							HasId: step2IDs,
+			{
+				// Secondary prefetch with filter1 (filler)
+				Prefetch: []*qdrant.PrefetchQuery{
+					{
+						Prefetch: []*qdrant.PrefetchQuery{
+							{
+								Query:          qdrant.NewQuery(nameVector...),
+								Using:          qdrant.PtrOf("names"),
+								Filter:         filters,                     // Secondary filter
+								Limit:          qdrant.PtrOf(uint64(200)),   // Less limit
+								ScoreThreshold: qdrant.PtrOf(float32(15.0)), // More strict threshold
+							},
 						},
+						Query:          qdrant.NewQuery(dirVector...),
+						Using:          qdrant.PtrOf("dirs"),
+						Limit:          qdrant.PtrOf(uint64(100)),
+						ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 					},
 				},
+				Query:          qdrant.NewQuery(contentVector...),
+				Using:          qdrant.PtrOf("contents"),
+				Limit:          qdrant.PtrOf(uint64(50)), // More candidates than the secondary group
+				ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 			},
-			Should: shouldConditions,
 		},
+		// Final query: rank by names
+		Query:       qdrant.NewQuery(nameVector...),
+		Using:       qdrant.PtrOf("names"),
 		WithPayload: qdrant.NewWithPayload(true),
 		WithVectors: qdrant.NewWithVectors(false),
-		Limit:       qdrant.PtrOf(topK), // Usar el topK solicitado
+		Limit:       qdrant.PtrOf(topK),
+		// No final filter to allow both groups
 	}
-
-	searchResp, err := r.client.Query(ctx, finalQuery)
+	searchResp, err := r.client.Query(ctx, nestedQuery)
 	if err != nil {
-		return nil, fmt.Errorf("error in step 3 (contents ranking): %v", err)
+		return nil, fmt.Errorf("error performing nested prefetch search in %s: %v", collectionName, err)
 	}
 
 	// Collect all results and their scores
@@ -230,16 +214,14 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 
 	// Sort scores to analyze distribution
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i] > scores[j] // Sort descending
-	})
+	slices.Sort(scores)
 
-	log.Printf("Nested sequential search found %d quality results in %s", len(allResults), collectionName)
+	s.Info("Nested sequential search found %d quality results in %s", len(allResults), collectionName)
 
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	log.Printf("Nested sequential search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
+	s.Info("Nested sequential search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 
@@ -305,50 +287,6 @@ func (r *ScanRepositoryQdrantImpl) hexSimhashToVector(hexHashString string, bits
 	}
 
 	return vector, nil
-}
-
-// buildLanguageExtensionFilter creates Qdrant filters for language extension similarity
-func (r *ScanRepositoryQdrantImpl) buildLanguageExtensionFilter(queryLangExt entities.LanguageExtensions, tolerancePercent float32) []*qdrant.Condition {
-	if len(queryLangExt) == 0 {
-		return nil
-	}
-
-	var conditions []*qdrant.Condition
-
-	// For each language in query, create range filters
-	for extension, count := range queryLangExt {
-		if extension == "" {
-			continue
-		}
-		// If extension is not in IndexedLangExtensions, skip it
-		if !slices.Contains(entities.IndexedLangExtensions, extension) {
-			continue
-		}
-		if count <= 0 {
-			continue
-		}
-
-		// Calculate tolerance range (e.g., ±30% of the count)
-		tolerance := float32(count) * tolerancePercent / 100.0
-		minCount := int64(math.Max(0, float64(count)-float64(tolerance)))
-		maxCount := int64(float64(count) + float64(tolerance))
-
-		// Create range condition for this language
-		condition := &qdrant.Condition{
-			ConditionOneOf: &qdrant.Condition_Field{
-				Field: &qdrant.FieldCondition{
-					Key: "language_extensions." + extension,
-					Range: &qdrant.Range{
-						Gte: qdrant.PtrOf(float64(minCount)),
-						Lte: qdrant.PtrOf(float64(maxCount)),
-					},
-				},
-			},
-		}
-		conditions = append(conditions, condition)
-	}
-
-	return conditions
 }
 
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
@@ -499,11 +437,6 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 		} else {
 			return groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score
 		}
-
-		/*if groupSlice[i].Rank == groupSlice[j].Rank && groupSlice[i].BestMatch.Score < groupSlice[j].BestMatch.Score {
-			return true
-		}*/
-		//	return false
 	})
 
 	return groupSlice
