@@ -3,11 +3,11 @@ package entities
 // ScanRequest represents the domain model for folder hash scanning request
 type ScanRequest struct {
 	// Get results with rank above this threshold (e.g i only want to see results from rank 3 and above)
-	RankThreshold int32 `validate:"min=0"`
+	RankThreshold int32 `validate:"omitempty,min=0"`
 	// Filter results by category (e.g i only want to see results from github projects, npm, etc)
 	Category string
 	// Maximum number of results to query
-	QueryLimit int32 `validate:"min=1"`
+	QueryLimit int32 `validate:"omitempty,min=1"`
 	// Folder root node to be scanned
 	Root *FolderNode `validate:"required"`
 }

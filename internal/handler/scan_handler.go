@@ -81,11 +81,12 @@ func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHReq
 	// Convert domain response back to protobuf
 	response := h.mapper.DomainToProto(domainResponse)
 	if response == nil {
-		statusResp := commonv2.StatusResponse{
-			Status:  commonv2.StatusCode_FAILED,
-			Message: "Failed to process response",
-		}
-		return &scanningv2.HFHResponse{Status: &statusResp}, errors.New("failed to process response")
+		return &scanningv2.HFHResponse{
+			Status: &commonv2.StatusResponse{
+				Status:  commonv2.StatusCode_FAILED,
+				Message: "Failed to process response",
+			},
+		}, errors.New("failed to process response")
 	}
 
 	// Set success status

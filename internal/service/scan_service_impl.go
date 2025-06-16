@@ -50,10 +50,6 @@ func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequ
 
 	response := &entities.ScanResponse{
 		Results: results,
-		Status: &entities.StatusResponse{
-			Code:    200,
-			Message: "success",
-		},
 	}
 
 	logger.Info("Scan completed: found %d results", len(results))

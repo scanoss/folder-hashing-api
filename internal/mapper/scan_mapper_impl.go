@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"maps"
+	"sort"
 
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 	"github.com/scanoss/papi/api/scanningv2"
@@ -43,13 +44,6 @@ func (m *ScanMapperImpl) DomainToProto(resp *entities.ScanResponse) *scanningv2.
 		}
 	}
 
-	// Convert status
-	if resp.Status != nil {
-		// Note: We need to map to the common status response from papi
-		// This might need adjustment based on the actual papi structure
-		// For now, we'll create a basic mapping
-	}
-
 	return protoResp
 }
 
@@ -82,44 +76,6 @@ func (m *ScanMapperImpl) ChildrenToDomain(children *scanningv2.HFHRequest_Childr
 	return node
 }
 
-// ComponentGroupToResult converts domain ComponentGroup to protobuf Result
-func (m *ScanMapperImpl) ComponentGroupToResult(group *entities.ComponentGroup, pathID string) *scanningv2.HFHResponse_Result {
-	if group == nil {
-		return nil
-	}
-
-	result := &scanningv2.HFHResponse_Result{
-		PathId: pathID,
-	}
-
-	var components []*scanningv2.HFHResponse_Component
-
-	// Add best match
-	bestMatchComponent := &scanningv2.HFHResponse_Component{
-		Purl:     group.BestMatch.Metadata["purl"].(string),
-		Versions: []string{group.BestMatch.Version},
-		Rank:     1, // Best match gets rank 1
-	}
-	components = append(components, bestMatchComponent)
-
-	// Add other versions if they exist
-	for i, version := range group.AllVersions {
-		if i == 0 {
-			continue // Skip best match as we already added it
-		}
-
-		component := &scanningv2.HFHResponse_Component{
-			Purl:     version.Metadata["purl"].(string),
-			Versions: []string{version.Version},
-			Rank:     int32(i + 1), // Rank based on position
-		}
-		components = append(components, component)
-	}
-
-	result.Components = components
-	return result
-}
-
 // scanResultToProto converts domain ScanResult to protobuf Result
 func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scanningv2.HFHResponse_Result {
 	if result == nil {
@@ -128,6 +84,7 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 
 	protoResult := &scanningv2.HFHResponse_Result{
 		PathId: result.PathID,
+		// Explicitly not setting deprecated fields: Probability and Stage
 	}
 
 	// Collect all version results from all component groups
@@ -138,28 +95,63 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 		}
 	}
 
-	// Sort by score (descending - best to worst)
-	for i := 0; i < len(allVersionResults)-1; i++ {
-		for j := i + 1; j < len(allVersionResults); j++ {
-			if allVersionResults[i].Score < allVersionResults[j].Score {
-				allVersionResults[i], allVersionResults[j] = allVersionResults[j], allVersionResults[i]
-			}
-		}
-	}
+	// Sort by score (lower score is better because is the distance from one vector to another)
+	sort.Slice(allVersionResults, func(i, j int) bool {
+		return allVersionResults[i].Score < allVersionResults[j].Score
+	})
 
-	// Convert each version result to a separate component
-	var allComponents []*scanningv2.HFHResponse_Component
-	for i, versionResult := range allVersionResults {
+	// Group by PURL and track the best score for each PURL
+	purlMap := make(map[string][]entities.VersionResult)
+	purlScoreMap := make(map[string]float32)
+
+	// Group versions by PURL and track the best score for each PURL
+	for _, versionResult := range allVersionResults {
 		if versionResult.Metadata != nil && versionResult.Metadata["purl"] != nil {
-			component := &scanningv2.HFHResponse_Component{
-				Purl:     versionResult.Metadata["purl"].(string),
-				Versions: []string{versionResult.Version},
-				Rank:     int32(i + 1),
+			purl := versionResult.Metadata["purl"].(string)
+			purlMap[purl] = append(purlMap[purl], versionResult)
+
+			// Set score for this PURL if not already set (first occurrence has best score)
+			if _, exists := purlScoreMap[purl]; !exists {
+				purlScoreMap[purl] = versionResult.Score
 			}
-			allComponents = append(allComponents, component)
 		}
 	}
 
-	protoResult.Components = allComponents
+	// Create a slice of PURLs with their scores for sorting
+	type purlWithScore struct {
+		purl  string
+		score float32
+	}
+
+	purlScores := make([]purlWithScore, 0, len(purlMap))
+	for purl, score := range purlScoreMap {
+		purlScores = append(purlScores, purlWithScore{purl, score})
+	}
+
+	// Sort PURLs by score to maintain correct order
+	sort.Slice(purlScores, func(i, j int) bool {
+		return purlScores[i].score < purlScores[j].score
+	})
+
+	// Create components with sequential ranks
+	components := make([]*scanningv2.HFHResponse_Component, len(purlScores))
+	for i, ps := range purlScores {
+		versions := purlMap[ps.purl]
+
+		// Extract all version strings
+		versionStrings := make([]string, len(versions))
+		for j, v := range versions {
+			versionStrings[j] = v.Version
+		}
+
+		// Create component with sequential rank
+		components[i] = &scanningv2.HFHResponse_Component{
+			Purl:     ps.purl,
+			Versions: versionStrings,
+			Rank:     int32(i + 1), // Sequential rank (1, 2, 3, ...)
+		}
+	}
+
+	protoResult.Components = components
 	return protoResult
 }

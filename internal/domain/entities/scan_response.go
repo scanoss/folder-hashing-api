@@ -4,8 +4,6 @@ package entities
 type ScanResponse struct {
 	// List of folders containing unique components
 	Results []*ScanResult
-	// Status information
-	Status *StatusResponse
 }
 
 // ScanResult represents a scan result for a specific path
