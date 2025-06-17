@@ -85,7 +85,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert content hash to vector: " + err.Error())
 	}
 
-	var filters *qdrant.Filter
 	mustConditions := []*qdrant.Condition{}
 	mustNotConditions := []*qdrant.Condition{}
 	shouldConditions := []*qdrant.Condition{}
@@ -109,35 +108,73 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		qdrant.NewMatch("category", "github_popular"),
 		qdrant.NewMatch("category", "github"),
 	}
-
+	shouldConditions = append(shouldConditions, rankConditions...)
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
-	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "common"))
 
-	mustConditions = append(mustConditions, rankConditions...)
-	mustConditions = append(mustConditions, allowedCategories...)
-
-	filters = &qdrant.Filter{
+	//filters for general query
+	commonfilters := &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
 		Should:  shouldConditions,
 	}
 
+	mustConditions = append(mustConditions, rankConditions...)
+	mustConditions = append(mustConditions, allowedCategories...)
+
+	//filter to prioritaze prefered conponents
+	preferedFilters := &qdrant.Filter{
+		Must:    mustConditions,
+		MustNot: mustNotConditions,
+		Should:  nil,
+	}
+
 	s.Info("Executing hybrid query")
 	prefetchQueries := []*qdrant.PrefetchQuery{
 		{
-			// Names vector query
-			Query: qdrant.NewQuery(nameVector...),
-			Using: qdrant.PtrOf("names"),
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Prefetch: []*qdrant.PrefetchQuery{
+						{
+							Query:          qdrant.NewQuery(nameVector...),
+							Using:          qdrant.PtrOf("names"),
+							Filter:         preferedFilters,
+							Limit:          qdrant.PtrOf(uint64(500)),
+							ScoreThreshold: qdrant.PtrOf(float32(20.0)),
+						},
+					},
+					Query:          qdrant.NewQuery(dirVector...),
+					Using:          qdrant.PtrOf("dirs"),
+					Limit:          qdrant.PtrOf(uint64(100)),
+					ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+				},
+			},
+			Query:          qdrant.NewQuery(contentVector...),
+			Using:          qdrant.PtrOf("contents"),
+			Limit:          qdrant.PtrOf(uint64(100)),
+			ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 		},
 		{
-			// Dirs vector query
-			Query: qdrant.NewQuery(dirVector...),
-			Using: qdrant.PtrOf("dirs"),
-		},
-		{
-			// Contents vector query
-			Query: qdrant.NewQuery(contentVector...),
-			Using: qdrant.PtrOf("contents"),
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Prefetch: []*qdrant.PrefetchQuery{
+						{
+							Query:          qdrant.NewQuery(nameVector...),
+							Using:          qdrant.PtrOf("names"),
+							Filter:         commonfilters,
+							Limit:          qdrant.PtrOf(uint64(100)),
+							ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+						},
+					},
+					Query:          qdrant.NewQuery(dirVector...),
+					Using:          qdrant.PtrOf("dirs"),
+					Limit:          qdrant.PtrOf(uint64(50)),
+					ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+				},
+			},
+			Query:          qdrant.NewQuery(contentVector...),
+			Using:          qdrant.PtrOf("contents"),
+			Limit:          qdrant.PtrOf(uint64(50)),
+			ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 		},
 	}
 
@@ -147,7 +184,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         filters,
+		Filter:         commonfilters,
 	}
 
 	searchResp, err := r.client.Query(ctx, hybridQuery)
