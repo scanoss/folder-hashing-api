@@ -104,10 +104,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		},
 	}
 
-	allowedCategories := []*qdrant.Condition{
-		qdrant.NewMatch("category", "github_popular"),
-		qdrant.NewMatch("category", "github"),
-	}
 	shouldConditions = append(shouldConditions, rankConditions...)
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 
@@ -119,7 +115,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 
 	mustConditions = append(mustConditions, rankConditions...)
-	mustConditions = append(mustConditions, allowedCategories...)
 
 	//filter to prioritaze prefered conponents
 	preferedFilters := &qdrant.Filter{
@@ -139,13 +134,13 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 							Using:          qdrant.PtrOf("names"),
 							Filter:         preferedFilters,
 							Limit:          qdrant.PtrOf(uint64(500)),
-							ScoreThreshold: qdrant.PtrOf(float32(20.0)),
+							ScoreThreshold: qdrant.PtrOf(float32(30.0)),
 						},
 					},
 					Query:          qdrant.NewQuery(dirVector...),
 					Using:          qdrant.PtrOf("dirs"),
 					Limit:          qdrant.PtrOf(uint64(100)),
-					ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+					ScoreThreshold: qdrant.PtrOf(float32(20.0)),
 				},
 			},
 			Query:          qdrant.NewQuery(contentVector...),
@@ -162,13 +157,13 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 							Using:          qdrant.PtrOf("names"),
 							Filter:         commonfilters,
 							Limit:          qdrant.PtrOf(uint64(100)),
-							ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+							ScoreThreshold: qdrant.PtrOf(float32(20.0)),
 						},
 					},
 					Query:          qdrant.NewQuery(dirVector...),
 					Using:          qdrant.PtrOf("dirs"),
 					Limit:          qdrant.PtrOf(uint64(50)),
-					ScoreThreshold: qdrant.PtrOf(float32(10.0)),
+					ScoreThreshold: qdrant.PtrOf(float32(20.0)),
 				},
 			},
 			Query:          qdrant.NewQuery(contentVector...),
