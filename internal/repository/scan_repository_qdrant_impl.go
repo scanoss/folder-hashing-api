@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"sort"
 	"strconv"
 
@@ -47,9 +46,10 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 }
 
 // SearchByHashes performs a search using directory, name, and content hashes
+// Uses single query with 4-branch rank-aware prefetch structure to prioritize rank 1 entries
 func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
-	s.Info("Starting language-based search with RRF fusion")
+	s.Info("Starting language-based search with content-enhanced prefetching")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
@@ -72,10 +72,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 
 	// Convert hashes to vectors
-	dirVector, err := r.hexSimhashToVector(dirHash, VectorDim)
-	if err != nil {
-		return nil, errors.New("failed to convert directory hash to vector: " + err.Error())
-	}
 	nameVector, err := r.hexSimhashToVector(nameHash, VectorDim)
 	if err != nil {
 		return nil, errors.New("failed to convert name hash to vector: " + err.Error())
@@ -84,82 +80,146 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	if err != nil {
 		return nil, errors.New("failed to convert content hash to vector: " + err.Error())
 	}
+	dirsVector, err := r.hexSimhashToVector(dirHash, VectorDim)
+	if err != nil {
+		return nil, errors.New("failed to convert dir hash to vector: " + err.Error())
+	}
 
-	mustConditions := []*qdrant.Condition{}
+	searchResp, err := r.executeRankAwareHybridQuery(ctx, collectionName, nameVector, dirsVector, contentVector)
+	if err != nil {
+		return nil, fmt.Errorf("error performing rank-aware search in %s: %v", collectionName, err)
+	}
 
-	allowedCategories := []*qdrant.Condition{
+	return r.processSearchResults(searchResp)
+}
+
+// createExactRankCondition creates a condition for exact rank matching
+func (r *ScanRepositoryQdrantImpl) createExactRankCondition(rank int) []*qdrant.Condition {
+	return []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
-					Key: "category",
+					Key: "rank",
 					Match: &qdrant.Match{
-						MatchValue: &qdrant.Match_Keywords{
-							Keywords: &qdrant.RepeatedStrings{
-								Strings: []string{"github_popular", "github"},
-							},
+						MatchValue: &qdrant.Match_Integer{
+							Integer: int64(rank),
 						},
 					},
 				},
 			},
 		},
 	}
+}
 
-	rankConditions := []*qdrant.Condition{
+// createRangeRankCondition creates a condition for rank range matching (rank <= maxRank)
+func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdrant.Condition {
+	return []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
 					Key: "rank",
 					Range: &qdrant.Range{
-						// TODO: Get this from request
-						Lte: qdrant.PtrOf(float64(5)),
+						Lte: qdrant.PtrOf(float64(maxRank)),
 					},
 				},
 			},
 		},
 	}
+}
 
-	mustConditions = append(mustConditions, allowedCategories...)
-	mustConditions = append(mustConditions, rankConditions...)
+// executeRankAwareHybridQuery executes a hybrid query with rank-aware prefetch structure
+// Uses 4 branches to give content hash more weight for tie-breaking and exact match detection
+func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32) ([]*qdrant.ScoredPoint, error) {
+	// Create rank conditions
+	rank1Conditions := r.createExactRankCondition(1)
+	rank5Conditions := r.createRangeRankCondition(5)
 
-	filters := &qdrant.Filter{
-		Must: mustConditions,
-	}
+	// Create filters
+	rank1Filter := &qdrant.Filter{Must: rank1Conditions}
+	rank5Filter := &qdrant.Filter{Must: rank5Conditions}
 
-	s.Info("Executing hybrid query")
+	// Build 4-branch prefetch structure for enhanced content weighting
+	// This gives content hash multiple pathways to influence scoring
 	prefetchQueries := []*qdrant.PrefetchQuery{
+		// Branch A: Names-first with rank 1 priority (discovery)
 		{
-			// Names vector query
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query:  qdrant.NewQuery(dirsVector...),
+					Using:  qdrant.PtrOf("dirs"),
+					Filter: rank1Filter,
+				},
+				{
+					Query:  qdrant.NewQuery(contentVector...),
+					Using:  qdrant.PtrOf("contents"),
+					Filter: rank1Filter,
+				},
+			},
 			Query:  qdrant.NewQuery(nameVector...),
 			Using:  qdrant.PtrOf("names"),
-			Filter: filters,
-			Limit:  qdrant.PtrOf(uint64(10000)),
+			Filter: rank1Filter,
 		},
+		// Branch B: Names-first with rank <= 5 (broader discovery)
 		{
-			// Dirs vector query
-			Query: qdrant.NewQuery(dirVector...),
-			Using: qdrant.PtrOf("dirs"),
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query:  qdrant.NewQuery(dirsVector...),
+					Using:  qdrant.PtrOf("dirs"),
+					Filter: rank5Filter,
+				},
+				{
+					Query:  qdrant.NewQuery(contentVector...),
+					Using:  qdrant.PtrOf("contents"),
+					Filter: rank5Filter,
+				},
+			},
+			Query:  qdrant.NewQuery(nameVector...),
+			Using:  qdrant.PtrOf("names"),
+			Filter: rank5Filter,
 		},
+		// Branch C: Content-first with rank 1 (exact match emphasis)
 		{
-			// Contents vector query
-			Query: qdrant.NewQuery(contentVector...),
-			Using: qdrant.PtrOf("contents"),
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query:  qdrant.NewQuery(nameVector...),
+					Using:  qdrant.PtrOf("names"),
+					Filter: rank1Filter,
+				},
+			},
+			Query:  qdrant.NewQuery(contentVector...),
+			Using:  qdrant.PtrOf("contents"),
+			Filter: rank1Filter,
+		},
+		// Branch D: Content-first with rank <= 5 (content-driven tie-breaking)
+		{
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query:  qdrant.NewQuery(nameVector...),
+					Using:  qdrant.PtrOf("names"),
+					Filter: rank5Filter,
+				},
+			},
+			Query:  qdrant.NewQuery(contentVector...),
+			Using:  qdrant.PtrOf("contents"),
+			Filter: rank5Filter,
 		},
 	}
 
+	// Execute hybrid query with RRF fusion
 	hybridQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
 		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
 		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
+		Filter:         rank5Filter, // Overall filter for rank <= 5
 	}
 
-	searchResp, err := r.client.Query(ctx, hybridQuery)
-	if err != nil {
-		return nil, fmt.Errorf("error performing hybrid search in %s: %v", collectionName, err)
-	}
+	return r.client.Query(ctx, hybridQuery)
+}
 
-	// First, collect all results and their scores
+// processSearchResults processes search results and returns component groups
+func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.ScoredPoint) ([]entities.ComponentGroup, error) {
 	var allResults []entities.SearchResult
 
 	for _, point := range searchResp {
@@ -167,12 +227,9 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		allResults = append(allResults, result)
 	}
 
-	s.Info("Hybrid search found %d quality results in %s after filtering", len(allResults), collectionName)
-
 	// Group by component
 	componentGroups := r.groupByComponent(allResults)
 
-	s.Info("Hybrid search completed: %d results grouped into %d components", len(allResults), len(componentGroups))
 	return componentGroups, nil
 }
 
@@ -381,13 +438,8 @@ func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchRes
 		groupSlice = append(groupSlice, *group)
 	}
 
-	// Sort groups by best match score
 	sort.Slice(groupSlice, func(i, j int) bool {
-		if math.Abs(float64(groupSlice[i].BestMatch.Score-groupSlice[j].BestMatch.Score)) < 5 && groupSlice[i].Rank < groupSlice[j].Rank {
-			return true
-		} else {
-			return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
-		}
+		return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
 	})
 
 	return groupSlice
