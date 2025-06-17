@@ -113,8 +113,8 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 
-	//filters for general query
-	commonfilters := &qdrant.Filter{
+	// Filters for general query
+	commonFilters := &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
 		Should:  shouldConditions,
@@ -122,7 +122,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 
 	mustConditions = append(mustConditions, rankConditions...)
 
-	//filter to prioritaze prefered conponents
+	// Filter to prioritize prefered components
 	preferedFilters := &qdrant.Filter{
 		Must:    mustConditions,
 		MustNot: mustNotConditions,
@@ -161,7 +161,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 						{
 							Query:          qdrant.NewQuery(nameVector...),
 							Using:          qdrant.PtrOf("names"),
-							Filter:         commonfilters,
+							Filter:         commonFilters,
 							Limit:          qdrant.PtrOf(uint64(1000)),
 							ScoreThreshold: qdrant.PtrOf(float32(10.0)),
 						},
@@ -203,7 +203,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         commonfilters,
+		Filter:         commonFilters,
 	}
 
 	searchResp, err := r.client.Query(ctx, hybridQuery)

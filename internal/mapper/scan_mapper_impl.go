@@ -84,7 +84,6 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 
 	protoResult := &scanningv2.HFHResponse_Result{
 		PathId: result.PathID,
-		// Explicitly not setting deprecated fields: Probability and Stage
 	}
 
 	// Collect all version results from all component groups
@@ -95,9 +94,9 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 		}
 	}
 
-	// Sort by score (lower score is better because is the distance from one vector to another)
+	// Sort by score (higher score is better)
 	sort.Slice(allVersionResults, func(i, j int) bool {
-		return allVersionResults[i].Score < allVersionResults[j].Score
+		return allVersionResults[i].Score > allVersionResults[j].Score
 	})
 
 	// Group by PURL and track the best score for each PURL
@@ -128,9 +127,9 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 		purlScores = append(purlScores, purlWithScore{purl, score})
 	}
 
-	// Sort PURLs by score to maintain correct order
+	// Sort PURLs by score (higher scores first)
 	sort.Slice(purlScores, func(i, j int) bool {
-		return purlScores[i].score < purlScores[j].score
+		return purlScores[i].score > purlScores[j].score
 	})
 
 	// Create components with sequential ranks
@@ -138,7 +137,12 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 	for i, ps := range purlScores {
 		versions := purlMap[ps.purl]
 
-		// Extract all version strings
+		// Sort versions within this component by score (higher scores first)
+		sort.Slice(versions, func(i, j int) bool {
+			return versions[i].Score > versions[j].Score
+		})
+
+		// Extract all version strings in score-sorted order
 		versionStrings := make([]string, len(versions))
 		for j, v := range versions {
 			versionStrings[j] = v.Version
