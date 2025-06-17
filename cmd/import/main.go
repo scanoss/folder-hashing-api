@@ -268,7 +268,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 		CollectionName: collectionName,
 		FieldName:      "rank",
-		FieldType:      qdrant.PtrOf(qdrant.FieldType_FieldTypeFloat),
+		FieldType:      qdrant.PtrOf(qdrant.FieldType_FieldTypeInteger),
 	})
 	if err != nil {
 		log.Printf("Warning: Could not create index for rank in %s: %v", collectionName, err)
@@ -427,13 +427,8 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		url := strings.TrimSpace(record[10])
 
 		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s", vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
-		rank := 5
-		if rankMap != nil {
-			prefered := rankMap[strings.TrimSpace(record[9])]
-			if prefered {
-				rank = 1
-			}
-		}
+		categoryToRank := map[string]int{"github_popular": 3, "github": 5, "common": 6, "fork": 9}
+		rank := categoryToRank[categoryStr]
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash))
 		pointId := hasher.Sum64()
