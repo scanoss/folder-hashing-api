@@ -66,25 +66,7 @@ The server supports multiple configuration sources with the following priority o
 
 See `config.example.json` for a complete configuration example.
 
-## Docker Environment
-
-### How to build
-
-```bash
-make ghcr_build
-```
-
 ### How to run
-
-```bash
-# With JSON config
-docker run -it -v "$(pwd)":"$(pwd)" -p 50061:50061 ghcr.io/scanoss/scanoss-hfh-api --json-config $(pwd)/config.json --debug
-
-# With environment variables
-docker run -it --env-file .env -p 50061:50061 ghcr.io/scanoss/scanoss-hfh-api --debug
-```
-
-## Development
 
 ```bash
 # Run with JSON config
