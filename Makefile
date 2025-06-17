@@ -17,17 +17,10 @@ help: ## This help
 
 .DEFAULT_GOAL := help
 
-clean:  ## Clean all dev data
-	@echo "Removing dev data..."
-	@rm -f pkg/cmd/version.txt version.txt
-
 clean_testcache:  ## Expire all Go test caches
 	@echo "Cleaning test caches..."
 	go clean -testcache ./...
 
-version:  ## Produce hfh version text file
-	@echo "Writing version file..."
-	echo $(VERSION) > pkg/cmd/version.txt
 test: ## Deploy milvus and run tests
 	@echo "Deploying Milvus..."
 	@CURRENT_DIR=$$(pwd) && \
@@ -69,22 +62,22 @@ ghcr_push:  ## Push the GH container image to GH Packages
 
 ghcr_all: ghcr_build ghcr_tag ghcr_push  ## Execute all GitHub Package container actions
 
-build_amd: version  ## Build an AMD 64 binary
+build_amd:  ## Build an AMD 64 binary
 	@echo "Building AMD binary $(VERSION)..."
 	@mkdir -p ./dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./dist/scanoss-hfh-api ./cmd/server
 
-build_arm: version  ## Build an ARM 64 binary
+build_arm:  ## Build an ARM 64 binary
 	@echo "Building ARM binary $(VERSION)..."
 	@mkdir -p ./dist
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/entities.AppVersion=$(VERSION)" -o ./dist/scanoss-hfh-api ./cmd/server
 
 package: package_amd  ## Build & Package an AMD 64 binary
 
-package_amd: build_amd  ## Build & Package an AMD 64 binary
-	@echo "Creating offline distribution package for AMD64..."
-	BINARY_PATH=./dist/scanoss-hfh-api bash ./package-scripts.sh linux_amd64 $(VERSION)
+package_amd:  ## Build & Package an AMD 64 binary
+	@echo "Creating distribution package for AMD64..."
+	bash ./scripts/create-package.sh linux_amd64 $(VERSION)
 
-package_arm: build_arm  ## Build & Package an ARM 64 binary
-	@echo "Creating offline distribution package for ARM64..."
-	BINARY_PATH=./dist/scanoss-hfh-api bash ./package-scripts.sh linux_arm64 $(VERSION)
+package_arm:  ## Build & Package an ARM 64 binary	
+	@echo "Creating distribution package for ARM64..."
+	bash ./scripts/create-package.sh linux_arm64 $(VERSION)

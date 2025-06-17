@@ -24,7 +24,7 @@ echo "📸 Creating SCANOSS Knowledge Base Snapshot"
 echo "==========================================="
 
 # Check if Qdrant is running
-if ! curl -f http://localhost:6333/health >/dev/null 2>&1; then
+if ! curl -f http://localhost:6333 >/dev/null 2>&1; then
     echo "❌ Qdrant is not running or not accessible"
     echo "Please ensure Qdrant is running on localhost:6333"
     exit 1
@@ -145,5 +145,5 @@ echo "📏 Size: $SNAPSHOT_SIZE"
 echo "📅 Date: $DATE"
 echo ""
 echo "This snapshot can now be used for offline distribution packages."
-echo "Use with: ./package-scripts.sh linux_amd64 1.0.0 $DATE"
+echo "Use with: ./create-package.sh linux_amd64 1.0.0 $DATE"
 echo ""

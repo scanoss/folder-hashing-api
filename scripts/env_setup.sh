@@ -13,14 +13,38 @@
 ################################################################
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "$0 [-help] [environment]"
+    echo "$0 [-help] [environment] [snapshot_path]"
     echo "   Setup and copy the relevant files into place on a server to run the SCANOSS Folder Hashing API"
-    echo "   [environment] allows the optional specification of a suffix to allow multiple services to be deployed at the same time (optional)"
+    echo ""
+    echo "Arguments:"
+    echo "   [environment]   optional environment suffix (default: prod)"
+    echo "   [snapshot_path] path to SCANOSS knowledge base snapshot file (required)"
+    echo ""
+    echo "Examples:"
+    echo "   $0 prod /path/to/scanoss-kb-2025-01-15.snapshot"
+    echo "   $0 dev /home/user/snapshots/latest.snapshot"
     exit 1
 fi
 
-DEFAULT_ENV=""
+DEFAULT_ENV="prod"
 ENVIRONMENT="${1:-$DEFAULT_ENV}"
+SNAPSHOT_PATH="$2"
+
+# Validate snapshot path
+if [ -z "$SNAPSHOT_PATH" ]; then
+    echo "ERROR: Snapshot path is required"
+    echo "Usage: $0 [environment] [snapshot_path]"
+    echo "Example: $0 prod /path/to/scanoss-kb-2025-01-15.snapshot"
+    exit 1
+fi
+
+if [ ! -f "$SNAPSHOT_PATH" ]; then
+    echo "ERROR: Snapshot file not found: $SNAPSHOT_PATH"
+    echo "Please ensure the snapshot file exists and is accessible"
+    exit 1
+fi
+
+echo "Using snapshot: $SNAPSHOT_PATH"
 
 export C_PATH=/usr/local/etc/scanoss/hfh
 export LOG_DIR=/var/log/scanoss
@@ -101,7 +125,7 @@ fi
 
 # Setup Qdrant with snapshot first
 echo "Setting up Qdrant with knowledge base..."
-if ! ./scripts/setup-qdrant.sh "$ENVIRONMENT"; then
+if ! ./scripts/setup-qdrant.sh "$ENVIRONMENT" "$SNAPSHOT_PATH"; then
     echo "❌ Qdrant setup failed"
     exit 1
 fi
@@ -141,20 +165,23 @@ if ! cp scripts/scanoss-hfh-api.sh /usr/local/bin; then
 fi
 chmod +x /usr/local/bin/scanoss-hfh-api.sh
 
-# Copy in the configuration file if requested
+# Copy configuration template for customer to customize
 CONF=app-config-prod.json
-if [ -n "$ENVIRONMENT" ]; then
+if [ -n "$ENVIRONMENT" ] && [ "$ENVIRONMENT" != "prod" ]; then
     CONF="app-config-${ENVIRONMENT}.json"
 fi
 
-if [ -f "config/$CONF" ]; then
-    echo "Copying app config to $C_PATH ..."
-    if ! cp "config/$CONF" $C_PATH; then
-        echo "copy config/$CONF failed"
+echo "Copying configuration template to $C_PATH ..."
+if [ -f "config.example.json" ]; then
+    if ! cp "config.example.json" "$C_PATH/"; then
+        echo "copy config.example.json failed"
         exit 1
     fi
+    echo "✅ Configuration template copied to $C_PATH/config.example.json"
+    echo "📝 Please customize and rename to $CONF before starting the service"
 else
-    echo "Please put the config file into: $C_PATH/$CONF"
+    echo "⚠️  config.example.json not found in package"
+    echo "📝 Please create your config file at: $C_PATH/$CONF"
 fi
 
 # Copy the binary if requested
@@ -203,7 +230,7 @@ echo "📝 Review service logs in: $L_PATH"
 echo "🔧 Start the service using: systemctl start $SC_SERVICE_NAME"
 echo "🛑 Stop the service using: systemctl stop $SC_SERVICE_NAME"
 echo "📊 Get service status using: systemctl status $SC_SERVICE_NAME"
-echo "🌐 API endpoint: http://localhost:40061"
+echo "🌐 REST API endpoint: http://localhost:40061"
+echo "🌐 gRPC endpoint: http://localhost:50061"
 echo "🔍 Qdrant dashboard: http://localhost:6333/dashboard"
-echo "💚 Health check: curl http://localhost:40061/health"
 echo

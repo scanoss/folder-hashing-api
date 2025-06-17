@@ -1,0 +1,345 @@
+#!/bin/bash
+###
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (C) 2018-2023 SCANOSS.COM
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+###
+#
+# Create a complete SCANOSS Folder Hashing API offline distribution package
+#
+if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
+  echo "$0 [-help] <platform> [version]"
+  echo "   Create a SCANOSS Folder Hashing API distribution package (binary + scripts only)"
+  echo ""
+  echo "Arguments:"
+  echo "   <platform>          platform the package is destined for (linux_amd64, linux_arm64)"
+  echo "   [version]           version number of the package (optional, auto-detected from git tags)"
+  echo ""
+  echo "Version Detection:"
+  echo "   - If version not provided, uses latest git tag"
+  echo "   - If no git tags found, defaults to '1.0.0-dev'"
+  echo "   - If git not available, defaults to '1.0.0-dev'"
+  echo ""
+  echo "Package Contents:"
+  echo "   scripts/            deployment and service scripts"
+  echo "   dist/               compiled binary (built automatically)"
+  echo "   config.example.json configuration template for customers"
+  echo ""
+  echo "Customer Workflow:"
+  echo "   1. Extract package: tar -xzf package.tar.gz"
+  echo "   2. Setup with snapshot: sudo ./scripts/env_setup.sh [env] [snapshot_path]"
+  echo "   3. Configure service using config.example.json as template"
+  echo "   4. Start service: sudo systemctl start scanoss-hfh-api"
+  echo ""
+  echo "Examples:"
+  echo "   $0 linux_amd64              # Uses git tag version"
+  echo "   $0 linux_amd64 1.0.0        # Uses specified version"
+  echo "   $0 linux_arm64              # Uses git tag version"
+  exit 1
+fi
+
+if [ -z "$1" ]; then
+  echo "ERROR: Please provide a package platform: linux_amd64 or linux_arm64"
+  exit 1
+fi
+
+# Get version from git tag or use provided version
+if [ -z "$2" ]; then
+  # Try to get version from git tag
+  if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+    version=$(git tag --sort=-version:refname | head -n 1)
+    if [ -z "$version" ]; then
+      version="1.0.0-dev"
+      echo "⚠️  No git tags found, using default version: $version"
+    else
+      echo "📋 Using git tag version: $version"
+    fi
+  else
+    version="1.0.0-dev"
+    echo "⚠️  Git not available, using default version: $version"
+  fi
+else
+  version="$2"
+  echo "📋 Using provided version: $version"
+fi
+
+# Check scripts directory exists (always required)
+if [ ! -d "scripts" ]; then
+  echo "ERROR: Required directory 'scripts' does not exist."
+  echo "This directory contains deployment scripts and must be present."
+  exit 1
+fi
+
+export COPYFILE_DISABLE=true # Required if packaging on OSX
+platform=$1
+# version is already set above from git tag or provided parameter
+
+# Build binary if it doesn't exist
+BINARY_PATH="./dist/scanoss-hfh-api"
+if [ ! -f "$BINARY_PATH" ]; then
+  echo "🔨 Building binary for $platform..."
+  mkdir -p ./dist
+  if [ "$platform" = "linux_amd64" ]; then
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$version" -o "$BINARY_PATH" ./cmd/server
+  elif [ "$platform" = "linux_arm64" ]; then
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$version" -o "$BINARY_PATH" ./cmd/server
+  else
+    echo "ERROR: Unsupported platform: $platform"
+    exit 1
+  fi
+  
+  if [ ! -f "$BINARY_PATH" ]; then
+    echo "ERROR: Failed to build binary"
+    exit 1
+  fi
+  echo "✅ Binary built successfully: $BINARY_PATH"
+fi
+
+# Verify config.example.json exists
+if [ ! -f "config.example.json" ]; then
+  echo "ERROR: config.example.json not found in current directory"
+  echo "This file is required as a template for customers"
+  exit 1
+fi
+
+build=1
+prefix_name="scanoss-hfh-api"
+package_name="${prefix_name}-${platform}-${version}"
+tar_name="${package_name}-${build}.tar.gz"
+
+# Get a unique archive name
+while [ -f "$tar_name" ]; do
+  ((build++))
+  tar_name="${package_name}-${build}.tar.gz"
+done
+
+echo "🚀 Creating SCANOSS Folder Hashing API distribution package..."
+echo "Platform: $platform"
+echo "Version: $version"
+echo "Binary: $BINARY_PATH"
+echo "Package: $tar_name"
+echo ""
+
+# Create temporary package directory
+temp_dir=$(mktemp -d)
+package_dir="$temp_dir/$package_name"
+mkdir -p "$package_dir"
+
+# Copy all required components
+echo "📁 Copying package components..."
+
+echo "  - Scripts and service files..."
+cp -r scripts/ "$package_dir/"
+
+echo "  - Configuration template..."
+cp config.example.json "$package_dir/"
+
+echo "  - Binary file..."
+mkdir -p "$package_dir/dist"
+cp "$BINARY_PATH" "$package_dir/dist/scanoss-hfh-api"
+
+# Create package documentation
+echo "  - Creating package documentation..."
+cat >"$package_dir/README.md" <<EOF
+# SCANOSS Folder Hashing API - Distribution Package
+
+This package contains the SCANOSS Folder Hashing API binary and deployment scripts.
+
+## Package Contents
+
+- **scripts/**: Installation and management scripts
+- **dist/**: Compiled API binary
+- **config.example.json**: Configuration template
+
+## System Requirements
+
+- Linux x86_64 or ARM64
+- Docker and Docker Compose
+- Minimum 32GB RAM
+- 100GB+ available disk space
+- Root access for installation
+- SCANOSS knowledge base snapshot file
+
+## Installation Workflow
+
+1. Extract this package:
+   \`\`\`bash
+   tar -xzf $tar_name
+   cd $package_name
+   \`\`\`
+
+2. Create scanoss user:
+   \`\`\`bash
+   useradd --system scanoss
+   \`\`\`
+
+3. Run installation with your snapshot:
+   \`\`\`bash
+   sudo ./scripts/env_setup.sh prod /path/to/your-snapshot.snapshot
+   \`\`\`
+
+4. Configure the service:
+   \`\`\`bash
+   # Option A: Edit the example config and rename it
+   sudo cp config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
+   sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+   
+   # Option B: Use your own config file
+   sudo cp your-config.json /usr/local/etc/scanoss/hfh/app-config-prod.json
+   
+   # Option C: Use .env file (modify startup script)
+   sudo cp your-app.env /usr/local/etc/scanoss/hfh/.env
+   \`\`\`
+
+5. Start the service:
+   \`\`\`bash
+   sudo systemctl start scanoss-hfh-api
+   \`\`\`
+
+6. Verify installation:
+   \`\`\`bash
+   curl http://localhost:40061/health
+   \`\`\`
+
+## Configuration Options
+
+The API supports multiple configuration methods (in priority order):
+
+1. **Environment variables** (highest priority)
+2. **JSON config file** via \`--json-config\` flag
+3. **.env file** via \`--env-config\` flag
+4. **Default values** (lowest priority)
+
+See \`config.example.json\` for all available configuration options.
+
+## Package Information
+
+- **Platform**: $platform
+- **Version**: $version
+- **Package Date**: $(date '+%Y-%m-%d %H:%M:%S')
+- **Type**: Binary + Scripts (snapshot not included)
+
+## Support
+
+For API documentation and troubleshooting, visit: https://docs.scanoss.com
+EOF
+
+# Create installation verification script
+cat >"$package_dir/verify-installation.sh" <<'EOF'
+#!/bin/bash
+echo "🔍 SCANOSS Installation Verification"
+echo "===================================="
+
+# Check if services are running
+echo "Checking Qdrant..."
+if curl -f http://localhost:6333/health >/dev/null 2>&1; then
+    echo "✅ Qdrant is running"
+else
+    echo "❌ Qdrant is not responding"
+    exit 1
+fi
+
+echo "Checking HFH API..."
+if curl -f http://localhost:40061/health >/dev/null 2>&1; then
+    echo "✅ HFH API is running"
+else
+    echo "❌ HFH API is not responding"
+    exit 1
+fi
+
+# Check collections
+echo "Checking knowledge base..."
+collections=$(curl -s http://localhost:6333/collections | grep -o '"name":"[^"]*"' | wc -l)
+if [ "$collections" -gt 0 ]; then
+    echo "✅ Knowledge base loaded ($collections collections)"
+else
+    echo "❌ No collections found in knowledge base"
+    exit 1
+fi
+
+echo ""
+echo "🎉 Installation verification successful!"
+echo "🌐 API endpoint: http://localhost:40061"
+echo "🌐 GRPC endpoint: http://localhost:50061"
+echo "🔍 Qdrant dashboard: http://localhost:6333/dashboard"
+EOF
+
+chmod +x "$package_dir/verify-installation.sh"
+
+# Create package metadata
+cat >"$package_dir/package-info.json" <<EOF
+{
+  "name": "scanoss-hfh-api",
+  "version": "$version",
+  "platform": "$platform",
+  "build": $build,
+  "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "package_type": "binary_and_scripts",
+  "components": {
+    "api": "SCANOSS Folder Hashing API Binary",
+    "scripts": "Deployment and Service Scripts",
+    "config_template": "Configuration Example"
+  },
+  "requirements": {
+    "ram": "32GB minimum",
+    "disk": "90GB minimum", 
+    "docker": "required",
+    "docker_compose": "required",
+    "snapshot_file": "Customer must provide SCANOSS knowledge base snapshot"
+  },
+  "customer_workflow": [
+    "Extract package",
+    "Run env_setup.sh with snapshot path",
+    "Configure service using config.example.json",
+    "Start systemd service"
+  ]
+}
+EOF
+
+# Create the final package
+echo "📦 Creating compressed package..."
+cd "$temp_dir"
+if ! tar --format=ustar -czf "$(pwd)/../$tar_name" "$package_name"; then
+  echo "ERROR: Failed to create package archive"
+  rm -rf "$temp_dir"
+  exit 1
+fi
+
+# Move package to current directory and cleanup
+mv "../$tar_name" "$OLDPWD/"
+cd "$OLDPWD"  # Change back to original directory
+rm -rf "$temp_dir"
+
+# Calculate package size (now in correct directory)
+if [ -f "$tar_name" ]; then
+  package_size=$(du -h "$tar_name" | cut -f1)
+else
+  echo "ERROR: Package file $tar_name not found after creation"
+  exit 1
+fi
+
+echo ""
+echo "✅ Package creation successful!"
+echo ""
+echo "📦 Package: $tar_name"
+echo "📏 Size: $package_size"
+echo "🏗️  Build: $build"
+echo ""
+echo "🚀 Ready for distribution to offline customers!"
+echo ""
+echo "Customer installation command:"
+echo "  tar -xzf $tar_name && cd $package_name && sudo ./scripts/env_setup.sh prod /path/to/snapshot.snapshot"
+echo ""
+
+exit 0

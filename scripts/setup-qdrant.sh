@@ -10,13 +10,37 @@
 set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "$0 [-help] [environment]"
+    echo "$0 [-help] [environment] [snapshot_path]"
     echo "   Set up Qdrant with SCANOSS knowledge base snapshot"
-    echo "   [environment] optional environment suffix (optional)"
+    echo ""
+    echo "Arguments:"
+    echo "   [environment]   optional environment suffix (default: prod)"
+    echo "   [snapshot_path] path to SCANOSS knowledge base snapshot file (required)"
+    echo ""
+    echo "Examples:"
+    echo "   $0 prod /path/to/scanoss-kb-2025-01-15.snapshot"
+    echo "   $0 dev /home/user/snapshots/latest.snapshot"
     exit 1
 fi
 
 ENVIRONMENT="${1:-prod}"
+SNAPSHOT_PATH="$2"
+
+# Validate snapshot path
+if [ -z "$SNAPSHOT_PATH" ]; then
+    echo "ERROR: Snapshot path is required"
+    echo "Usage: $0 [environment] [snapshot_path]"
+    echo "Example: $0 prod /path/to/scanoss-kb-2025-01-15.snapshot"
+    exit 1
+fi
+
+if [ ! -f "$SNAPSHOT_PATH" ]; then
+    echo "ERROR: Snapshot file not found: $SNAPSHOT_PATH"
+    echo "Please ensure the snapshot file exists and is accessible"
+    exit 1
+fi
+
+echo "Using snapshot: $SNAPSHOT_PATH"
 QDRANT_PATH="/usr/local/etc/scanoss/qdrant"
 SNAPSHOT_DIR="$QDRANT_PATH/snapshots"
 QDRANT_DATA="$QDRANT_PATH/data"
@@ -28,17 +52,17 @@ echo "📁 Creating Qdrant directories..."
 mkdir -p "$SNAPSHOT_DIR"
 mkdir -p "$QDRANT_DATA"
 
-# Find snapshot file in the package
-SNAPSHOT_FILE=$(find snapshots/ -name "*.snapshot" 2>/dev/null | head -1)
-if [ -z "$SNAPSHOT_FILE" ]; then
-    echo "❌ No snapshot file found in snapshots/ directory!"
-    echo "Please ensure a .snapshot file is present in the snapshots/ directory"
+# Copy provided snapshot to Qdrant directory
+echo "📦 Copying snapshot to Qdrant directory..."
+SNAPSHOT_NAME=$(basename "$SNAPSHOT_PATH")
+cp "$SNAPSHOT_PATH" "$SNAPSHOT_DIR/"
+
+if [ ! -f "$SNAPSHOT_DIR/$SNAPSHOT_NAME" ]; then
+    echo "❌ Failed to copy snapshot to $SNAPSHOT_DIR/"
     exit 1
 fi
 
-echo "📦 Using snapshot: $SNAPSHOT_FILE"
-cp "$SNAPSHOT_FILE" "$SNAPSHOT_DIR/"
-SNAPSHOT_NAME=$(basename "$SNAPSHOT_FILE")
+echo "✅ Snapshot copied: $SNAPSHOT_NAME"
 
 # Create Qdrant docker-compose configuration
 echo "📝 Creating Qdrant Docker configuration..."
