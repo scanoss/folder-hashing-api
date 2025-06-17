@@ -142,8 +142,9 @@ echo "📁 Copying package components..."
 echo "  - Scripts and service files..."
 cp -r scripts/ "$package_dir/"
 
-echo "  - Configuration template..."
+echo "  - Configuration templates..."
 cp config.example.json "$package_dir/"
+cp .env.example "$package_dir/"
 
 echo "  - Binary file..."
 mkdir -p "$package_dir/dist"
@@ -160,7 +161,8 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
 
 - **scripts/**: Installation and management scripts
 - **dist/**: Compiled API binary
-- **config.example.json**: Configuration template
+- **config.example.json**: JSON configuration template
+- **.env.example**: Environment variable configuration template
 
 ## System Requirements
 
@@ -189,17 +191,58 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
    sudo ./scripts/env_setup.sh prod /path/to/your-snapshot.snapshot
    \`\`\`
 
-4. Configure the service:
+4. Configure the service (choose one method):
+
+   **Method A: JSON Configuration (Default)**
    \`\`\`bash
-   # Option A: Edit the example config and rename it
+   # Use the provided template
    sudo cp config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
    sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
-   
-   # Option B: Use your own config file
+   \`\`\`
+
+   **Method B: Custom JSON Configuration**
+   \`\`\`bash
+   # Use your own JSON config file
    sudo cp your-config.json /usr/local/etc/scanoss/hfh/app-config-prod.json
    
-   # Option C: Use .env file (modify startup script)
-   sudo cp your-app.env /usr/local/etc/scanoss/hfh/.env
+   # Or specify a custom path via systemd override
+   sudo systemctl edit scanoss-hfh-api
+   # Add these lines:
+   # [Service]
+   # Environment=HFH_CONFIG_METHOD=json
+   # Environment=HFH_CONFIG_PATH=/path/to/your/config.json
+   \`\`\`
+
+   **Method C: Environment File Configuration**
+   \`\`\`bash
+   # Create .env file from template
+   sudo cp .env.example /usr/local/etc/scanoss/hfh/.env-prod
+   sudo nano /usr/local/etc/scanoss/hfh/.env-prod
+   
+   # Configure systemd to use .env file
+   sudo systemctl edit scanoss-hfh-api
+   # Add these lines:
+   # [Service]
+   # Environment=HFH_CONFIG_METHOD=env
+   \`\`\`
+
+   **Method D: Custom Environment File**
+   \`\`\`bash
+   # Use your own .env file
+   sudo systemctl edit scanoss-hfh-api
+   # Add these lines:
+   # [Service]
+   # Environment=HFH_CONFIG_METHOD=env
+   # Environment=HFH_CONFIG_PATH=/path/to/your/.env
+   \`\`\`
+
+   **Method E: Auto-Detection**
+   \`\`\`bash
+   # Let the system auto-detect available config files
+   sudo systemctl edit scanoss-hfh-api
+   # Add these lines:
+   # [Service]
+   # Environment=HFH_CONFIG_METHOD=auto
    \`\`\`
 
 5. Start the service:
@@ -212,16 +255,49 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
    curl http://localhost:40061/health
    \`\`\`
 
-## Configuration Options
+## Configuration Methods
 
-The API supports multiple configuration methods (in priority order):
+The API supports multiple configuration methods with the following priority order:
 
 1. **Environment variables** (highest priority)
 2. **JSON config file** via \`--json-config\` flag
 3. **.env file** via \`--env-config\` flag
 4. **Default values** (lowest priority)
 
-See \`config.example.json\` for all available configuration options.
+### Configuration Templates
+
+- **config.example.json**: Complete JSON configuration template
+- **.env.example**: Environment variable configuration template
+
+### Advanced Configuration Examples
+
+**Direct Binary Usage:**
+\`\`\`bash
+# Using JSON config
+/usr/local/bin/scanoss-hfh-api --json-config /path/to/config.json
+
+# Using .env file
+/usr/local/bin/scanoss-hfh-api --env-config /path/to/.env
+
+# Using environment variables only
+APP_PORT=50061 REST_PORT=40061 /usr/local/bin/scanoss-hfh-api
+\`\`\`
+
+**Startup Script Usage:**
+\`\`\`bash
+# Default (JSON config for prod environment)
+./scripts/scanoss-hfh-api.sh
+
+# Custom environment
+./scripts/scanoss-hfh-api.sh staging
+
+# Custom config method
+./scripts/scanoss-hfh-api.sh prod env
+
+# Custom config file
+./scripts/scanoss-hfh-api.sh prod json /custom/path/config.json
+./scripts/scanoss-hfh-api.sh prod env /custom/path/.env
+\`\`\`
 
 ## Package Information
 

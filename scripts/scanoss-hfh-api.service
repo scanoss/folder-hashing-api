@@ -9,7 +9,10 @@ Type=simple
 Restart=always
 RestartSec=5
 User=scanoss
-ExecStart=/usr/local/bin/scanoss-hfh-api.sh
+Environment=HFH_ENVIRONMENT=prod
+Environment=HFH_CONFIG_METHOD=json
+Environment=HFH_CONFIG_PATH=
+ExecStart=/usr/local/bin/scanoss-hfh-api.sh ${HFH_ENVIRONMENT} ${HFH_CONFIG_METHOD} ${HFH_CONFIG_PATH}
 ExecStartPre=/bin/bash -c 'until docker ps | grep scanoss-qdrant; do sleep 2; done'
 
 [Install]
