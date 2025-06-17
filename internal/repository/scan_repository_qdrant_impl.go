@@ -104,7 +104,13 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		},
 	}
 
+	allowedCategories := []*qdrant.Condition{
+		qdrant.NewMatch("category", "github_popular"),
+		qdrant.NewMatch("category", "github"),
+	}
 	shouldConditions = append(shouldConditions, rankConditions...)
+	shouldConditions = append(shouldConditions, allowedCategories...)
+
 	mustNotConditions = append(mustNotConditions, qdrant.NewMatch("category", "forks"))
 
 	//filters for general query
@@ -133,14 +139,14 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 							Query:          qdrant.NewQuery(nameVector...),
 							Using:          qdrant.PtrOf("names"),
 							Filter:         preferedFilters,
-							Limit:          qdrant.PtrOf(uint64(500)),
-							ScoreThreshold: qdrant.PtrOf(float32(30.0)),
+							Limit:          qdrant.PtrOf(uint64(2000)),
+							ScoreThreshold: qdrant.PtrOf(float32(15.0)),
 						},
 					},
 					Query:          qdrant.NewQuery(dirVector...),
 					Using:          qdrant.PtrOf("dirs"),
-					Limit:          qdrant.PtrOf(uint64(100)),
-					ScoreThreshold: qdrant.PtrOf(float32(20.0)),
+					Limit:          qdrant.PtrOf(uint64(200)),
+					ScoreThreshold: qdrant.PtrOf(float32(25.0)),
 				},
 			},
 			Query:          qdrant.NewQuery(contentVector...),
@@ -156,14 +162,14 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 							Query:          qdrant.NewQuery(nameVector...),
 							Using:          qdrant.PtrOf("names"),
 							Filter:         commonfilters,
-							Limit:          qdrant.PtrOf(uint64(100)),
-							ScoreThreshold: qdrant.PtrOf(float32(20.0)),
+							Limit:          qdrant.PtrOf(uint64(1000)),
+							ScoreThreshold: qdrant.PtrOf(float32(10.0)),
 						},
 					},
 					Query:          qdrant.NewQuery(dirVector...),
 					Using:          qdrant.PtrOf("dirs"),
-					Limit:          qdrant.PtrOf(uint64(50)),
-					ScoreThreshold: qdrant.PtrOf(float32(20.0)),
+					Limit:          qdrant.PtrOf(uint64(100)),
+					ScoreThreshold: qdrant.PtrOf(float32(30.0)),
 				},
 			},
 			Query:          qdrant.NewQuery(contentVector...),
@@ -172,6 +178,24 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 			ScoreThreshold: qdrant.PtrOf(float32(50.0)),
 		},
 	}
+	//keep this to debug and compare results
+	/*prefetchQueries := []*qdrant.PrefetchQuery{
+		{
+			// Names vector query
+			Query: qdrant.NewQuery(nameVector...),
+			Using: qdrant.PtrOf("names"),
+		},
+		{
+			// Dirs vector query
+			Query: qdrant.NewQuery(dirVector...),
+			Using: qdrant.PtrOf("dirs"),
+		},
+		{
+			// Contents vector query
+			Query: qdrant.NewQuery(contentVector...),
+			Using: qdrant.PtrOf("contents"),
+		},
+	}*/
 
 	hybridQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
