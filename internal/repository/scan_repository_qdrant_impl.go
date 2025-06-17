@@ -86,7 +86,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	}
 
 	mustConditions := []*qdrant.Condition{}
-	mustNotConditions := []*qdrant.Condition{}
 
 	allowedCategories := []*qdrant.Condition{
 		{
@@ -105,39 +104,35 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		},
 	}
 
-	// Conditions to exclude forks and common
-	excludedCategories := []*qdrant.Condition{
+	rankConditions := []*qdrant.Condition{
 		{
 			ConditionOneOf: &qdrant.Condition_Field{
 				Field: &qdrant.FieldCondition{
-					Key: "category",
-					Match: &qdrant.Match{
-						MatchValue: &qdrant.Match_Keywords{
-							Keywords: &qdrant.RepeatedStrings{
-								Strings: []string{"forks", "common"},
-							},
-						},
+					Key: "rank",
+					Range: &qdrant.Range{
+						// TODO: Get this from request
+						Lte: qdrant.PtrOf(float64(5)),
 					},
 				},
 			},
 		},
 	}
 
-	mustNotConditions = append(mustNotConditions, excludedCategories...)
-
 	mustConditions = append(mustConditions, allowedCategories...)
+	mustConditions = append(mustConditions, rankConditions...)
 
 	filters := &qdrant.Filter{
-		Must:    mustConditions,
-		MustNot: mustNotConditions,
+		Must: mustConditions,
 	}
 
 	s.Info("Executing hybrid query")
 	prefetchQueries := []*qdrant.PrefetchQuery{
 		{
 			// Names vector query
-			Query: qdrant.NewQuery(nameVector...),
-			Using: qdrant.PtrOf("names"),
+			Query:  qdrant.NewQuery(nameVector...),
+			Using:  qdrant.PtrOf("names"),
+			Filter: filters,
+			Limit:  qdrant.PtrOf(uint64(10000)),
 		},
 		{
 			// Dirs vector query
@@ -157,7 +152,6 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         filters,
 	}
 
 	searchResp, err := r.client.Query(ctx, hybridQuery)
