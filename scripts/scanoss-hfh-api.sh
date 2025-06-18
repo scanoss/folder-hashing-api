@@ -24,44 +24,44 @@ LOGFILE=/var/log/scanoss/hfh/scanoss-hfh-${ENVIRONMENT}.log
 
 # Determine configuration approach
 case "$CONFIG_METHOD" in
-    "json")
-        if [ -n "$CUSTOM_CONFIG_PATH" ]; then
-            CONF_FILE="$CUSTOM_CONFIG_PATH"
-        else
-            CONF_FILE="/usr/local/etc/scanoss/hfh/app-config-${ENVIRONMENT}.json"
-        fi
+"json")
+    if [ -n "$CUSTOM_CONFIG_PATH" ]; then
+        CONF_FILE="$CUSTOM_CONFIG_PATH"
+    else
+        CONF_FILE="/usr/local/etc/scanoss/hfh/app-config-${ENVIRONMENT}.json"
+    fi
+    CONFIG_FLAG="--json-config"
+    ;;
+"env")
+    if [ -n "$CUSTOM_CONFIG_PATH" ]; then
+        CONF_FILE="$CUSTOM_CONFIG_PATH"
+    else
+        CONF_FILE="/usr/local/etc/scanoss/hfh/.env-${ENVIRONMENT}"
+    fi
+    CONFIG_FLAG="--env-config"
+    ;;
+"auto")
+    # Auto-detect: prefer JSON, fallback to .env
+    JSON_FILE="/usr/local/etc/scanoss/hfh/app-config-${ENVIRONMENT}.json"
+    ENV_FILE="/usr/local/etc/scanoss/hfh/.env-${ENVIRONMENT}"
+
+    if [ -f "$JSON_FILE" ]; then
+        CONF_FILE="$JSON_FILE"
         CONFIG_FLAG="--json-config"
-        ;;
-    "env")
-        if [ -n "$CUSTOM_CONFIG_PATH" ]; then
-            CONF_FILE="$CUSTOM_CONFIG_PATH"
-        else
-            CONF_FILE="/usr/local/etc/scanoss/hfh/.env-${ENVIRONMENT}"
-        fi
+    elif [ -f "$ENV_FILE" ]; then
+        CONF_FILE="$ENV_FILE"
         CONFIG_FLAG="--env-config"
-        ;;
-    "auto")
-        # Auto-detect: prefer JSON, fallback to .env
-        JSON_FILE="/usr/local/etc/scanoss/hfh/app-config-${ENVIRONMENT}.json"
-        ENV_FILE="/usr/local/etc/scanoss/hfh/.env-${ENVIRONMENT}"
-        
-        if [ -f "$JSON_FILE" ]; then
-            CONF_FILE="$JSON_FILE"
-            CONFIG_FLAG="--json-config"
-        elif [ -f "$ENV_FILE" ]; then
-            CONF_FILE="$ENV_FILE"
-            CONFIG_FLAG="--env-config"
-        else
-            echo "❌ No configuration file found for environment: $ENVIRONMENT"
-            echo "Expected: $JSON_FILE or $ENV_FILE"
-            exit 1
-        fi
-        ;;
-    *)
-        echo "❌ Invalid config method: $CONFIG_METHOD"
-        echo "Valid options: json, env, auto"
+    else
+        echo "❌ No configuration file found for environment: $ENVIRONMENT"
+        echo "Expected: $JSON_FILE or $ENV_FILE"
         exit 1
-        ;;
+    fi
+    ;;
+*)
+    echo "❌ Invalid config method: $CONFIG_METHOD"
+    echo "Valid options: json, env, auto"
+    exit 1
+    ;;
 esac
 
 # Validate configuration file exists (unless using env-only mode)
@@ -81,6 +81,15 @@ if [ -f "$LOGFILE" ]; then
 fi
 echo >"$LOGFILE"
 
+# Check if scanoss user can access Docker
+echo "Checking Docker access for scanoss user..."
+if sudo -u scanoss docker ps >/dev/null 2>&1; then
+    echo "✅ Docker access confirmed for scanoss user"
+else
+    echo "⚠️  Warning: scanoss user may not have Docker access"
+    echo "This could cause issues with data import operations"
+fi
+
 # Wait for Qdrant to be ready
 echo "Checking Qdrant availability..."
 timeout=300 # 5 minutes timeout
@@ -92,6 +101,12 @@ while [ $counter -lt $timeout ]; do
     fi
     if [ $((counter % 30)) -eq 0 ]; then
         echo "Waiting for Qdrant... ($counter/$timeout seconds)"
+        # Try to check container status
+        if sudo -u scanoss docker ps --filter name=scanoss-qdrant --format "table {{.Status}}" 2>/dev/null | grep -q "Up"; then
+            echo "  Container is running, waiting for API..."
+        else
+            echo "  ⚠️  Container may not be running"
+        fi
     fi
     sleep 2
     counter=$((counter + 2))
@@ -99,7 +114,7 @@ done
 
 if [ $counter -ge $timeout ]; then
     echo "❌ Timeout waiting for Qdrant to be ready"
-    echo "Please check Qdrant status: docker ps | grep qdrant-server"
+    echo "Please check Qdrant status: docker ps | grep scanoss-qdrant"
     exit 1
 fi
 

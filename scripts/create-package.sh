@@ -99,7 +99,7 @@ if [ ! -f "$BINARY_PATH" ]; then
     echo "ERROR: Unsupported platform: $platform"
     exit 1
   fi
-  
+
   if [ ! -f "$BINARY_PATH" ]; then
     echo "ERROR: Failed to build binary"
     exit 1
@@ -178,22 +178,29 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
 - Root access for installation
 - SCANOSS knowledge base snapshot file
 
-## Installation Workflow
 
-1. Extract this package:
-   \`\`\`bash
-   tar -xzf $tar_name
-   cd $package_name
-   \`\`\`
+Installation Workflow
 
-2. Create scanoss user:
-   \`\`\`bash
-   useradd --system scanoss
-   \`\`\`
-
-3. Setup infrastructure (no data import):
-   \`\`\`bash
-   sudo ./scripts/env_setup.sh prod
+Extract this package:
+$()$(
+  bash
+  tar -xzf $tar_name
+  cd $package_name
+)$()
+Create scanoss user:
+$()$(
+  bash
+  sudo useradd --system scanoss
+)$()
+Setup infrastructure (no data import):
+$()$(
+  bash
+  sudo ./scripts/env_setup.sh prod
+  This will add scanoss to docker group for permission consistency
+  IMPORTANT: Log out and back in for group changes to take effect
+  Or run: newgrp docker
+)$()
+Configure the service (choose one method):
    \`\`\`
 
 4. Configure the service (choose one method):
@@ -405,7 +412,7 @@ fi
 
 # Move package to current directory and cleanup
 mv "../$tar_name" "$OLDPWD/"
-cd "$OLDPWD"  # Change back to original directory
+cd "$OLDPWD" # Change back to original directory
 rm -rf "$temp_dir"
 
 # Calculate package size (now in correct directory)

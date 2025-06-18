@@ -3,32 +3,33 @@
 ##########################################
 #
 # This script restores individual collection snapshots to Qdrant using REST API
-# Used for setting up Qdrant from collection-based snapshots
+# Runs as regular user (no sudo required) thanks to Docker group membership
 #
 ################################################################
 
 set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "sudo $0 [-help] [snapshots-dir]"
+    echo "$0 [-help] [snapshots-dir]"
     echo "   Restore collections from individual snapshots using REST API"
     echo "   [snapshots-dir] directory containing collection snapshots (required)"
     echo ""
-    echo "Note: This script requires sudo to access Docker containers created by env_setup.sh"
+    echo "Note: This script runs without sudo. The scanoss user must be in the docker group."
     echo ""
     echo "Examples:"
-    echo "   sudo $0 collection-snapshots/"
-    echo "   sudo $0 /path/to/snapshots/"
+    echo "   $0 collection-snapshots/"
+    echo "   $0 /path/to/snapshots/"
     exit 1
 fi
 
 SNAPSHOTS_DIR="$1"
+RUNTIME_USER="${RUNTIME_USER:-scanoss}"
 
 # Validate snapshots directory
 if [ -z "$SNAPSHOTS_DIR" ]; then
     echo "ERROR: Snapshots directory is required"
-    echo "Usage: sudo $0 [snapshots-dir]"
-    echo "Example: sudo $0 collection-snapshots/"
+    echo "Usage: $0 [snapshots-dir]"
+    echo "Example: $0 collection-snapshots/"
     exit 1
 fi
 
@@ -40,6 +41,19 @@ fi
 echo "🔄 Restoring SCANOSS Collections from Snapshots"
 echo "=============================================="
 echo "📁 Snapshots directory: $SNAPSHOTS_DIR"
+echo "👤 Running as user: $(whoami)"
+
+# Check if we can access Docker without sudo
+if ! docker ps >/dev/null 2>&1; then
+    echo "❌ Cannot access Docker. Checking permissions..."
+    if groups | grep -q docker; then
+        echo "⚠️  You're in the docker group but may need to log out and back in for it to take effect."
+    else
+        echo "❌ You're not in the docker group. Ask your administrator to run:"
+        echo "   sudo usermod -aG docker $(whoami)"
+    fi
+    exit 1
+fi
 
 # Check if Qdrant is running
 if ! curl -f http://localhost:6333 >/dev/null 2>&1; then
@@ -78,9 +92,9 @@ SUCCESS_LOG="$SNAPSHOTS_DIR/.restored_collections"
 FAILED_LOG="$SNAPSHOTS_DIR/.failed_restorations"
 
 # Clear previous logs
-> "$RESTORE_LOG"
-> "$SUCCESS_LOG"
-> "$FAILED_LOG"
+>"$RESTORE_LOG"
+>"$SUCCESS_LOG"
+>"$FAILED_LOG"
 
 RESTORED_COUNT=0
 FAILED_COUNT=0
@@ -89,97 +103,98 @@ echo "$SNAPSHOT_FILES" | while read -r snapshot_file; do
     if [ -z "$snapshot_file" ]; then
         continue
     fi
-    
+
     # Extract collection name from filename
     BASENAME=$(basename "$snapshot_file" .snapshot)
     # Remove date suffix if present (e.g., collection-2025-06-18 -> collection)
     COLLECTION_NAME=$(echo "$BASENAME" | sed 's/-[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}$//')
-    
+
     echo ""
     echo "📥 Restoring collection: $COLLECTION_NAME"
     echo "   From: $(basename "$snapshot_file")"
-    
+
     # Copy snapshot to a location accessible by Qdrant container
     CONTAINER_SNAPSHOT_PATH="/tmp/$(basename "$snapshot_file")"
-    
+
     # For Docker setup, we need to copy the file into the container
     echo "📋 Copying snapshot to container..."
-    if docker cp "$snapshot_file" qdrant-server:"$CONTAINER_SNAPSHOT_PATH" 2>/dev/null; then
+    if docker cp "$snapshot_file" scanoss-qdrant:"$CONTAINER_SNAPSHOT_PATH" 2>/dev/null; then
         echo "✅ Snapshot copied to container"
     else
         echo "❌ Failed to copy snapshot to container"
-        echo "$COLLECTION_NAME:copy_failed" >> "$FAILED_LOG"
+        echo "$COLLECTION_NAME:copy_failed" >>"$FAILED_LOG"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         continue
     fi
-    
+
     # Restore collection using REST API
     echo "🔄 Initiating restoration via REST API..."
-    
-    RESTORE_PAYLOAD=$(cat <<EOF
+
+    RESTORE_PAYLOAD=$(
+        cat <<EOF
 {
   "location": "file://$CONTAINER_SNAPSHOT_PATH",
   "priority": "snapshot"
 }
 EOF
-)
-    
+    )
+
     RESTORE_RESPONSE=$(curl -s -X PUT \
         -H "Content-Type: application/json" \
         -d "$RESTORE_PAYLOAD" \
         "http://localhost:6333/collections/$COLLECTION_NAME/snapshots/recover" 2>/dev/null)
-    
+
     if echo "$RESTORE_RESPONSE" | grep -q '"status":"ok"'; then
         echo "✅ Restoration initiated successfully for $COLLECTION_NAME"
-        
+
         # Wait for restoration to complete
         echo "⏳ Waiting for restoration to complete..."
         timeout=1800 # 30 minutes per collection
         counter=0
         restoration_complete=false
-        
+
         while [ $counter -lt $timeout ]; do
             # Check if collection exists and has data
             COLLECTION_INFO=$(curl -s "http://localhost:6333/collections/$COLLECTION_NAME" 2>/dev/null)
-            
+
             if echo "$COLLECTION_INFO" | grep -q '"status":"ok"'; then
                 # Check if collection has points
                 POINTS_COUNT=$(echo "$COLLECTION_INFO" | grep -o '"points_count":[0-9]*' | cut -d':' -f2 || echo "0")
                 if [ "$POINTS_COUNT" -gt 0 ]; then
                     echo "✅ Collection $COLLECTION_NAME restored successfully ($POINTS_COUNT points)"
-                    echo "$COLLECTION_NAME:$POINTS_COUNT" >> "$SUCCESS_LOG"
+                    echo "$COLLECTION_NAME:$POINTS_COUNT" >>"$SUCCESS_LOG"
                     restoration_complete=true
                     RESTORED_COUNT=$((RESTORED_COUNT + 1))
                     break
                 fi
             fi
-            
+
             if [ $((counter % 60)) -eq 0 ]; then
                 echo "Still restoring $COLLECTION_NAME... ($counter/$timeout seconds)"
             fi
             sleep 10
             counter=$((counter + 10))
         done
-        
+
         if [ "$restoration_complete" = false ]; then
             echo "❌ Timeout waiting for $COLLECTION_NAME restoration"
-            echo "$COLLECTION_NAME:timeout" >> "$FAILED_LOG"
+            echo "$COLLECTION_NAME:timeout" >>"$FAILED_LOG"
             FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
-        
+
     else
         echo "❌ Restoration failed for $COLLECTION_NAME"
         echo "Response: $RESTORE_RESPONSE"
-        echo "$COLLECTION_NAME:api_failed" >> "$FAILED_LOG"
+        echo "$COLLECTION_NAME:api_failed" >>"$FAILED_LOG"
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
-    
+
     # Clean up temporary snapshot file from container
     echo "🗑️  Cleaning up temporary files..."
-    docker exec qdrant-server rm -f "$CONTAINER_SNAPSHOT_PATH" 2>/dev/null || true
-    
+    docker exec scanoss-qdrant rm -f "$CONTAINER_SNAPSHOT_PATH" 2>/dev/null || true
+
     # Log the restoration attempt
-    echo "$(date): $COLLECTION_NAME - $(if [ "$restoration_complete" = true ]; then echo "SUCCESS"; else echo "FAILED"; fi)" >> "$RESTORE_LOG"
+    echo "$(date): $COLLECTION_NAME - $(if [ "$restoration_complete" = true ]; then echo "SUCCESS"; else echo "FAILED"; fi)" >>"$RESTORE_LOG"
 done
 
 # Final summary
@@ -192,11 +207,11 @@ FINAL_RESTORED=0
 FINAL_FAILED=0
 
 if [ -f "$SUCCESS_LOG" ]; then
-    FINAL_RESTORED=$(wc -l < "$SUCCESS_LOG" 2>/dev/null || echo "0")
+    FINAL_RESTORED=$(wc -l <"$SUCCESS_LOG" 2>/dev/null || echo "0")
 fi
 
 if [ -f "$FAILED_LOG" ]; then
-    FINAL_FAILED=$(wc -l < "$FAILED_LOG" 2>/dev/null || echo "0")
+    FINAL_FAILED=$(wc -l <"$FAILED_LOG" 2>/dev/null || echo "0")
 fi
 
 echo "📊 Final Summary:"
@@ -210,7 +225,7 @@ if [ -f "$SUCCESS_LOG" ] && [ "$FINAL_RESTORED" -gt 0 ]; then
         if [ -n "$collection" ] && [ -n "$points" ]; then
             echo "  - $collection ($points points)"
         fi
-    done < "$SUCCESS_LOG"
+    done <"$SUCCESS_LOG"
 fi
 
 if [ -f "$FAILED_LOG" ] && [ "$FINAL_FAILED" -gt 0 ]; then
@@ -220,7 +235,7 @@ if [ -f "$FAILED_LOG" ] && [ "$FINAL_FAILED" -gt 0 ]; then
         if [ -n "$collection" ] && [ -n "$reason" ]; then
             echo "  - $collection (reason: $reason)"
         fi
-    done < "$FAILED_LOG"
+    done <"$FAILED_LOG"
 fi
 
 echo ""

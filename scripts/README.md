@@ -28,37 +28,40 @@ The Folder Hashing API uses a hybrid deployment approach with **separated infras
 
 ## Installation Workflow
 
-### For Customer (New Installation):
+For Customer (New Installation):
 
-1. **Extract Package**:
-   ```bash
-   tar -xzf scanoss-hfh-api-linux_amd64-1.0.0-1.tar.gz
-   cd scanoss-hfh-api-linux_amd64-1.0.0-1
-   ```
+Extract Package:
+bashtar -xzf scanoss-hfh-api-linux_amd64-1.0.0-1.tar.gz
+cd scanoss-hfh-api-linux_amd64-1.0.0-1
 
-2. **Setup Infrastructure**:
-   ```bash
-   # Create system user
-   sudo useradd --system scanoss
-   
-   # Setup infrastructure (no data import)
-   sudo ./scripts/env_setup.sh prod
-   ```
+Setup Infrastructure:
+bash# Create system user
+sudo useradd --system scanoss
 
-3. **Configure Service**:
-   ```bash
-   # Copy and customize configuration
-   sudo cp /usr/local/etc/scanoss/hfh/config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
-   sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
-   ```
+# Setup infrastructure (no data import)
+# This will add scanoss to docker group and configure permissions
+sudo ./scripts/env_setup.sh prod
 
-4. **Import Knowledge Base**:
-   ```bash
-   # Import collection snapshots
-   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/
-   ```
+# IMPORTANT: Log out and back in for docker group membership to take effect
+# Or run: newgrp docker
 
-5. **Start Service**:
+Configure Service:
+bash# Copy and customize configuration
+sudo cp /usr/local/etc/scanoss/hfh/config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
+sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+
+Import Knowledge Base (no sudo needed):
+bash# Import collection snapshots as regular user
+./scripts/import-collections.sh /path/to/collection-snapshots/
+
+Start Service:
+bash# Start the API service
+sudo systemctl start scanoss-hfh-api
+
+# Verify installation
+curl http://localhost:40061
+
+1. **Start Service**:
    ```bash
    # Start the API service
    sudo systemctl start scanoss-hfh-api

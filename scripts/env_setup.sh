@@ -6,7 +6,7 @@
 # - Creates system folders and permissions
 # - Installs service files and binaries
 # - Starts a clean Qdrant container (no data import)
-# 
+#
 # Data import is handled separately with: ./scripts/import-collections.sh
 #
 # Config goes into: /usr/local/etc/scanoss/hfh
@@ -29,7 +29,7 @@ if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
     echo "   $0 dev"
     echo ""
     echo "After infrastructure setup, import data separately:"
-    echo "   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/"
+    echo "   ./scripts/import-collections.sh /path/to/collection-snapshots/"
     exit 1
 fi
 
@@ -76,6 +76,12 @@ fi
 
 echo "✅ Prerequisites check passed"
 
+# Also, make sure we're running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run as root"
+    exit 1
+fi
+
 # Makes sure the scanoss user exists
 if ! getent passwd $RUNTIME_USER >/dev/null; then
     echo "Runtime user does not exist: $RUNTIME_USER"
@@ -83,11 +89,10 @@ if ! getent passwd $RUNTIME_USER >/dev/null; then
     exit 1
 fi
 
-# Also, make sure we're running as root
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root"
-    exit 1
-fi
+# Get scanoss user UID and GID for Docker mapping
+SCANOSS_UID=$(id -u $RUNTIME_USER)
+SCANOSS_GID=$(id -g $RUNTIME_USER)
+echo "📋 SCANOSS user UID: $SCANOSS_UID, GID: $SCANOSS_GID"
 
 read -p "Install SCANOSS Folder Hashing API $ENVIRONMENT infrastructure (y/n) [n]? " -n 1 -r
 echo
@@ -96,6 +101,21 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 else
     echo "Stopping."
     exit 1
+fi
+
+# Add scanoss user to docker group for permission consistency
+echo "🔧 Setting up Docker permissions..."
+if ! getent group docker >/dev/null; then
+    echo "Creating docker group..."
+    groupadd docker
+fi
+
+if ! groups $RUNTIME_USER | grep -q docker; then
+    echo "Adding $RUNTIME_USER to docker group..."
+    usermod -aG docker $RUNTIME_USER
+    echo "✅ User $RUNTIME_USER added to docker group"
+else
+    echo "✅ User $RUNTIME_USER already in docker group"
 fi
 
 # Setup all the required folders and ownership
@@ -117,13 +137,12 @@ fi
 mkdir -p "$QDRANT_PATH/data"
 mkdir -p "$QDRANT_PATH/snapshots"
 
-if [ "$RUNTIME_USER" != "root" ]; then
-    echo "Changing ownership of $LOG_DIR to $RUNTIME_USER ..."
-    if ! chown -R $RUNTIME_USER $LOG_DIR; then
-        echo "chown of $LOG_DIR to $RUNTIME_USER failed"
-        exit 1
-    fi
-fi
+# Set ownership for all directories to scanoss user
+echo "📋 Setting proper ownership..."
+chown -R $RUNTIME_USER:$RUNTIME_USER $C_PATH
+chown -R $RUNTIME_USER:$RUNTIME_USER $L_PATH
+chown -R $RUNTIME_USER:$RUNTIME_USER $QDRANT_PATH
+chown -R $RUNTIME_USER:$RUNTIME_USER $LOG_DIR
 
 # Setup clean Qdrant container (no data import)
 echo "🐳 Setting up clean Qdrant container..."
@@ -151,8 +170,8 @@ fi
 
 # Stop any existing Qdrant containers (both possible names)
 echo "🛑 Stopping any existing Qdrant containers..."
-docker stop qdrant-server scanoss-qdrant 2>/dev/null || true
-docker rm qdrant-server scanoss-qdrant 2>/dev/null || true
+sudo -u $RUNTIME_USER docker stop scanoss-qdrant 2>/dev/null || true
+sudo -u $RUNTIME_USER docker rm scanoss-qdrant 2>/dev/null || true
 
 # Wait a moment for ports to be released
 sleep 2
@@ -168,11 +187,11 @@ if netstat -tlnp 2>/dev/null | grep -q ":6333 \|:6334 "; then
 fi
 
 # Clean up any existing networks
-docker network rm qdrant_default 2>/dev/null || true
+sudo -u $RUNTIME_USER docker network rm qdrant_default 2>/dev/null || true
 
 # Clean up any Docker volumes that might persist data
 echo "🧹 Cleaning up Docker volumes..."
-docker volume ls -q --filter name=qdrant | xargs -r docker volume rm 2>/dev/null || true
+sudo -u $RUNTIME_USER docker volume ls -q --filter name=qdrant | xargs -r docker volume rm 2>/dev/null || true
 
 # Clean up existing data directory for fresh start
 echo "🧹 Cleaning existing Qdrant data for fresh start..."
@@ -183,40 +202,50 @@ fi
 
 # Recreate clean data directory with proper permissions
 mkdir -p "$QDRANT_PATH/data"
+chown -R $RUNTIME_USER:$RUNTIME_USER "$QDRANT_PATH"
 chmod 755 "$QDRANT_PATH/data"
 
-# Set proper ownership for the data directory
-if [ "$RUNTIME_USER" != "root" ]; then
-    chown -R $RUNTIME_USER:$RUNTIME_USER "$QDRANT_PATH/data"
-fi
+# Create docker-compose.yml with user mapping
+echo "📝 Creating Docker configuration with proper user mapping..."
+cat >"$QDRANT_PATH/docker-compose.yml" <<EOF
+version: '3.8'
 
-# Copy docker-compose.yml from package directory
-echo "📝 Using Docker configuration from package..."
-if [ -f "$ORIGINAL_DIR/docker-compose.yml" ]; then
-    if ! cp "$ORIGINAL_DIR/docker-compose.yml" "$QDRANT_PATH/"; then
-        echo "Failed to copy docker-compose.yml"
-        exit 1
-    fi
-    echo "✅ Docker Compose configuration copied"
-else
-    echo "❌ docker-compose.yml not found in package"
-    exit 1
-fi
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: scanoss-qdrant
+    restart: unless-stopped
+    user: "${SCANOSS_UID}:${SCANOSS_GID}"
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data:/qdrant/storage:z
+      - ./snapshots:/qdrant/snapshots:z
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
+      - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots
+EOF
 
-# Start clean Qdrant container
+# Set proper ownership for docker-compose.yml
+chown $RUNTIME_USER:$RUNTIME_USER "$QDRANT_PATH/docker-compose.yml"
+
+# Start clean Qdrant container as scanoss user
 echo "🚀 Starting clean Qdrant container..."
 cd "$QDRANT_PATH"
-docker-compose up -d
+sudo -u $RUNTIME_USER docker-compose up -d
 
 # Give the container a moment to initialize
 sleep 5
 
 # Check if container is actually running
-if ! docker ps --filter name=qdrant-server --filter status=running | grep -q qdrant-server; then
+if ! sudo -u $RUNTIME_USER docker ps --filter name=scanoss-qdrant --filter status=running | grep -q scanoss-qdrant; then
     echo "❌ Container failed to start. Checking logs..."
-    docker logs qdrant-server 2>/dev/null || echo "Could not retrieve logs"
+    sudo -u $RUNTIME_USER docker logs scanoss-qdrant 2>/dev/null || echo "Could not retrieve logs"
     echo "🔍 Container status:"
-    docker ps -a --filter name=qdrant-server
+    sudo -u $RUNTIME_USER docker ps -a --filter name=scanoss-qdrant
     exit 1
 fi
 
@@ -228,28 +257,28 @@ container_failed=false
 
 while [ $counter -lt $timeout ]; do
     # Check if container is still running
-    if ! docker ps --filter name=qdrant-server --filter status=running | grep -q qdrant-server; then
+    if ! sudo -u $RUNTIME_USER docker ps --filter name=scanoss-qdrant --filter status=running | grep -q scanoss-qdrant; then
         echo "❌ Container stopped running during startup"
         container_failed=true
         break
     fi
-    
+
     # Check if Qdrant API is responding
     if curl -f http://localhost:6333 >/dev/null 2>&1; then
         echo "✅ Qdrant is ready!"
         break
     fi
-    
+
     # Progress reporting
     if [ $((counter % 15)) -eq 0 ]; then
         echo "Still waiting for Qdrant... ($counter/$timeout seconds)"
         # Show container health status
-        HEALTH_STATUS=$(docker inspect qdrant-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+        HEALTH_STATUS=$(sudo -u $RUNTIME_USER docker inspect scanoss-qdrant --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
         if [ "$HEALTH_STATUS" != "unknown" ]; then
             echo "  Container health: $HEALTH_STATUS"
         fi
     fi
-    
+
     sleep 3
     counter=$((counter + 3))
 done
@@ -258,18 +287,18 @@ if [ "$container_failed" = true ] || [ $counter -ge $timeout ]; then
     echo "❌ Qdrant failed to start properly"
     echo ""
     echo "📋 Container logs (last 50 lines):"
-    docker logs --tail 50 qdrant-server 2>/dev/null || echo "Could not retrieve logs"
+    sudo -u $RUNTIME_USER docker logs --tail 50 scanoss-qdrant 2>/dev/null || echo "Could not retrieve logs"
     echo ""
     echo "🔍 Container status:"
-    docker ps -a --filter name=qdrant-server
+    sudo -u $RUNTIME_USER docker ps -a --filter name=scanoss-qdrant
     echo ""
     echo "🔍 Container inspect (State section):"
-    docker inspect qdrant-server --format='{{json .State}}' 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "Could not inspect container"
+    sudo -u $RUNTIME_USER docker inspect scanoss-qdrant --format='{{json .State}}' 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "Could not inspect container"
     echo ""
     echo "💡 Troubleshooting tips:"
     echo "  - Check if port 6333 is already in use: netstat -tlnp | grep 6333"
     echo "  - Check Docker daemon status: systemctl status docker"
-    echo "  - Try manual start: cd $QDRANT_PATH && docker-compose up"
+    echo "  - Try manual start: cd $QDRANT_PATH && sudo -u $RUNTIME_USER docker-compose up"
     exit 1
 fi
 
@@ -282,6 +311,9 @@ if echo "$COLLECTIONS_RESPONSE" | grep -q '"status":"ok"'; then
 else
     echo "⚠️  Could not verify Qdrant state, but it's responding"
 fi
+
+# Return to original directory
+cd "$ORIGINAL_DIR"
 
 # Setup the service on the system
 SC_SERVICE_FILE="scanoss-hfh-api.service"
@@ -361,8 +393,9 @@ echo ""
 echo "🎉 SCANOSS Folder Hashing API infrastructure setup complete!"
 echo ""
 echo "📊 Infrastructure Status:"
-echo "  ✅ System folders created"
-echo "  ✅ Clean Qdrant container running"
+echo "  ✅ System folders created with proper ownership"
+echo "  ✅ Clean Qdrant container running as $RUNTIME_USER"
+echo "  ✅ Docker permissions configured"
 echo "  ✅ Service files installed"
 echo "  ✅ Configuration template available"
 if [ -f "/usr/local/bin/$BINARY" ]; then
@@ -372,7 +405,11 @@ else
 fi
 echo ""
 echo "🔧 Container Status:"
-docker ps --filter name=qdrant-server --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+sudo -u $RUNTIME_USER docker ps --filter name=scanoss-qdrant --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+echo ""
+echo "⚠️  IMPORTANT: Docker group membership changes require logout/login to take effect!"
+echo "  - The $RUNTIME_USER can now run Docker commands without sudo"
+echo "  - You may need to log out and back in for group changes to apply"
 echo ""
 echo "📋 Next Steps:"
 echo ""
@@ -380,8 +417,8 @@ echo "1. 📝 Configure the service:"
 echo "   sudo cp $C_PATH/config.example.json $C_PATH/$CONF"
 echo "   sudo nano $C_PATH/$CONF"
 echo ""
-echo "2. 📥 Import your knowledge base data:"
-echo "   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/"
+echo "2. 📥 Import your knowledge base data (no sudo needed):"
+echo "   ./scripts/import-collections.sh /path/to/collection-snapshots/"
 echo ""
 echo "3. 🚀 Start the API service:"
 echo "   sudo systemctl start $SC_SERVICE_NAME"
@@ -394,5 +431,6 @@ echo ""
 echo "📋 Management Commands:"
 echo "  - View service status: systemctl status $SC_SERVICE_NAME"
 echo "  - View service logs: journalctl -u $SC_SERVICE_NAME -f"
-echo "  - View Qdrant logs: docker logs qdrant-server"
+echo "  - View Qdrant logs: docker logs scanoss-qdrant"
+echo "  - Manage Qdrant: cd $QDRANT_PATH && docker-compose [up|down|logs]"
 echo ""
