@@ -38,9 +38,10 @@ if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
   echo ""
   echo "Customer Workflow:"
   echo "   1. Extract package: tar -xzf package.tar.gz"
-  echo "   2. Setup with snapshot: sudo ./scripts/env_setup.sh [env] [snapshot_path]"
+  echo "   2. Setup infrastructure: sudo ./scripts/env_setup.sh [env]"
   echo "   3. Configure service using config.example.json as template"
-  echo "   4. Start service: sudo systemctl start scanoss-hfh-api"
+  echo "   4. Import data: ./scripts/import-collections.sh /path/to/collection-snapshots/"
+  echo "   5. Start service: sudo systemctl start scanoss-hfh-api"
   echo ""
   echo "Examples:"
   echo "   $0 linux_amd64              # Uses git tag version"
@@ -186,9 +187,9 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
    useradd --system scanoss
    \`\`\`
 
-3. Run installation with your snapshot:
+3. Setup infrastructure (no data import):
    \`\`\`bash
-   sudo ./scripts/env_setup.sh prod /path/to/your-snapshot.snapshot
+   sudo ./scripts/env_setup.sh prod
    \`\`\`
 
 4. Configure the service (choose one method):
@@ -245,14 +246,19 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
    # Environment=HFH_CONFIG_METHOD=auto
    \`\`\`
 
-5. Start the service:
+5. Import your knowledge base data:
+   \`\`\`bash
+   ./scripts/import-collections.sh /path/to/collection-snapshots/
+   \`\`\`
+
+6. Start the service:
    \`\`\`bash
    sudo systemctl start scanoss-hfh-api
    \`\`\`
 
-6. Verify installation:
+7. Verify installation:
    \`\`\`bash
-   curl http://localhost:40061/health
+   curl http://localhost:40061
    \`\`\`
 
 ## Configuration Methods
@@ -319,7 +325,7 @@ echo "===================================="
 
 # Check if services are running
 echo "Checking Qdrant..."
-if curl -f http://localhost:6333/health >/dev/null 2>&1; then
+if curl -f http://localhost:6333 >/dev/null 2>&1; then
     echo "✅ Qdrant is running"
 else
     echo "❌ Qdrant is not responding"
@@ -327,7 +333,7 @@ else
 fi
 
 echo "Checking HFH API..."
-if curl -f http://localhost:40061/health >/dev/null 2>&1; then
+if curl -f http://localhost:40061 >/dev/null 2>&1; then
     echo "✅ HFH API is running"
 else
     echo "❌ HFH API is not responding"
@@ -376,8 +382,9 @@ cat >"$package_dir/package-info.json" <<EOF
   },
   "customer_workflow": [
     "Extract package",
-    "Run env_setup.sh with snapshot path",
+    "Run env_setup.sh for infrastructure setup",
     "Configure service using config.example.json",
+    "Import data using import-collections.sh",
     "Start systemd service"
   ]
 }
@@ -414,8 +421,10 @@ echo "🏗️  Build: $build"
 echo ""
 echo "🚀 Ready for distribution to offline customers!"
 echo ""
-echo "Customer installation command:"
-echo "  tar -xzf $tar_name && cd $package_name && sudo ./scripts/env_setup.sh prod /path/to/snapshot.snapshot"
+echo "Customer installation commands:"
+echo "  tar -xzf $tar_name && cd $package_name"
+echo "  sudo ./scripts/env_setup.sh prod"
+echo "  ./scripts/import-collections.sh /path/to/collection-snapshots/"
 echo ""
 
 exit 0

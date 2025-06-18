@@ -86,7 +86,7 @@ echo "Checking Qdrant availability..."
 timeout=300 # 5 minutes timeout
 counter=0
 while [ $counter -lt $timeout ]; do
-    if curl -f http://localhost:6333/health >/dev/null 2>&1; then
+    if curl -f http://localhost:6333 >/dev/null 2>&1; then
         echo "✅ Qdrant is ready!"
         break
     fi

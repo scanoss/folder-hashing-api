@@ -1,159 +1,252 @@
 # SCANOSS Folder Hashing API Deployment Support
 
-This folder contains convenience utilities for deploying, configuring and running the SCANOSS Folder Hashing API service with its Qdrant knowledge base.
+This folder contains utilities for deploying, configuring and running the SCANOSS Folder Hashing API service with its Qdrant knowledge base.
 
 ## Overview
 
-The Folder Hashing API uses a hybrid deployment approach:
-- **Qdrant Database**: Runs in Docker container with customer-provided knowledge base snapshots
+The Folder Hashing API uses a hybrid deployment approach with **separated infrastructure and data setup**:
+- **Infrastructure**: System folders, services, clean Qdrant container
+- **Data Import**: Collection-based snapshots imported via REST API
 - **HFH API Service**: Runs as traditional systemd service
-- **Knowledge Base**: Customer provides their own Qdrant snapshots containing component fingerprints
+- **Knowledge Base**: Customer provides collection snapshots containing component fingerprints
 
-## Distribution Process
+## Core Scripts
+
+### Service Setup & Management
+- **`env_setup.sh`** - Sets up infrastructure (folders, services, clean Qdrant)
+- **`create-package.sh`** - Creates distribution packages for customers
+- **`scanoss-hfh-api.service`** - Systemd service definition
+- **`scanoss-hfh-api.sh`** - Service startup script
+
+### Knowledge Base Management
+- **`create-collection-snapshots.sh`** - Creates individual collection snapshots
+- **`import-collections.sh`** - Imports collection snapshots via REST API
+
+### Configuration & Templates
+- **`qdrant-docker-compose.yml`** - Docker Compose template for Qdrant
+- **`COLLECTION_BASED_SETUP.md`** - Detailed setup documentation
+
+## Installation Workflow
+
+### For Customer (New Installation):
+
+1. **Extract Package**:
+   ```bash
+   tar -xzf scanoss-hfh-api-linux_amd64-1.0.0-1.tar.gz
+   cd scanoss-hfh-api-linux_amd64-1.0.0-1
+   ```
+
+2. **Setup Infrastructure**:
+   ```bash
+   # Create system user
+   sudo useradd --system scanoss
+   
+   # Setup infrastructure (no data import)
+   sudo ./scripts/env_setup.sh prod
+   ```
+
+3. **Configure Service**:
+   ```bash
+   # Copy and customize configuration
+   sudo cp /usr/local/etc/scanoss/hfh/config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
+   sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+   ```
+
+4. **Import Knowledge Base**:
+   ```bash
+   # Import collection snapshots
+   ./scripts/import-collections.sh /path/to/collection-snapshots/
+   ```
+
+5. **Start Service**:
+   ```bash
+   # Start the API service
+   sudo systemctl start scanoss-hfh-api
+   
+   # Verify installation
+   curl http://localhost:40061/health
+   ```
 
 ### For SCANOSS (Distribution Creation):
 
-1. **Package**: `./create-package.sh linux_amd64 1.0.0` or `make package_amd 1.0.0`
-   - Automatically builds binary for specified platform
-   - Creates lightweight package with scripts + binary only
-   - No snapshot or config files included
-2. **Distribute**: Send `.tar.gz` package to customer
+1. **Create Collection Snapshots**:
+   ```bash
+   # From running Qdrant with knowledge base
+   ./scripts/create-collection-snapshots.sh collection-snapshots/
+   ```
 
-### For Customer (Installation):
+2. **Create Distribution Package**:
+   ```bash
+   # Build and package
+   ./scripts/create-package.sh linux_amd64 1.0.0
+   ```
 
-1. **Extract**: `tar -xzf scanoss-hfh-api-linux_amd64-1.0.0-1.tar.gz`
-2. **Install with snapshot**: `sudo ./scripts/env_setup.sh prod /path/to/your-snapshot.snapshot`
-3. **Configure**: Customize `config.example.json` or provide your own config
+3. **Distribute**:
+   - Send package + collection snapshots to customer
+   - Customer follows installation workflow above
 
-### For Monthly Updates:
+## Key Advantages of New Approach
 
-1. **Receive new snapshot** from SCANOSS
-2. **Update**: `sudo ./scripts/update-snapshot.sh new-snapshot.snapshot`
-3. **Automatic backup/rollback** on failure
+### ✅ **Separation of Concerns**
+- Infrastructure setup is independent of data import
+- Can verify each step works before proceeding
+- Easier troubleshooting when issues occur
 
-## Setup
+### ✅ **Reliability**
+- No "File exists" errors from CLI restoration
+- Uses REST API for all data operations
+- Better error handling per collection
 
-The scripts folder contains an `env_setup.sh` script which attempts to do the following:
-
-1. Set up the default folders and permissions
-2. Install and configure Qdrant with knowledge base snapshot
-3. Set up service registration (`scanoss-hfh-api.service`)
-4. Copy in binaries (if `scanoss-hfh-api` exists in the binaries folder)
-5. Copy in preferred configuration (if `app-config-prod.json` exists in the config folder)
-
-Logs are written by default to `/var/log/scanoss/hfh/scanoss-hfh-prod.log`.
-
-Configuration is written by default to: `/usr/local/etc/scanoss/hfh`.
-
-Qdrant data and snapshots are stored in: `/usr/local/etc/scanoss/qdrant`.
+### ✅ **Flexibility**
+- Can restart infrastructure without losing data setup
+- Can import partial collections for testing
+- Easy to retry failed imports
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
-- Minimum 32GB RAM // TODO: Update this
-- 90GB+ disk space for knowledge base
-- `scanoss` system user created (`useradd --system scanoss`)
+- **System**: Linux x86_64 or ARM64
+- **Docker**: Docker and Docker Compose installed
+- **Memory**: Minimum 32GB RAM
+- **Storage**: 100GB+ available disk space
+- **Access**: Root access for installation
+- **User**: `scanoss` system user created
 
-## Installation
+## Directory Structure
 
-Running the `env_setup.sh` on the target server takes care of installation. You must provide the path to your snapshot file:
+After installation:
 
-```bash
-./env_setup.sh [environment] [snapshot_path]
+```
+/usr/local/etc/scanoss/hfh/          # API configuration
+├── config.example.json              # Configuration template
+└── app-config-prod.json             # Your configuration
+
+/usr/local/etc/scanoss/qdrant/       # Qdrant setup
+├── docker-compose.yml               # Docker configuration
+├── data/                            # Qdrant data
+└── snapshots/                       # Temporary import files
+
+/var/log/scanoss/hfh/                # API logs
+/usr/local/bin/scanoss-hfh-api       # API binary
+/etc/systemd/system/scanoss-hfh-api.service  # Service definition
 ```
 
-**Examples:**
-```bash
-# Production installation
-sudo ./env_setup.sh prod /path/to/scanoss-kb-2025-01-15.snapshot
+## Configuration Methods
 
-# Development installation  
-sudo ./env_setup.sh dev /home/user/snapshots/latest.snapshot
-```
+The API supports multiple configuration approaches:
 
-This will:
-- Copy configuration template to `/usr/local/etc/scanoss/hfh`
-- Copy binaries to `/usr/local/bin`
-- Copy service registration to `/etc/systemd/system`
-- Set up Qdrant with your provided knowledge base snapshot
-- Redirect logging to `/var/log/scanoss/hfh`
+1. **JSON Configuration** (recommended):
+   ```bash
+   sudo cp config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
+   sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+   ```
 
-## Configuration
+2. **Environment Variables**:
+   ```bash
+   # Set in systemd service or shell environment
+   export QDRANT_HOST=localhost
+   export QDRANT_PORT=6334
+   ```
 
-After installation, you need to configure the service. The installation copies `config.example.json` as a template. You have several options:
-
-**Option A: Edit the example config**
-```bash
-sudo cp /usr/local/etc/scanoss/hfh/config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
-sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
-```
-
-**Option B: Use your own JSON config**
-```bash
-sudo cp your-config.json /usr/local/etc/scanoss/hfh/app-config-prod.json
-```
-
-**Option C: Use .env file**
-```bash
-sudo cp your-app.env /usr/local/etc/scanoss/hfh/.env
-# Modify /usr/local/bin/scanoss-hfh-api.sh to use --env-config flag
-```
-
-**Option D: Use environment variables**
-```bash
-# Set environment variables in the systemd service file
-```
-
-The API supports multiple configuration methods (in priority order):
-1. **Environment variables** (highest priority)
-2. **JSON config file** via `--json-config` flag
-3. **.env file** via `--env-config` flag
-4. **Default values** (lowest priority)
-
-## Knowledge Base Updates
-
-Monthly knowledge base updates are supported through the snapshot update mechanism:
-
-1. Receive new snapshot file from SCANOSS
-2. Run the update script: `./update-snapshot.sh`
-3. The script will backup current data and restore the new snapshot
+3. **.env File**:
+   ```bash
+   # Create .env file and configure service to use it
+   sudo cp .env.example /usr/local/etc/scanoss/hfh/.env-prod
+   ```
 
 ## Service Management
 
-After installation, manage the service using standard systemd commands:
-
 ```bash
-# Start the service
-systemctl start scanoss-hfh-api
+# Start service
+sudo systemctl start scanoss-hfh-api
 
-# Stop the service
-systemctl stop scanoss-hfh-api
+# Stop service
+sudo systemctl stop scanoss-hfh-api
 
 # Check status
-systemctl status scanoss-hfh-api
+sudo systemctl status scanoss-hfh-api
 
 # View logs
-journalctl -u scanoss-hfh-api -f
+sudo journalctl -u scanoss-hfh-api -f
+
+# View Qdrant logs
+docker logs scanoss-qdrant
 ```
 
 ## API Endpoints
 
 After successful installation:
-- **HFH API**: http://localhost:40061 (REST) and localhost:50061 (gRPC)
+- **REST API**: http://localhost:40061
+- **gRPC API**: localhost:50061
+- **Health Check**: http://localhost:40061/health
 - **Qdrant Dashboard**: http://localhost:6333/dashboard
 
 ## Troubleshooting
 
-1. **Qdrant not starting**: Check Docker service and available disk space
-2. **API can't connect to Qdrant**: Verify Qdrant is running on localhost:6334
-3. **Low memory errors**: Ensure system has minimum 32GB RAM
-4. **Snapshot restore fails**: Check snapshot file integrity and available disk space
+### Infrastructure Issues
+```bash
+# Check Docker
+sudo systemctl status docker
 
-## File Structure
+# Check Qdrant container
+docker ps --filter name=scanoss-qdrant
 
+# Check system folders
+ls -la /usr/local/etc/scanoss/
 ```
-/usr/local/etc/scanoss/hfh/          # API configuration
-/usr/local/etc/scanoss/qdrant/       # Qdrant data and snapshots
-/var/log/scanoss/hfh/                # API logs
-/usr/local/bin/scanoss-hfh-api       # API binary
-/etc/systemd/system/scanoss-hfh-api.service  # Service definition
+
+### Data Import Issues
+```bash
+# Check import logs
+cat collection-snapshots/.restoration_log
+
+# Retry failed imports
+./scripts/import-collections.sh collection-snapshots/
+
+# Check collections
+curl http://localhost:6333/collections
+```
+
+### Service Issues
+```bash
+# Check service status
+sudo systemctl status scanoss-hfh-api
+
+# Check configuration
+sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+
+# Check API connectivity
+curl http://localhost:40061/health
+```
+
+## Monthly Updates
+
+For knowledge base updates:
+
+1. **Receive new collection snapshots** from SCANOSS
+2. **Import new data**:
+   ```bash
+   # Stop service
+   sudo systemctl stop scanoss-hfh-api
+   
+   # Import new snapshots
+   ./scripts/import-collections.sh new-collection-snapshots/
+   
+   # Start service
+   sudo systemctl start scanoss-hfh-api
+   ```
+
+## Migration from Old Approach
+
+If you were using the old full storage snapshot approach:
+
+1. **Create collection snapshots** from your working instance
+2. **Clean install** using new infrastructure approach
+3. **Import collections** using new REST API method
+
+See `COLLECTION_BASED_SETUP.md` for detailed migration instructions.
+
+## Support
+
+- **Documentation**: See `COLLECTION_BASED_SETUP.md` for detailed setup guide
+- **Logs**: Check service and container logs for troubleshooting
+- **API Docs**: Visit https://docs.scanoss.com for API documentation
