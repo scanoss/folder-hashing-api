@@ -10,13 +10,15 @@
 set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "$0 [-help] [snapshots-dir]"
+    echo "sudo $0 [-help] [snapshots-dir]"
     echo "   Restore collections from individual snapshots using REST API"
     echo "   [snapshots-dir] directory containing collection snapshots (required)"
     echo ""
+    echo "Note: This script requires sudo to access Docker containers created by env_setup.sh"
+    echo ""
     echo "Examples:"
-    echo "   $0 collection-snapshots/"
-    echo "   $0 /path/to/snapshots/"
+    echo "   sudo $0 collection-snapshots/"
+    echo "   sudo $0 /path/to/snapshots/"
     exit 1
 fi
 
@@ -25,8 +27,8 @@ SNAPSHOTS_DIR="$1"
 # Validate snapshots directory
 if [ -z "$SNAPSHOTS_DIR" ]; then
     echo "ERROR: Snapshots directory is required"
-    echo "Usage: $0 [snapshots-dir]"
-    echo "Example: $0 collection-snapshots/"
+    echo "Usage: sudo $0 [snapshots-dir]"
+    echo "Example: sudo $0 collection-snapshots/"
     exit 1
 fi
 
@@ -102,7 +104,7 @@ echo "$SNAPSHOT_FILES" | while read -r snapshot_file; do
     
     # For Docker setup, we need to copy the file into the container
     echo "📋 Copying snapshot to container..."
-    if docker cp "$snapshot_file" scanoss-qdrant:"$CONTAINER_SNAPSHOT_PATH" 2>/dev/null; then
+    if docker cp "$snapshot_file" qdrant-server:"$CONTAINER_SNAPSHOT_PATH" 2>/dev/null; then
         echo "✅ Snapshot copied to container"
     else
         echo "❌ Failed to copy snapshot to container"
@@ -174,7 +176,7 @@ EOF
     
     # Clean up temporary snapshot file from container
     echo "🗑️  Cleaning up temporary files..."
-    docker exec scanoss-qdrant rm -f "$CONTAINER_SNAPSHOT_PATH" 2>/dev/null || true
+    docker exec qdrant-server rm -f "$CONTAINER_SNAPSHOT_PATH" 2>/dev/null || true
     
     # Log the restoration attempt
     echo "$(date): $COLLECTION_NAME - $(if [ "$restoration_complete" = true ]; then echo "SUCCESS"; else echo "FAILED"; fi)" >> "$RESTORE_LOG"

@@ -99,7 +99,7 @@ done
 
 if [ $counter -ge $timeout ]; then
     echo "❌ Timeout waiting for Qdrant to be ready"
-    echo "Please check Qdrant status: docker ps | grep scanoss-qdrant"
+    echo "Please check Qdrant status: docker ps | grep qdrant-server"
     exit 1
 fi
 

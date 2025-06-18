@@ -29,7 +29,7 @@ if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
     echo "   $0 dev"
     echo ""
     echo "After infrastructure setup, import data separately:"
-    echo "   ./scripts/import-collections.sh /path/to/collection-snapshots/"
+    echo "   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/"
     exit 1
 fi
 
@@ -128,45 +128,44 @@ fi
 # Setup clean Qdrant container (no data import)
 echo "🐳 Setting up clean Qdrant container..."
 
-# Create docker-compose.yml for clean Qdrant startup (no CLI arguments)
-echo "📝 Creating Qdrant Docker configuration..."
-cat > "$QDRANT_PATH/docker-compose.yml" << EOF
-version: '3.8'
+# Check if required ports are available
+echo "🔍 Checking port availability..."
+PORTS_IN_USE=""
+if netstat -tlnp 2>/dev/null | grep -q ":6333 "; then
+    PORTS_IN_USE="$PORTS_IN_USE 6333"
+fi
+if netstat -tlnp 2>/dev/null | grep -q ":6334 "; then
+    PORTS_IN_USE="$PORTS_IN_USE 6334"
+fi
 
-services:
-  qdrant:
-    image: qdrant/qdrant:v1.11.0
-    container_name: scanoss-qdrant
-    ports:
-      - "6333:6333"  # HTTP API port
-      - "6334:6334"  # gRPC API port
-    volumes:
-      - ./data:/qdrant/storage
-    restart: unless-stopped
-    environment:
-      - QDRANT__SERVICE__HTTP_PORT=6333
-      - QDRANT__SERVICE__GRPC_PORT=6334
-      - QDRANT__LOG_LEVEL=INFO
-      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=32
-      - QDRANT__SERVICE__GRPC_TIMEOUT_MS=60000
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    # Clean startup - no CLI arguments, no data import
-    command: ["./qdrant"]
+if [ -n "$PORTS_IN_USE" ]; then
+    echo "⚠️  Warning: Required ports are in use:$PORTS_IN_USE"
+    echo "📋 Processes using these ports:"
+    for port in $PORTS_IN_USE; do
+        echo "  Port $port:"
+        netstat -tlnp 2>/dev/null | grep ":$port " | head -3
+    done
+    echo ""
+    echo "🛑 Attempting to stop existing Qdrant containers first..."
+fi
 
-networks:
-  default:
-    name: qdrant_default
-EOF
-
-# Stop any existing Qdrant containers
+# Stop any existing Qdrant containers (both possible names)
 echo "🛑 Stopping any existing Qdrant containers..."
-docker stop scanoss-qdrant 2>/dev/null || true
-docker rm scanoss-qdrant 2>/dev/null || true
+docker stop qdrant-server scanoss-qdrant 2>/dev/null || true
+docker rm qdrant-server scanoss-qdrant 2>/dev/null || true
+
+# Wait a moment for ports to be released
+sleep 2
+
+# Recheck ports after stopping containers
+if netstat -tlnp 2>/dev/null | grep -q ":6333 \|:6334 "; then
+    echo "❌ Ports 6333 or 6334 are still in use after stopping containers"
+    echo "📋 Current port usage:"
+    netstat -tlnp 2>/dev/null | grep ":6333 \|:6334 "
+    echo ""
+    echo "💡 Please manually stop the processes using these ports and try again"
+    exit 1
+fi
 
 # Clean up any existing networks
 docker network rm qdrant_default 2>/dev/null || true
@@ -182,37 +181,95 @@ if [ -d "$QDRANT_PATH/data" ]; then
     rm -rf "$QDRANT_PATH/data" 2>/dev/null || true
 fi
 
-# Recreate clean data directory
+# Recreate clean data directory with proper permissions
 mkdir -p "$QDRANT_PATH/data"
 chmod 755 "$QDRANT_PATH/data"
+
+# Set proper ownership for the data directory
+if [ "$RUNTIME_USER" != "root" ]; then
+    chown -R $RUNTIME_USER:$RUNTIME_USER "$QDRANT_PATH/data"
+fi
+
+# Copy docker-compose.yml from package directory
+echo "📝 Using Docker configuration from package..."
+if [ -f "$ORIGINAL_DIR/docker-compose.yml" ]; then
+    if ! cp "$ORIGINAL_DIR/docker-compose.yml" "$QDRANT_PATH/"; then
+        echo "Failed to copy docker-compose.yml"
+        exit 1
+    fi
+    echo "✅ Docker Compose configuration copied"
+else
+    echo "❌ docker-compose.yml not found in package"
+    exit 1
+fi
 
 # Start clean Qdrant container
 echo "🚀 Starting clean Qdrant container..."
 cd "$QDRANT_PATH"
 docker-compose up -d
 
-# Wait for Qdrant to be ready
+# Give the container a moment to initialize
+sleep 5
+
+# Check if container is actually running
+if ! docker ps --filter name=qdrant-server --filter status=running | grep -q qdrant-server; then
+    echo "❌ Container failed to start. Checking logs..."
+    docker logs qdrant-server 2>/dev/null || echo "Could not retrieve logs"
+    echo "🔍 Container status:"
+    docker ps -a --filter name=qdrant-server
+    exit 1
+fi
+
+# Wait for Qdrant to be ready with improved error handling
 echo "⏳ Waiting for Qdrant to be ready..."
 timeout=120 # 2 minutes should be enough for clean startup
 counter=0
+container_failed=false
+
 while [ $counter -lt $timeout ]; do
+    # Check if container is still running
+    if ! docker ps --filter name=qdrant-server --filter status=running | grep -q qdrant-server; then
+        echo "❌ Container stopped running during startup"
+        container_failed=true
+        break
+    fi
+    
+    # Check if Qdrant API is responding
     if curl -f http://localhost:6333 >/dev/null 2>&1; then
         echo "✅ Qdrant is ready!"
         break
     fi
+    
+    # Progress reporting
     if [ $((counter % 15)) -eq 0 ]; then
         echo "Still waiting for Qdrant... ($counter/$timeout seconds)"
+        # Show container health status
+        HEALTH_STATUS=$(docker inspect qdrant-server --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+        if [ "$HEALTH_STATUS" != "unknown" ]; then
+            echo "  Container health: $HEALTH_STATUS"
+        fi
     fi
+    
     sleep 3
     counter=$((counter + 3))
 done
 
-if [ $counter -ge $timeout ]; then
-    echo "❌ Timeout waiting for Qdrant to be ready"
-    echo "📋 Container logs:"
-    docker logs scanoss-qdrant 2>/dev/null || echo "Could not retrieve logs"
+if [ "$container_failed" = true ] || [ $counter -ge $timeout ]; then
+    echo "❌ Qdrant failed to start properly"
+    echo ""
+    echo "📋 Container logs (last 50 lines):"
+    docker logs --tail 50 qdrant-server 2>/dev/null || echo "Could not retrieve logs"
+    echo ""
     echo "🔍 Container status:"
-    docker ps -a --filter name=scanoss-qdrant
+    docker ps -a --filter name=qdrant-server
+    echo ""
+    echo "🔍 Container inspect (State section):"
+    docker inspect qdrant-server --format='{{json .State}}' 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "Could not inspect container"
+    echo ""
+    echo "💡 Troubleshooting tips:"
+    echo "  - Check if port 6333 is already in use: netstat -tlnp | grep 6333"
+    echo "  - Check Docker daemon status: systemctl status docker"
+    echo "  - Try manual start: cd $QDRANT_PATH && docker-compose up"
     exit 1
 fi
 
@@ -315,7 +372,7 @@ else
 fi
 echo ""
 echo "🔧 Container Status:"
-docker ps --filter name=scanoss-qdrant --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+docker ps --filter name=qdrant-server --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 echo ""
 echo "📋 Next Steps:"
 echo ""
@@ -324,7 +381,7 @@ echo "   sudo cp $C_PATH/config.example.json $C_PATH/$CONF"
 echo "   sudo nano $C_PATH/$CONF"
 echo ""
 echo "2. 📥 Import your knowledge base data:"
-echo "   ./scripts/import-collections.sh /path/to/collection-snapshots/"
+echo "   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/"
 echo ""
 echo "3. 🚀 Start the API service:"
 echo "   sudo systemctl start $SC_SERVICE_NAME"
@@ -337,5 +394,5 @@ echo ""
 echo "📋 Management Commands:"
 echo "  - View service status: systemctl status $SC_SERVICE_NAME"
 echo "  - View service logs: journalctl -u $SC_SERVICE_NAME -f"
-echo "  - View Qdrant logs: docker logs scanoss-qdrant"
+echo "  - View Qdrant logs: docker logs qdrant-server"
 echo ""

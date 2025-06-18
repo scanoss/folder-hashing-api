@@ -147,6 +147,9 @@ echo "  - Configuration templates..."
 cp config.example.json "$package_dir/"
 cp .env.example "$package_dir/"
 
+echo "  - Docker configuration..."
+cp docker-compose.yml "$package_dir/"
+
 echo "  - Binary file..."
 mkdir -p "$package_dir/dist"
 cp "$BINARY_PATH" "$package_dir/dist/scanoss-hfh-api"
@@ -164,6 +167,7 @@ This package contains the SCANOSS Folder Hashing API binary and deployment scrip
 - **dist/**: Compiled API binary
 - **config.example.json**: JSON configuration template
 - **.env.example**: Environment variable configuration template
+- **docker-compose.yml**: Qdrant container configuration
 
 ## System Requirements
 

@@ -55,7 +55,7 @@ The Folder Hashing API uses a hybrid deployment approach with **separated infras
 4. **Import Knowledge Base**:
    ```bash
    # Import collection snapshots
-   ./scripts/import-collections.sh /path/to/collection-snapshots/
+   sudo ./scripts/import-collections.sh /path/to/collection-snapshots/
    ```
 
 5. **Start Service**:
@@ -200,7 +200,7 @@ ls -la /usr/local/etc/scanoss/
 cat collection-snapshots/.restoration_log
 
 # Retry failed imports
-./scripts/import-collections.sh collection-snapshots/
+sudo ./scripts/import-collections.sh collection-snapshots/
 
 # Check collections
 curl http://localhost:6333/collections
@@ -229,7 +229,7 @@ For knowledge base updates:
    sudo systemctl stop scanoss-hfh-api
    
    # Import new snapshots
-   ./scripts/import-collections.sh new-collection-snapshots/
+   sudo ./scripts/import-collections.sh new-collection-snapshots/
    
    # Start service
    sudo systemctl start scanoss-hfh-api
