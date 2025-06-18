@@ -1,34 +1,22 @@
 {
   "App": {
-    "Name": "Production HFH Server",
-    "GRPCPort": "50062",
-    "RESTPort": "40062",
+    "Name": "SCANOSS HFH Server",
+    "GRPCPort": "50061",
+    "RESTPort": "40061",
     "Debug": false,
     "Trace": false,
     "Mode": "production"
   },
   "Logging": {
     "DynamicLogging": true,
-    "DynamicPort": "localhost:60062",
-    "ConfigFile": "/etc/logging/prod-config.json"
+    "DynamicPort": "localhost:60061"
   },
   "Telemetry": {
     "Enabled": true,
-    "OltpExporter": "otel-collector:4317"
-  },
-  "TLS": {
-    "CertFile": "/etc/ssl/certs/server.crt",
-    "KeyFile": "/etc/ssl/private/server.key",
-    "CN": "prod.hfh.scanoss.com"
-  },
-  "Filtering": {
-    "AllowListFile": "/etc/hfh/allow.list",
-    "DenyListFile": "/etc/hfh/deny.list",
-    "BlockByDefault": true,
-    "TrustProxy": true
+    "OltpExporter": "0.0.0.0:4317"
   },
   "Hfh": {
-    "QdrantHost": "qdrant-cluster.internal",
+    "QdrantHost": "localhost",
     "QdrantPort": 6334
   }
 }

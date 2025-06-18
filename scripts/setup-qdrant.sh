@@ -83,7 +83,7 @@ services:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -106,7 +106,7 @@ echo "⏳ Waiting for Qdrant to be ready..."
 timeout=300 # 5 minutes timeout
 counter=0
 while [ $counter -lt $timeout ]; do
-    if curl -f http://localhost:6333/health >/dev/null 2>&1; then
+    if curl -f http://localhost:6333 >/dev/null 2>&1; then
         echo "✅ Qdrant is ready!"
         break
     fi
