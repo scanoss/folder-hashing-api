@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  hfh-api:
+    environment:
+      # Development-specific settings
+      - APP_MODE=dev
+      - APP_DEBUG=true
+      - APP_TRACE=true
+      - LOG_DYNAMIC=true
+      # Enable telemetry for development debugging
+      - OTEL_ENABLED=true
+    volumes:
+      # Mount source code for development (if needed)
+      - .:/app/source:ro
+    ports:
+      # Expose additional ports for development
+      - "40061:40061" # REST API
+      - "50061:50061" # gRPC API
+      - "60061:60061" # Dynamic logging port
+    # Override command to use environment variables instead of config file
+    command: []
+    # Faster restart for development
+    restart: "no"
+
+  qdrant:
+    environment:
+      # More verbose logging for development
+      - QDRANT__LOG_LEVEL=DEBUG
+    # Faster restart for development
+    restart: "no"

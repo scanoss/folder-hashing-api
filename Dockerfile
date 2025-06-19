@@ -1,24 +1,56 @@
+# Multi-stage build for optimized production image
 FROM golang:1.22 as build
 
 WORKDIR /app
 
-COPY go.mod ./
-COPY go.sum ./
-
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
 RUN go mod download
 
+# Copy source code
 COPY . ./
 
-RUN go generate ./pkg/cmd/server.go
-RUN go build -o ./scanoss-hfh ./cmd/server
+# Build the application with version information
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=${VERSION}" \
+    -o scanoss-hfh-api \
+    ./cmd/server
 
-FROM debian:buster-slim
+# Production image
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 WORKDIR /app
 
-COPY --from=build /app/scanoss-hfh /app/scanoss-hfh
+# Create necessary directories
+RUN mkdir -p /app/config /app/snapshots /var/log/scanoss
 
-EXPOSE 50053
+# Copy the binary from build stage
+COPY --from=build /app/scanoss-hfh-api /app/scanoss-hfh-api
 
-ENTRYPOINT ["./scanoss-hfh"]
-#CMD ["--help"]
+# Create non-root user for security
+RUN groupadd -r scanoss && useradd -r -g scanoss scanoss
+RUN chown -R scanoss:scanoss /app /var/log/scanoss
+
+# Switch to non-root user
+USER scanoss
+
+# Health check for the REST API
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:40061/health || exit 1
+
+# Expose ports
+EXPOSE 40061 50061 60061
+
+# Default entrypoint
+ENTRYPOINT ["./scanoss-hfh-api"]
+
+# Default command (can be overridden by docker-compose)
+CMD ["--help"]

@@ -9,6 +9,7 @@ services:
       - "6334:6334" # gRPC API port (used by our Go client)
     volumes:
       - qdrant_data:/qdrant/storage
+      - qdrant_snapshots:/qdrant/snapshots
     environment:
       # Enable all CORS origins for development
       - QDRANT__SERVICE__HTTP_CORS_ENABLED=true
@@ -17,6 +18,9 @@ services:
       # Performance optimizations
       - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=32
       - QDRANT__SERVICE__GRPC_TIMEOUT_MS=60000
+      # Storage paths
+      - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
+      - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots
     healthcheck:
       test:
         ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
@@ -25,8 +29,58 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
+    networks:
+      - scanoss-network
+
+  hfh-api:
+    build: .
+    container_name: scanoss-hfh-api
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "40061:40061" # REST API
+      - "50061:50061" # gRPC API
+      - "60061:60061" # Dynamic logging port
+    volumes:
+      - ./config:/app/config:ro # Config files
+      - ./snapshots:/app/snapshots # For import/export operations
+      - hfh_logs:/var/log/scanoss # Persistent logs
+    environment:
+      # Point to Qdrant container
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6334
+      # Default app settings
+      - APP_MODE=production
+      - APP_NAME=SCANOSS HFH Server
+      - APP_DEBUG=false
+      - APP_TRACE=false
+      # Telemetry
+      - OTEL_ENABLED=false
+      - OTEL_EXPORTER_OLTP=0.0.0.0:4317
+      # Logging
+      - LOG_DYNAMIC=true
+      - LOG_DYNAMIC_PORT=localhost:60061
+    command: ["--json-config", "/app/config/app-config.json"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:40061/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - scanoss-network
 
 volumes:
   qdrant_data:
     driver: local
+  qdrant_snapshots:
+    driver: local
+  hfh_logs:
+    driver: local
+
+networks:
+  scanoss-network:
+    driver: bridge
 

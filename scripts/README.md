@@ -1,255 +1,521 @@
-# SCANOSS Folder Hashing API Deployment Support
+# SCANOSS Folder Hashing API - Docker Deployment Guide
 
-This folder contains utilities for deploying, configuring and running the SCANOSS Folder Hashing API service with its Qdrant knowledge base.
+This directory contains Docker-based deployment scripts and utilities for the SCANOSS Folder Hashing API. The new approach uses **Docker Compose** for simplified deployment and eliminates the complexity of systemd-based installations.
 
-## Overview
+## 🐳 Docker-First Architecture
 
-The Folder Hashing API uses a hybrid deployment approach with **separated infrastructure and data setup**:
-- **Infrastructure**: System folders, services, clean Qdrant container
-- **Data Import**: Collection-based snapshots imported via REST API
-- **HFH API Service**: Runs as traditional systemd service
-- **Knowledge Base**: Customer provides collection snapshots containing component fingerprints
+The SCANOSS HFH API now uses a modern containerized approach:
 
-## Core Scripts
+- **Zero System Dependencies**: No systemd, no user management, no complex permissions
+- **Single Command Deployment**: Start everything with one command
+- **Environment Isolation**: Clean separation between development and production
+- **Consistent Deployments**: Same environment everywhere
+- **Easy Maintenance**: Standard Docker tooling for management
 
-### Service Setup & Management
-- **`env_setup.sh`** - Sets up infrastructure (folders, services, clean Qdrant)
-- **`create-package.sh`** - Creates distribution packages for customers
-- **`scanoss-hfh-api.service`** - Systemd service definition
-- **`scanoss-hfh-api.sh`** - Service startup script
+## 📁 Scripts Overview
 
-### Knowledge Base Management
-- **`create-collection-snapshots.sh`** - Creates individual collection snapshots
-- **`import-collections.sh`** - Imports collection snapshots via REST API
+### Core Deployment Scripts
 
-### Configuration & Templates
-- **`qdrant-docker-compose.yml`** - Docker Compose template for Qdrant
-- **`COLLECTION_BASED_SETUP.md`** - Detailed setup documentation
+- **`docker-deploy.sh`** - Main deployment script for all environments
+- **`create-docker-package.sh`** - Creates Docker-based distribution packages
+- **`create-collection-snapshots.sh`** - Exports collections for backup/distribution
+- **`import-collections.sh`** - Imports collection snapshots into Qdrant
 
-## Installation Workflow
+### Legacy Scripts (Removed)
 
-For Customer (New Installation):
+The following systemd-based scripts have been removed in favor of Docker deployment:
 
-Extract Package:
-bashtar -xzf scanoss-hfh-api-linux_amd64-1.0.0-1.tar.gz
-cd scanoss-hfh-api-linux_amd64-1.0.0-1
+- ~~`env_setup.sh`~~ - Replaced by Docker Compose
+- ~~`scanoss-hfh-api.service`~~ - Replaced by Docker Compose services
+- ~~`scanoss-hfh-api.sh`~~ - Replaced by container orchestration
+- ~~`create-package.sh`~~ - Replaced by `create-docker-package.sh`
 
-Setup Infrastructure:
-bash# Create system user
-sudo useradd --system scanoss
+## 🚀 Quick Start
 
-# Setup infrastructure (no data import)
-# This will add scanoss to docker group and configure permissions
-sudo ./scripts/env_setup.sh prod
+### 1. Development Environment
 
-# IMPORTANT: Log out and back in for docker group membership to take effect
-# Or run: newgrp docker
+```bash
+# Start development environment
+./scripts/docker-deploy.sh dev
 
-Configure Service:
-bash# Copy and customize configuration
-sudo cp /usr/local/etc/scanoss/hfh/config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
-sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+# Or using make
+make dev
+```
 
-Import Knowledge Base (no sudo needed):
-bash# Import collection snapshots as regular user
+### 2. Production Environment
+
+```bash
+# Start production environment
+./scripts/docker-deploy.sh prod
+
+# Or using make
+make prod
+```
+
+### 3. Import Collections
+
+```bash
+# Import collection snapshots
+./scripts/import-collections.sh /path/to/snapshots/
+```
+
+## 📋 Detailed Usage
+
+### docker-deploy.sh
+
+Main deployment script with support for multiple environments and actions:
+
+```bash
+./scripts/docker-deploy.sh [environment] [action]
+
+# Environments:
+#   dev, development  - Development environment with debug logging
+#   prod, production  - Production environment with resource limits
+
+# Actions:
+#   up       - Start services (default)
+#   down     - Stop services
+#   logs     - View service logs
+#   status   - Check service status
+#   restart  - Restart services
+#   pull     - Update images
+
+# Examples:
+./scripts/docker-deploy.sh prod up       # Start production
+./scripts/docker-deploy.sh dev logs     # View development logs
+./scripts/docker-deploy.sh prod status  # Check production status
+```
+
+**Features:**
+- ✅ Automatic prerequisite checking (Docker, Docker Compose)
+- ✅ Health monitoring with timeout handling
+- ✅ Configuration file validation and auto-creation
+- ✅ Service dependency management
+- ✅ Comprehensive error handling and logging
+
+### create-docker-package.sh
+
+Creates distribution packages for offline deployment:
+
+```bash
+./scripts/create-docker-package.sh <platform> [version]
+
+# Platforms:
+#   linux/amd64  - AMD64 architecture
+#   linux/arm64  - ARM64 architecture  
+#   multi        - Multi-architecture (buildx required)
+
+# Examples:
+./scripts/create-docker-package.sh linux/amd64        # AMD64 package
+./scripts/create-docker-package.sh linux/arm64 1.2.3 # ARM64 with version
+./scripts/create-docker-package.sh multi             # Multi-arch package
+```
+
+**Package Contents:**
+- Docker Compose configuration files
+- Pre-built Docker images (saved as tar files)
+- Configuration templates
+- Deployment and management scripts
+- Collection management utilities
+- Complete documentation
+
+### create-collection-snapshots.sh
+
+Exports Qdrant collections for backup or distribution:
+
+```bash
+./scripts/create-collection-snapshots.sh [output-dir]
+
+# Examples:
+./scripts/create-collection-snapshots.sh                # Default: collection-snapshots/
+./scripts/create-collection-snapshots.sh backups/      # Custom directory
+```
+
+**Features:**
+- ✅ Individual collection snapshots (not monolithic)
+- ✅ REST API based (reliable)
+- ✅ Progress monitoring with timeouts
+- ✅ Automatic cleanup of temporary files
+- ✅ Detailed logging and error handling
+
+### import-collections.sh
+
+Imports collection snapshots into Qdrant:
+
+```bash
+./scripts/import-collections.sh <snapshots-dir>
+
+# Examples:
+./scripts/import-collections.sh collection-snapshots/
+./scripts/import-collections.sh /path/to/customer/data/
+```
+
+**Features:**
+- ✅ Docker-aware (works with containers)
+- ✅ No sudo required (uses Docker group permissions)
+- ✅ Individual collection restoration
+- ✅ Progress monitoring and health checks
+- ✅ Automatic retry logic for failed imports
+
+## 🏗️ Architecture Overview
+
+### Docker Compose Structure
+
+```yaml
+services:
+  qdrant:      # Vector database
+    - Data persistence via named volumes
+    - Health checks and auto-restart
+    - Optimized for production performance
+    
+  hfh-api:     # SCANOSS API service
+    - Depends on Qdrant health
+    - Multi-stage Docker build
+    - Non-root container security
+    - Environment-specific configurations
+```
+
+### Volume Management
+
+```yaml
+volumes:
+  qdrant_data:       # Database storage
+  qdrant_snapshots:  # Snapshot storage  
+  hfh_logs:          # Application logs
+```
+
+### Network Configuration
+
+```yaml
+networks:
+  scanoss-network:   # Isolated network for services
+```
+
+## 🔧 Configuration Management
+
+### Environment-Specific Configurations
+
+**Development (`docker-compose.dev.yml`)**:
+- Debug logging enabled
+- Source code mounting for development
+- Faster restart policies
+- Enhanced telemetry
+
+**Production (`docker-compose.prod.yml`)**:
+- Resource limits and reservations
+- Security-optimized settings
+- Production logging levels
+- Auto-restart policies
+
+### Configuration Files
+
+```
+config/
+├── app-config.example.json    # JSON configuration template
+└── .env.example              # Environment variables template
+```
+
+## 📦 Distribution Workflow
+
+### For SCANOSS (Package Creation)
+
+```bash
+# 1. Create collection snapshots from your knowledge base
+./scripts/create-collection-snapshots.sh distribution-snapshots/
+
+# 2. Create distribution packages
+./scripts/create-docker-package.sh linux/amd64 1.0.0
+./scripts/create-docker-package.sh linux/arm64 1.0.0
+
+# 3. Distribute packages + snapshots to customers
+```
+
+### For Customers (Package Deployment)
+
+```bash
+# 1. Extract package
+tar -xzf scanoss-hfh-api-docker-amd64-1.0.0-1.tar.gz
+cd scanoss-hfh-api-docker-amd64-1.0.0-1
+
+# 2. Load Docker images (offline support)
+./scripts/load-images.sh
+
+# 3. Configure service
+cp config/app-config.example.json config/app-config.json
+# Edit configuration as needed
+
+# 4. Deploy services
+./scripts/deploy.sh prod
+
+# 5. Import knowledge base
 ./scripts/import-collections.sh /path/to/collection-snapshots/
 
-Start Service:
-bash# Start the API service
-sudo systemctl start scanoss-hfh-api
-
-# Verify installation
-curl http://localhost:40061
-
-1. **Start Service**:
-   ```bash
-   # Start the API service
-   sudo systemctl start scanoss-hfh-api
-   
-   # Verify installation
-   curl http://localhost:40061/health
-   ```
-
-### For SCANOSS (Distribution Creation):
-
-1. **Create Collection Snapshots**:
-   ```bash
-   # From running Qdrant with knowledge base
-   ./scripts/create-collection-snapshots.sh collection-snapshots/
-   ```
-
-2. **Create Distribution Package**:
-   ```bash
-   # Build and package
-   ./scripts/create-package.sh linux_amd64 1.0.0
-   ```
-
-3. **Distribute**:
-   - Send package + collection snapshots to customer
-   - Customer follows installation workflow above
-
-## Key Advantages of New Approach
-
-### ✅ **Separation of Concerns**
-- Infrastructure setup is independent of data import
-- Can verify each step works before proceeding
-- Easier troubleshooting when issues occur
-
-### ✅ **Reliability**
-- No "File exists" errors from CLI restoration
-- Uses REST API for all data operations
-- Better error handling per collection
-
-### ✅ **Flexibility**
-- Can restart infrastructure without losing data setup
-- Can import partial collections for testing
-- Easy to retry failed imports
-
-## Prerequisites
-
-- **System**: Linux x86_64 or ARM64
-- **Docker**: Docker and Docker Compose installed
-- **Memory**: Minimum 32GB RAM
-- **Storage**: 100GB+ available disk space
-- **Access**: Root access for installation
-- **User**: `scanoss` system user created
-
-## Directory Structure
-
-After installation:
-
-```
-/usr/local/etc/scanoss/hfh/          # API configuration
-├── config.example.json              # Configuration template
-└── app-config-prod.json             # Your configuration
-
-/usr/local/etc/scanoss/qdrant/       # Qdrant setup
-├── docker-compose.yml               # Docker configuration
-├── data/                            # Qdrant data
-└── snapshots/                       # Temporary import files
-
-/var/log/scanoss/hfh/                # API logs
-/usr/local/bin/scanoss-hfh-api       # API binary
-/etc/systemd/system/scanoss-hfh-api.service  # Service definition
+# 6. Verify deployment
+./scripts/verify-installation.sh
 ```
 
-## Configuration Methods
+## 🛠️ Management Commands
 
-The API supports multiple configuration approaches:
-
-1. **JSON Configuration** (recommended):
-   ```bash
-   sudo cp config.example.json /usr/local/etc/scanoss/hfh/app-config-prod.json
-   sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
-   ```
-
-2. **Environment Variables**:
-   ```bash
-   # Set in systemd service or shell environment
-   export QDRANT_HOST=localhost
-   export QDRANT_PORT=6334
-   ```
-
-3. **.env File**:
-   ```bash
-   # Create .env file and configure service to use it
-   sudo cp .env.example /usr/local/etc/scanoss/hfh/.env-prod
-   ```
-
-## Service Management
+### Service Management
 
 ```bash
-# Start service
-sudo systemctl start scanoss-hfh-api
+# Start services
+./scripts/docker-deploy.sh prod up
 
-# Stop service
-sudo systemctl stop scanoss-hfh-api
+# Stop services  
+./scripts/docker-deploy.sh prod down
 
-# Check status
-sudo systemctl status scanoss-hfh-api
+# Restart services
+./scripts/docker-deploy.sh prod restart
 
 # View logs
-sudo journalctl -u scanoss-hfh-api -f
+./scripts/docker-deploy.sh prod logs
 
-# View Qdrant logs
-docker logs scanoss-qdrant
+# Check status
+./scripts/docker-deploy.sh prod status
 ```
 
-## API Endpoints
+### Data Management
 
-After successful installation:
-- **REST API**: http://localhost:40061
-- **gRPC API**: localhost:50061
-- **Health Check**: http://localhost:40061/health
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
-
-## Troubleshooting
-
-### Infrastructure Issues
 ```bash
-# Check Docker
-sudo systemctl status docker
+# Export collections
+./scripts/create-collection-snapshots.sh snapshots/
 
-# Check Qdrant container
-docker ps --filter name=scanoss-qdrant
+# Import collections
+./scripts/import-collections.sh snapshots/
 
-# Check system folders
-ls -la /usr/local/etc/scanoss/
-```
-
-### Data Import Issues
-```bash
-# Check import logs
-cat collection-snapshots/.restoration_log
-
-# Retry failed imports
-sudo ./scripts/import-collections.sh collection-snapshots/
-
-# Check collections
+# Verify collections
 curl http://localhost:6333/collections
 ```
 
-### Service Issues
+### Maintenance
+
 ```bash
-# Check service status
-sudo systemctl status scanoss-hfh-api
+# Update images
+./scripts/docker-deploy.sh prod pull
 
-# Check configuration
-sudo nano /usr/local/etc/scanoss/hfh/app-config-prod.json
+# Clean up resources
+docker-compose down -v
+docker system prune -f
 
-# Check API connectivity
+# Reset environment
+make env_reset
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**Docker daemon not running:**
+```bash
+# Check Docker status
+docker info
+
+# Start Docker service (varies by system)
+sudo systemctl start docker     # Linux systemd
+sudo service docker start       # Linux SysV
+```
+
+**Port conflicts:**
+```bash
+# Check port usage
+netstat -tlnp | grep -E ':(40061|50061|6333|6334)'
+
+# Stop conflicting services
+docker-compose down
+```
+
+**Permission issues:**
+```bash
+# Add user to docker group (logout/login required)
+sudo usermod -aG docker $USER
+
+# Or use newgrp to apply immediately
+newgrp docker
+```
+
+### Debugging Commands
+
+```bash
+# View container logs
+docker logs scanoss-hfh-api
+docker logs scanoss-qdrant
+
+# Check container status
+docker ps --filter name=scanoss
+
+# Inspect container configuration
+docker inspect scanoss-hfh-api
+
+# Check resource usage
+docker stats --no-stream
+```
+
+### Service Health Checks
+
+```bash
+# Check Qdrant
+curl http://localhost:6333/collections
+
+# Check HFH API
+curl http://localhost:40061/health
+
+# Check all services
+./scripts/docker-deploy.sh prod status
+```
+
+## 🚀 Performance Tuning
+
+### Resource Optimization
+
+**Memory Settings** (`docker-compose.prod.yml`):
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 2G      # Adjust based on your needs
+    reservations:
+      memory: 1G
+```
+
+**CPU Settings**:
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '1.0'     # Adjust based on available cores
+    reservations:
+      cpus: '0.5'
+```
+
+### Qdrant Optimization
+
+**For Large Datasets**:
+```yaml
+environment:
+  - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=64
+  - QDRANT__SERVICE__GRPC_TIMEOUT_MS=120000
+```
+
+**For High Performance**:
+```yaml
+volumes:
+  - type: tmpfs
+    target: /tmp
+    tmpfs:
+      size: 1G      # Use tmpfs for temporary operations
+```
+
+## 📊 Monitoring
+
+### Built-in Health Checks
+
+All services include health checks that monitor:
+- Service responsiveness
+- Database connectivity
+- API endpoint availability
+- Resource utilization
+
+### Log Management
+
+```bash
+# View real-time logs
+./scripts/docker-deploy.sh prod logs
+
+# View specific service logs
+docker logs -f scanoss-hfh-api
+docker logs -f scanoss-qdrant
+
+# Export logs for analysis
+docker logs scanoss-hfh-api > hfh-api.log 2>&1
+```
+
+### Metrics Collection
+
+Enable telemetry in configuration for metrics:
+```json
+{
+  "Telemetry": {
+    "Enabled": true,
+    "OltpExporter": "0.0.0.0:4317"
+  }
+}
+```
+
+## 🔐 Security Considerations
+
+### Container Security
+
+- **Non-root containers**: All services run as non-privileged users
+- **Minimal base images**: Debian slim for reduced attack surface
+- **Read-only filesystems**: Where applicable
+- **Resource limits**: Prevent resource exhaustion
+
+### Network Security
+
+- **Isolated networks**: Services communicate via dedicated Docker network
+- **Port exposure**: Only necessary ports exposed to host
+- **Internal communication**: Services use container names for resolution
+
+### Data Security
+
+- **Volume encryption**: Consider encrypting Docker volumes for sensitive data
+- **Access controls**: Use proper file permissions on host-mounted volumes
+- **Network policies**: Implement firewall rules for exposed ports
+
+## 💡 Migration from Legacy Deployment
+
+If you're migrating from the old systemd-based deployment:
+
+### 1. Stop Legacy Services
+```bash
+sudo systemctl stop scanoss-hfh-api
+sudo systemctl disable scanoss-hfh-api
+```
+
+### 2. Export Existing Data
+```bash
+# If you have existing Qdrant data, export it first
+./scripts/create-collection-snapshots.sh migration-backup/
+```
+
+### 3. Deploy Docker Version
+```bash
+# Set up Docker deployment
+make env_setup
+make prod
+```
+
+### 4. Import Data
+```bash
+# Import your existing data
+./scripts/import-collections.sh migration-backup/
+```
+
+### 5. Verify Migration
+```bash
+# Verify everything works
+./scripts/docker-deploy.sh prod status
 curl http://localhost:40061/health
 ```
 
-## Monthly Updates
+## 🤝 Support
 
-For knowledge base updates:
+For issues with Docker deployment:
 
-1. **Receive new collection snapshots** from SCANOSS
-2. **Import new data**:
-   ```bash
-   # Stop service
-   sudo systemctl stop scanoss-hfh-api
-   
-   # Import new snapshots
-   sudo ./scripts/import-collections.sh new-collection-snapshots/
-   
-   # Start service
-   sudo systemctl start scanoss-hfh-api
-   ```
+1. **Check the logs**: `./scripts/docker-deploy.sh prod logs`
+2. **Verify prerequisites**: Docker and Docker Compose installed and running
+3. **Check port availability**: Ensure ports 40061, 50061, 6333, 6334 are free
+4. **Review configuration**: Validate your `config/app-config.json`
+5. **Test connectivity**: Use curl commands to test service endpoints
 
-## Migration from Old Approach
+## 📚 Additional Resources
 
-If you were using the old full storage snapshot approach:
+- **Docker Documentation**: [https://docs.docker.com](https://docs.docker.com)
+- **Docker Compose Reference**: [https://docs.docker.com/compose](https://docs.docker.com/compose)
+- **Qdrant Documentation**: [https://qdrant.tech/documentation](https://qdrant.tech/documentation)
+- **SCANOSS Documentation**: [https://docs.scanoss.com](https://docs.scanoss.com)
 
-1. **Create collection snapshots** from your working instance
-2. **Clean install** using new infrastructure approach
-3. **Import collections** using new REST API method
+---
 
-See `COLLECTION_BASED_SETUP.md` for detailed migration instructions.
-
-## Support
-
-- **Documentation**: See `COLLECTION_BASED_SETUP.md` for detailed setup guide
-- **Logs**: Check service and container logs for troubleshooting
-- **API Docs**: Visit https://docs.scanoss.com for API documentation
+**The Docker-first approach simplifies deployment, improves reliability, and provides a consistent environment across all deployments. Welcome to the future of SCANOSS HFH API deployment! 🚀**
