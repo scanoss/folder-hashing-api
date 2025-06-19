@@ -202,7 +202,6 @@ networks:
 - Enhanced telemetry
 
 **Production (`docker-compose.prod.yml`)**:
-- Resource limits and reservations
 - Security-optimized settings
 - Production logging levels
 - Auto-restart policies
@@ -358,34 +357,10 @@ docker stats --no-stream
 curl http://localhost:6333/collections
 
 # Check HFH API
-curl http://localhost:40061/health
+curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 
 # Check all services
 ./scripts/docker-deploy.sh prod status
-```
-
-## 🚀 Performance Tuning
-
-### Resource Optimization
-
-**Memory Settings** (`docker-compose.prod.yml`):
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 2G      # Adjust based on your needs
-    reservations:
-      memory: 1G
-```
-
-**CPU Settings**:
-```yaml
-deploy:
-  resources:
-    limits:
-      cpus: '1.0'     # Adjust based on available cores
-    reservations:
-      cpus: '0.5'
 ```
 
 ### Qdrant Optimization
@@ -496,7 +471,7 @@ make prod
 ```bash
 # Verify everything works
 ./scripts/docker-deploy.sh prod status
-curl http://localhost:40061/health
+curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 ```
 
 ## 🤝 Support

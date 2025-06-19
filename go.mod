@@ -3,18 +3,19 @@ module github.com/scanoss/folder-hashing-api
 go 1.23.4
 
 require (
+	github.com/go-playground/validator/v10 v10.26.0
 	github.com/golobby/config/v3 v3.4.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/qdrant/go-client v1.14.0
 	github.com/scanoss/go-grpc-helper v0.8.0
-	github.com/scanoss/papi v0.0.0-unpublished
+	github.com/scanoss/papi v0.7.2
 	github.com/scanoss/zap-logging-helper v0.3.2
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/metric v1.33.0
 	google.golang.org/grpc v1.69.2
 )
 
-replace github.com/scanoss/papi => ../papi
+replace github.com/scanoss/papi => ./papi
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
@@ -24,7 +25,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.26.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golobby/cast v1.3.3 // indirect
 	github.com/golobby/dotenv v1.3.2 // indirect

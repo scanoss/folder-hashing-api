@@ -1,14 +1,11 @@
 # Multi-stage build for optimized production image
-FROM golang:1.22 as build
+FROM golang:1.23.4 as build
 
 WORKDIR /app
 
-# Copy go mod files first for better caching
-COPY go.mod go.sum ./
+COPY . ./   
 RUN go mod download
 
-# Copy source code
-COPY . ./
 
 # Build the application with version information
 ARG VERSION=dev
@@ -44,7 +41,7 @@ USER scanoss
 
 # Health check for the REST API
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:40061/health || exit 1
+    CMD curl -f http://localhost:40061 || exit 1
 
 # Expose ports
 EXPOSE 40061 50061 60061

@@ -87,6 +87,44 @@ fi
 
 echo "✅ Docker prerequisites check passed"
 
+# Helper function to check required images are available
+check_required_images() {
+    echo "🐳 Checking required Docker images..."
+    
+    # Get version from package metadata or use 'latest' as fallback
+    local version="latest"
+    if [ -f "./package-info.json" ]; then
+        version=$(grep '"version"' package-info.json | cut -d'"' -f4 2>/dev/null || echo "latest")
+    fi
+    
+    local required_images=("scanoss/hfh-api:${version}" "qdrant/qdrant:latest")
+    local missing_images=()
+    
+    for image in "${required_images[@]}"; do
+        if docker image inspect "$image" >/dev/null 2>&1; then
+            echo "✅ Image available: $image"
+        else
+            echo "❌ Image missing: $image"
+            missing_images+=("$image")
+        fi
+    done
+    
+    if [ "${#missing_images[@]}" -gt 0 ]; then
+        echo ""
+        echo "❌ Missing required Docker images!"
+        echo "📥 Load images first with:"
+        echo "   ./scripts/load-images.sh"
+        echo ""
+        echo "💡 If you don't have the load-images.sh script, you may need to:"
+        echo "   1. Build the images locally, or"
+        echo "   2. Pull them from a registry"
+        echo ""
+        exit 1
+    fi
+    
+    echo "✅ All required images are available"
+}
+
 # Create necessary directories
 echo "📁 Creating necessary directories..."
 mkdir -p ./config
@@ -97,12 +135,21 @@ case "$ACTION" in
 "up")
     echo "🚀 Starting SCANOSS HFH API services..."
 
+    # Check required images are available
+    check_required_images
+    echo ""
+
     # Check for configuration file
     if [ ! -f "./config/app-config.json" ]; then
         echo "⚠️  Configuration file not found: ./config/app-config.json"
         if [ -f "./config.example.json" ]; then
             echo "📝 Copying example configuration..."
             cp "./config.example.json" "./config/app-config.json"
+            echo "✅ Configuration template copied to ./config/app-config.json"
+            echo "📝 Please review and customize the configuration before proceeding"
+        elif [ -f "./config/app-config.example.json" ]; then
+            echo "📝 Copying example configuration..."
+            cp "./config/app-config.example.json" "./config/app-config.json"
             echo "✅ Configuration template copied to ./config/app-config.json"
             echo "📝 Please review and customize the configuration before proceeding"
         else
@@ -205,7 +252,7 @@ case "$ACTION" in
     fi
 
     # Check HFH API
-    if curl -f http://localhost:40061/health >/dev/null 2>&1; then
+    if curl -f -X POST -H "Content-Type: application/json" -d '{"message":"health-check"}' http://localhost:40061/api/v2/scanning/echo >/dev/null 2>&1; then
         echo "  ✅ HFH API: Healthy"
     else
         echo "  ❌ HFH API: Not responding"

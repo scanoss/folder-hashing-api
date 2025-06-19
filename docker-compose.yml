@@ -63,7 +63,7 @@ services:
       - LOG_DYNAMIC_PORT=localhost:60061
     command: ["--json-config", "/app/config/app-config.json"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:40061/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f -X POST -H 'Content-Type: application/json' -d '{\"message\":\"health-check\"}' http://localhost:40061/api/v2/scanning/echo || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -25,7 +25,7 @@ make prod
 # or alternatively: ./scripts/docker-deploy.sh prod
 
 # 4. Verify deployment
-curl http://localhost:40061/health
+curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 ```
 
 🎉 Your SCANOSS HFH API is now running!
@@ -332,7 +332,7 @@ curl http://localhost:6333/collections
 make docker_debug_api
 
 # Check API health
-curl http://localhost:40061/health
+curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 ```
 
 ### Performance Tuning

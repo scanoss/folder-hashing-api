@@ -42,3 +42,5 @@ __debug*
 qdrant_import
 server
 hfh-cli
+
+papi/

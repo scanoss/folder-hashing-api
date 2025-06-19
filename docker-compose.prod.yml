@@ -9,15 +9,6 @@ services:
       - APP_TRACE=false
       # Disable telemetry by default in production
       - OTEL_ENABLED=false
-    # Resource limits for production
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "1.0"
-        reservations:
-          memory: 1G
-          cpus: "0.5"
     # Production restart policy
     restart: unless-stopped
     # Remove source code mount for production
@@ -33,14 +24,5 @@ services:
       # Production performance settings
       - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=64
       - QDRANT__SERVICE__GRPC_TIMEOUT_MS=120000
-    # Resource limits for production
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: "2.0"
-        reservations:
-          memory: 2G
-          cpus: "1.0"
     # Production restart policy
     restart: unless-stopped

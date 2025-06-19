@@ -144,11 +144,8 @@ mkdir -p "$package_dir"
 
 echo "📁 Creating package structure..."
 
-# Copy Docker Compose files
-echo "  - Docker Compose configuration..."
-cp docker-compose.yml "$package_dir/"
-cp docker-compose.dev.yml "$package_dir/"
-cp docker-compose.prod.yml "$package_dir/"
+# Note: Docker Compose files will be generated later with deployment-specific modifications
+# to use pre-built images instead of building from source
 
 # Create config directory and copy templates
 echo "  - Configuration templates..."
@@ -176,6 +173,34 @@ mkdir -p "$package_dir/snapshots"
 # Create images directory for Docker images
 mkdir -p "$package_dir/images"
 
+# Helper function to verify image was built correctly
+verify_built_image() {
+    local image_name="$1"
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo "❌ Failed to build image: $image_name"
+        exit 1
+    fi
+    echo "✅ Image built successfully: $image_name"
+}
+
+# Helper function to generate deployment-specific Docker Compose files
+generate_deployment_compose_files() {
+    local version="$1"
+    local package_dir="$2"
+    
+    echo "  - Generating deployment-specific Docker Compose files..."
+    
+    # Process docker-compose.yml - replace build directive with image reference
+    sed "s|build: \.|image: scanoss/hfh-api:${version}|g" \
+        docker-compose.yml > "${package_dir}/docker-compose.yml"
+    
+    # Copy production and development compose files (they override, don't build)
+    cp docker-compose.prod.yml "${package_dir}/"
+    cp docker-compose.dev.yml "${package_dir}/"
+    
+    echo "  - Docker Compose files configured for pre-built images"
+}
+
 # Build and save Docker images
 echo "🔨 Building Docker images..."
 
@@ -194,22 +219,25 @@ if [ "$platform" = "multi" ]; then
     docker buildx build --platform linux/amd64,linux/arm64 \
         --build-arg VERSION="$version" \
         -t scanoss/hfh-api:$version \
-        --output type=oci,dest="$package_dir/images/scanoss-hfh-api-${version}-multi.tar" \
+        --output type=oci,dest="$package_dir/images/scanoss-hfh-api-${version}.tar" \
         .
 
-    echo "  - Multi-architecture image saved: scanoss-hfh-api-${version}-multi.tar"
+    echo "  - Multi-architecture image saved: scanoss-hfh-api-${version}.tar"
 else
     echo "  - Building $platform image..."
 
-    # Build single-architecture image
+    # Build single-architecture image with consistent naming
     docker build --platform "$platform" \
         --build-arg VERSION="$version" \
         -t scanoss/hfh-api:$version \
         .
 
-    # Save the image
-    docker save scanoss/hfh-api:$version >"$package_dir/images/scanoss-hfh-api-${version}-${platform_name}.tar"
-    echo "  - Image saved: scanoss-hfh-api-${version}-${platform_name}.tar"
+    # Verify the image was built correctly
+    verify_built_image "scanoss/hfh-api:$version"
+
+    # Save the image with consistent naming
+    docker save scanoss/hfh-api:$version >"$package_dir/images/scanoss-hfh-api-${version}.tar"
+    echo "  - Image saved: scanoss-hfh-api-${version}.tar"
 fi
 
 # Pull and save Qdrant image for offline deployment
@@ -218,9 +246,12 @@ docker pull qdrant/qdrant:latest
 docker save qdrant/qdrant:latest >"$package_dir/images/qdrant-latest.tar"
 echo "  - Qdrant image saved: qdrant-latest.tar"
 
+# Generate deployment-specific Docker Compose files
+generate_deployment_compose_files "$version" "$package_dir"
+
 # Create image loading script
 echo "  - Creating image loading script..."
-cat >"$package_dir/scripts/load-images.sh" <<'EOF'
+cat >"$package_dir/scripts/load-images.sh" <<EOF
 #!/bin/bash
 
 ##########################################
@@ -234,25 +265,107 @@ set -e
 echo "🐳 Loading SCANOSS HFH API Docker images..."
 echo "========================================"
 
-IMAGES_DIR="$(dirname "$0")/../images"
+IMAGES_DIR="\$(dirname "\$0")/../images"
 
-if [ ! -d "$IMAGES_DIR" ]; then
-    echo "❌ Images directory not found: $IMAGES_DIR"
-    exit 1
-fi
+# Helper function to check Docker daemon
+check_docker_daemon() {
+    if ! command -v docker &>/dev/null; then
+        echo "❌ Docker is not installed"
+        echo "Please install Docker: https://docs.docker.com/engine/install/"
+        exit 1
+    fi
+
+    if ! docker info &>/dev/null; then
+        echo "❌ Docker daemon is not running"
+        echo "Please start Docker service"
+        exit 1
+    fi
+    echo "✅ Docker daemon is running"
+}
+
+# Helper function to verify tar files exist
+verify_tar_files_exist() {
+    if [ ! -d "\$IMAGES_DIR" ]; then
+        echo "❌ Images directory not found: \$IMAGES_DIR"
+        exit 1
+    fi
+
+    local tar_count=\$(find "\$IMAGES_DIR" -name "*.tar" | wc -l)
+    if [ "\$tar_count" -eq 0 ]; then
+        echo "❌ No tar files found in \$IMAGES_DIR"
+        exit 1
+    fi
+    echo "✅ Found \$tar_count image files to load"
+}
+
+# Helper function to verify image loaded correctly
+verify_image_loaded() {
+    local expected_image="\$1"
+    if ! docker image inspect "\$expected_image" >/dev/null 2>&1; then
+        echo "❌ Failed to load image: \$expected_image"
+        return 1
+    fi
+    echo "✅ Image loaded: \$expected_image"
+    return 0
+}
+
+# Helper function to check available disk space
+check_available_disk_space() {
+    local required_gb=10
+    local available_gb=\$(df . | awk 'NR==2 {printf "%.0f", \$4/1024/1024}')
+    
+    if [ "\$available_gb" -lt "\$required_gb" ]; then
+        echo "⚠️  Warning: Low disk space. Available: \${available_gb}GB, Recommended: \${required_gb}GB+"
+    else
+        echo "✅ Sufficient disk space available: \${available_gb}GB"
+    fi
+}
+
+# Pre-flight checks
+echo "🔍 Running pre-flight checks..."
+check_docker_daemon
+verify_tar_files_exist
+check_available_disk_space
+
+echo ""
+echo "📥 Loading Docker images..."
+
+# Expected images for verification
+EXPECTED_IMAGES=("scanoss/hfh-api:$version" "qdrant/qdrant:latest")
+LOADED_IMAGES=()
 
 # Load all tar files in images directory
-for image_file in "$IMAGES_DIR"/*.tar; do
-    if [ -f "$image_file" ]; then
-        echo "📥 Loading $(basename "$image_file")..."
-        if docker load < "$image_file"; then
-            echo "✅ Successfully loaded $(basename "$image_file")"
+for image_file in "\$IMAGES_DIR"/*.tar; do
+    if [ -f "\$image_file" ]; then
+        echo "📥 Loading \$(basename "\$image_file")..."
+        if docker load < "\$image_file"; then
+            echo "✅ Successfully loaded \$(basename "\$image_file")"
         else
-            echo "❌ Failed to load $(basename "$image_file")"
+            echo "❌ Failed to load \$(basename "\$image_file")"
             exit 1
         fi
     fi
 done
+
+echo ""
+echo "🔍 Verifying expected images are available..."
+
+# Verify expected images were loaded
+verification_failed=false
+for expected_image in "\${EXPECTED_IMAGES[@]}"; do
+    if verify_image_loaded "\$expected_image"; then
+        LOADED_IMAGES+=("\$expected_image")
+    else
+        verification_failed=true
+    fi
+done
+
+if [ "\$verification_failed" = true ]; then
+    echo ""
+    echo "❌ Some expected images failed to load properly"
+    echo "💡 Check the tar files and try again"
+    exit 1
+fi
 
 echo ""
 echo "🎉 All Docker images loaded successfully!"
@@ -260,9 +373,18 @@ echo ""
 echo "📋 Loaded images:"
 docker images --filter reference="scanoss/*" --filter reference="qdrant/*" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
 echo ""
-echo "Next steps:"
+echo "📊 Summary:"
+echo "  - Images loaded: \${#LOADED_IMAGES[@]}"
+echo "  - HFH API version: $version"
+echo "  - Qdrant version: latest"
+echo ""
+echo "✅ Images are ready for deployment!"
+echo ""
+echo "📋 Next steps:"
 echo "  1. Configure: cp config/app-config.example.json config/app-config.json"
-echo "  2. Deploy: ./scripts/deploy.sh"
+echo "  2. Edit config: nano config/app-config.json (or your preferred editor)"
+echo "  3. Deploy: ./scripts/deploy.sh prod"
+echo "  4. Verify: ./scripts/verify-installation.sh"
 EOF
 
 chmod +x "$package_dir/scripts/load-images.sh"
@@ -330,7 +452,7 @@ cp config/app-config.example.json config/app-config.json
 ./scripts/deploy.sh prod status
 
 # Test API endpoint
-curl http://localhost:40061/health
+curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 \`\`\`
 
 ## Service Endpoints
@@ -463,57 +585,177 @@ EOF
 
 # Create installation verification script
 echo "  - Creating verification script..."
-cat >"$package_dir/scripts/verify-installation.sh" <<'EOF'
+cat >"$package_dir/scripts/verify-installation.sh" <<EOF
 #!/bin/bash
 
 echo "🔍 SCANOSS Installation Verification"
 echo "===================================="
 
-# Check if Docker is available
-if ! command -v docker &>/dev/null; then
-    echo "❌ Docker is not installed"
-    exit 1
-fi
-
-# Check if services are running
-echo "Checking Docker services..."
-if docker-compose ps | grep -q "Up"; then
-    echo "✅ Docker services are running"
-else
-    echo "❌ Docker services are not running"
-    echo "💡 Start services with: ./scripts/deploy.sh prod"
-    exit 1
-fi
-
-# Check Qdrant
-echo "Checking Qdrant..."
-if curl -f http://localhost:6333 >/dev/null 2>&1; then
-    echo "✅ Qdrant is responding"
+# Helper function to check prerequisites
+check_prerequisites() {
+    echo "🔧 Checking prerequisites..."
     
-    # Check collections
-    collections=$(curl -s http://localhost:6333/collections | grep -o '"name":"[^"]*"' | wc -l || echo "0")
-    echo "📊 Collections: $collections"
-else
-    echo "❌ Qdrant is not responding"
-    exit 1
-fi
+    # Check if Docker is available
+    if ! command -v docker &>/dev/null; then
+        echo "❌ Docker is not installed"
+        echo "Please install Docker: https://docs.docker.com/engine/install/"
+        exit 1
+    fi
 
-# Check HFH API
-echo "Checking HFH API..."
-if curl -f http://localhost:40061/health >/dev/null 2>&1; then
-    echo "✅ HFH API is responding"
-else
-    echo "❌ HFH API is not responding"
-    exit 1
-fi
+    # Check if Docker daemon is running
+    if ! docker info &>/dev/null; then
+        echo "❌ Docker daemon is not running"
+        echo "Please start Docker service"
+        exit 1
+    fi
 
-echo ""
-echo "🎉 Installation verification successful!"
-echo ""
-echo "🌐 Service endpoints:"
-echo "  - REST API:         http://localhost:40061"
-echo "  - gRPC API:         localhost:50061"
-echo "  - Qdrant Dashboard: http://localhost:6333/dashboard"
+    # Check if Docker Compose is available
+    if ! command -v docker-compose &>/dev/null; then
+        echo "❌ Docker Compose is not installed"
+        echo "Please install Docker Compose"
+        exit 1
+    fi
+
+    echo "✅ All prerequisites are available"
+}
+
+# Helper function to check required images
+check_required_images() {
+    echo "🐳 Checking required Docker images..."
+    
+    local required_images=("scanoss/hfh-api:$version" "qdrant/qdrant:latest")
+    local missing_images=()
+    
+    for image in "\${required_images[@]}"; do
+        if docker image inspect "\$image" >/dev/null 2>&1; then
+            echo "✅ Image available: \$image"
+        else
+            echo "❌ Image missing: \$image"
+            missing_images+=("\$image")
+        fi
+    done
+    
+    if [ "\${#missing_images[@]}" -gt 0 ]; then
+        echo ""
+        echo "❌ Missing required images. Load them first:"
+        echo "💡 Run: ./scripts/load-images.sh"
+        exit 1
+    fi
+    
+    echo "✅ All required images are available"
+}
+
+# Helper function to check if services are running
+check_services_running() {
+    echo "🚀 Checking Docker services..."
+    
+    if docker-compose ps | grep -q "Up"; then
+        echo "✅ Docker services are running"
+        
+        # Show service status
+        echo ""
+        echo "📊 Service status:"
+        docker-compose ps --format "table {{.Service}}\t{{.State}}\t{{.Ports}}"
+    else
+        echo "❌ Docker services are not running"
+        echo "💡 Start services with: ./scripts/deploy.sh prod"
+        exit 1
+    fi
+}
+
+# Helper function to check service health
+check_service_health() {
+    echo "🏥 Checking service health..."
+    
+    # Check Qdrant
+    echo "Checking Qdrant..."
+    max_attempts=30
+    attempt=0
+    
+    while [ \$attempt -lt \$max_attempts ]; do
+        if curl -f http://localhost:6333 >/dev/null 2>&1; then
+            echo "✅ Qdrant is responding"
+            
+            # Check collections
+            collections=\$(curl -s http://localhost:6333/collections | grep -o '"name":"[^"]*"' | wc -l 2>/dev/null || echo "0")
+            echo "📊 Collections: \$collections"
+            break
+        else
+            attempt=\$((attempt + 1))
+            if [ \$attempt -lt \$max_attempts ]; then
+                echo "⏳ Waiting for Qdrant... (attempt \$attempt/\$max_attempts)"
+                sleep 2
+            else
+                echo "❌ Qdrant is not responding after \$max_attempts attempts"
+                echo "💡 Check logs: docker-compose logs qdrant"
+                exit 1
+            fi
+        fi
+    done
+
+    # Check HFH API
+    echo "Checking HFH API..."
+    attempt=0
+    
+    while [ \$attempt -lt \$max_attempts ]; do
+        if curl -f -X POST -H "Content-Type: application/json" -d '{"message":"health-check"}' http://localhost:40061/api/v2/scanning/echo >/dev/null 2>&1; then
+            echo "✅ HFH API is responding"
+
+            # Get API version info
+            api_info=\$(curl -s -X POST -H "Content-Type: application/json" -d '{"message":"health-check"}' http://localhost:40061/api/v2/scanning/echo 2>/dev/null || echo "{}")
+            echo "📋 API Health: OK"
+            break
+        else
+            attempt=\$((attempt + 1))
+            if [ \$attempt -lt \$max_attempts ]; then
+                echo "⏳ Waiting for HFH API... (attempt \$attempt/\$max_attempts)"
+                sleep 2
+            else
+                echo "❌ HFH API is not responding after \$max_attempts attempts"
+                echo "💡 Check logs: docker-compose logs hfh-api"
+                exit 1
+            fi
+        fi
+    done
+}
+
+# Main verification flow
+main() {
+    check_prerequisites
+    echo ""
+    
+    check_required_images
+    echo ""
+    
+    check_services_running
+    echo ""
+    
+    check_service_health
+    echo ""
+    
+    echo "🎉 Installation verification successful!"
+    echo ""
+    echo "🌐 Service endpoints:"
+    echo "  - REST API:          http://localhost:40061"
+    echo "  - REST API Echo:     http://localhost:40061/api/v2/scanning/echo"
+    echo "  - gRPC API:          localhost:50061"
+    echo "  - Dynamic Logging:   localhost:60061"
+    echo "  - Qdrant API:        http://localhost:6333"
+    echo "  - Qdrant Dashboard:  http://localhost:6333/dashboard"
+    echo ""
+    echo "📋 Quick tests:"
+    echo "  curl -X POST -H 'Content-Type: application/json' -d '{\"message\":\"test\"}' http://localhost:40061/api/v2/scanning/echo"
+    echo "  curl http://localhost:6333/collections"
+    echo ""
+    echo "🔧 Management commands:"
+    echo "  ./scripts/deploy.sh prod status    # Check status"
+    echo "  ./scripts/deploy.sh prod logs      # View logs"
+    echo "  ./scripts/deploy.sh prod down      # Stop services"
+    echo "  ./scripts/deploy.sh prod up        # Start services"
+}
+
+# Run main function
+main
 EOF
 
 chmod +x "$package_dir/scripts/verify-installation.sh"
