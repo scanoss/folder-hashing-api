@@ -433,6 +433,12 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		hasher.Write([]byte(idStringToHash))
 		pointId := hasher.Sum64()
 
+		// If the PURL is on the preferred list of purls, set rank to 1
+		purl := strings.TrimSpace(record[9])
+		if rankMap[purl] {
+			rank = 1
+		}
+
 		// Common payload for all collections
 		payload := map[string]*qdrant.Value{
 			"vendor":        qdrant.NewValueString(strings.TrimSpace(record[4])),
