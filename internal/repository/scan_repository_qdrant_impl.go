@@ -2,10 +2,8 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 
@@ -47,7 +45,7 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 
 // SearchByHashes performs a search using directory, name, and content hashes
 // Uses single query with 4-branch rank-aware prefetch structure to prioritize rank 1 entries
-func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64) ([]entities.ComponentGroup, error) {
+func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
 	s.Info("Starting language-based search with content-enhanced prefetching")
 
@@ -85,7 +83,7 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert dir hash to vector: " + err.Error())
 	}
 
-	searchResp, err := r.executeRankAwareHybridQuery(ctx, collectionName, nameVector, dirsVector, contentVector)
+	searchResp, err := r.executeRankAwareHybridQuery(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("error performing rank-aware search in %s: %v", collectionName, err)
 	}
@@ -129,14 +127,14 @@ func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdra
 
 // executeRankAwareHybridQuery executes a hybrid query with rank-aware prefetch structure
 // Uses 4 branches to give content hash more weight for tie-breaking and exact match detection
-func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32) ([]*qdrant.ScoredPoint, error) {
+func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
 	// Create rank conditions
 	rank1Conditions := r.createExactRankCondition(1)
-	rank5Conditions := r.createRangeRankCondition(5)
+	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
 
 	// Create filters
 	rank1Filter := &qdrant.Filter{Must: rank1Conditions}
-	rank5Filter := &qdrant.Filter{Must: rank5Conditions}
+	rankThresholdFilter := &qdrant.Filter{Must: rankThresholdConditions}
 
 	// Build 4-branch prefetch structure for enhanced content weighting
 	// This gives content hash multiple pathways to influence scoring
@@ -159,23 +157,23 @@ func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Conte
 			Using:  qdrant.PtrOf("names"),
 			Filter: rank1Filter,
 		},
-		// Branch B: Names-first with rank <= 5 (broader discovery)
+		// Branch B: Names-first with rank <= rankThreshold (broader discovery)
 		{
 			Prefetch: []*qdrant.PrefetchQuery{
 				{
 					Query:  qdrant.NewQuery(dirsVector...),
 					Using:  qdrant.PtrOf("dirs"),
-					Filter: rank5Filter,
+					Filter: rankThresholdFilter,
 				},
 				{
 					Query:  qdrant.NewQuery(contentVector...),
 					Using:  qdrant.PtrOf("contents"),
-					Filter: rank5Filter,
+					Filter: rankThresholdFilter,
 				},
 			},
 			Query:  qdrant.NewQuery(nameVector...),
 			Using:  qdrant.PtrOf("names"),
-			Filter: rank5Filter,
+			Filter: rankThresholdFilter,
 		},
 		// Branch C: Content-first with rank 1 (exact match emphasis)
 		{
@@ -190,18 +188,18 @@ func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Conte
 			Using:  qdrant.PtrOf("contents"),
 			Filter: rank1Filter,
 		},
-		// Branch D: Content-first with rank <= 5 (content-driven tie-breaking)
+		// Branch D: Content-first with rank <= rankThreshold (content-driven tie-breaking)
 		{
 			Prefetch: []*qdrant.PrefetchQuery{
 				{
 					Query:  qdrant.NewQuery(nameVector...),
 					Using:  qdrant.PtrOf("names"),
-					Filter: rank5Filter,
+					Filter: rankThresholdFilter,
 				},
 			},
 			Query:  qdrant.NewQuery(contentVector...),
 			Using:  qdrant.PtrOf("contents"),
-			Filter: rank5Filter,
+			Filter: rankThresholdFilter,
 		},
 	}
 
@@ -212,7 +210,7 @@ func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Conte
 		Prefetch:       prefetchQueries,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         rank5Filter, // Overall filter for rank <= 5
+		Filter:         rankThresholdFilter, // Overall filter for rank <= rankThreshold
 	}
 
 	return r.client.Query(ctx, hybridQuery)
@@ -228,9 +226,9 @@ func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.Sco
 	}
 
 	// Group by component
-	componentGroups := r.groupByComponent(allResults)
+	purlGroups := r.groupByPurl(allResults)
 
-	return componentGroups, nil
+	return purlGroups, nil
 }
 
 // GetCollectionStats returns statistics for a given collection
@@ -300,9 +298,8 @@ func (r *ScanRepositoryQdrantImpl) hexSimhashToVector(hexHashString string, bits
 // convertPointToResult converts a Qdrant ScoredPoint to SearchResult
 func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoint) entities.SearchResult {
 	result := entities.SearchResult{
-		Score:    point.Score,
-		ID:       point.Id.GetNum(),
-		Metadata: make(map[string]any),
+		Score: point.Score,
+		ID:    point.Id.GetNum(),
 	}
 
 	// Extract payload fields if they exist
@@ -319,128 +316,63 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 		if val, exists := point.Payload["version"]; exists {
 			result.Version = val.GetStringValue()
 		}
-		if val, exists := point.Payload["url"]; exists {
-			result.URL = val.GetStringValue()
-		}
 		if val, exists := point.Payload["rank"]; exists {
 			result.Rank = int(val.GetIntegerValue())
-		}
-
-		// Parse language_extensions if present
-		if val, exists := point.Payload["language_extensions"]; exists {
-			// Try structured format first
-			if structVal := val.GetStructValue(); structVal != nil {
-				langExt := make(entities.LanguageExtensions)
-				for lang, countVal := range structVal.Fields {
-					if intVal := countVal.GetIntegerValue(); intVal != 0 {
-						langExt[lang] = int32(intVal)
-					}
-				}
-				if len(langExt) > 0 {
-					result.LanguageExtensions = langExt
-				}
-			} else if langExtStr := val.GetStringValue(); langExtStr != "" {
-				// Fallback to string format for backward compatibility
-				if langExt, err := r.parseLanguageExtensions(langExtStr); err == nil {
-					result.LanguageExtensions = langExt
-				}
-			}
-		}
-
-		// Store all payload for access to other fields
-		for key, value := range point.Payload {
-			switch {
-			case value.GetStringValue() != "":
-				result.Metadata[key] = value.GetStringValue()
-			case value.GetIntegerValue() != 0:
-				result.Metadata[key] = value.GetIntegerValue()
-			case value.GetDoubleValue() != 0:
-				result.Metadata[key] = value.GetDoubleValue()
-			case value.GetBoolValue():
-				result.Metadata[key] = value.GetBoolValue()
-			}
 		}
 	}
 
 	return result
 }
 
-// parseLanguageExtensions parses the stringified JSON language extensions
-func (r *ScanRepositoryQdrantImpl) parseLanguageExtensions(langExtStr string) (entities.LanguageExtensions, error) {
-	var langExt entities.LanguageExtensions
-	if err := json.Unmarshal([]byte(langExtStr), &langExt); err != nil {
-		log.Printf("Warning: failed to parse language_extensions '%s': %v", langExtStr, err)
-		return nil, err
-	}
-	return langExt, nil
-}
-
-// groupByComponent groups results by component name
-func (r *ScanRepositoryQdrantImpl) groupByComponent(results []entities.SearchResult) []entities.ComponentGroup {
+// groupByPurl groups search results by PURL
+func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) []entities.ComponentGroup {
 	if len(results) == 0 {
 		return []entities.ComponentGroup{}
 	}
 
-	groups := make(map[string]*entities.ComponentGroup)
-
-	for _, result := range results {
-		key := result.Purl
-		if key == "" {
-			key = "unknown"
+	// Sort all results by score (higher is better) then by rank (lower is better)
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score == results[j].Score {
+			return results[i].Rank < results[j].Rank
 		}
-
-		versionResult := entities.VersionResult{
-			Version:            result.Version,
-			Score:              result.Score,
-			URL:                result.URL,
-			Purl:               result.Purl,
-			LanguageExtensions: result.LanguageExtensions,
-			Metadata:           result.Metadata,
-		}
-
-		if group, exists := groups[key]; exists {
-			// Add version to existing component group
-			group.AllVersions = append(group.AllVersions, versionResult)
-			group.ResultCount++
-
-			// Update best match if this version has a better score
-			if versionResult.Score > group.BestMatch.Score {
-				group.BestMatch = versionResult
-			}
-		} else {
-			// Create new component group
-			groups[key] = &entities.ComponentGroup{
-				Component:   result.Component,
-				Vendor:      result.Vendor,
-				BestMatch:   versionResult,
-				AllVersions: []entities.VersionResult{versionResult},
-				ResultCount: 1,
-				Rank:        result.Rank,
-			}
-		}
-	}
-
-	// Convert to slice and finalize
-	var groupSlice []entities.ComponentGroup
-	for _, group := range groups {
-		// Sort versions within group by score (higher score is better)
-		sort.Slice(group.AllVersions, func(i, j int) bool {
-			return group.AllVersions[i].Score > group.AllVersions[j].Score
-		})
-
-		// Create other versions list (excluding best match)
-		for _, version := range group.AllVersions {
-			if version.Version != group.BestMatch.Version || version.Score != group.BestMatch.Score {
-				group.OtherVersions = append(group.OtherVersions, version.Version)
-			}
-		}
-
-		groupSlice = append(groupSlice, *group)
-	}
-
-	sort.Slice(groupSlice, func(i, j int) bool {
-		return groupSlice[i].BestMatch.Score > groupSlice[j].BestMatch.Score
+		return results[i].Score > results[j].Score
 	})
 
-	return groupSlice
+	// Group results by PURL
+	purlGroups := make(map[string][]entities.SearchResult)
+	var orderedPurls []string // Keep track of PURL order
+	for _, result := range results {
+		if _, exists := purlGroups[result.Purl]; !exists {
+			orderedPurls = append(orderedPurls, result.Purl)
+		}
+		purlGroups[result.Purl] = append(purlGroups[result.Purl], result)
+	}
+
+	var componentGroups []entities.ComponentGroup
+	// Process groups in the order of their first appearance (which is sorted by score)
+	for i, purl := range orderedPurls {
+		group := purlGroups[purl]
+
+		// Sort versions within the group by score (higher is better)
+		sort.Slice(group, func(i, j int) bool {
+			return group[i].Score > group[j].Score
+		})
+
+		var versions []entities.Version
+		for _, item := range group {
+			versions = append(versions, entities.Version{
+				Version: item.Version,
+				Score:   item.Score,
+			})
+		}
+
+		componentGroups = append(componentGroups, entities.ComponentGroup{
+			PURL:     purl,
+			Versions: versions,
+			Rank:     int32(group[0].Rank), // Best rank of the group
+			Order:    int32(i + 1),         // Sequential order
+		})
+	}
+
+	return componentGroups
 }

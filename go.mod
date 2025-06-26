@@ -15,7 +15,7 @@ require (
 	google.golang.org/grpc v1.69.2
 )
 
-replace github.com/scanoss/papi => ./papi
+replace github.com/scanoss/papi => ../papi
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect

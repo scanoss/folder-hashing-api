@@ -40,8 +40,9 @@ func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequ
 	nameHash := req.Root.SimHashNames
 	contentHash := req.Root.SimHashContent
 	langExt := req.Root.LangExtensions
+	rankThreshold := req.RankThreshold
 
-	componentGroups, err := s.scanRepo.SearchByHashes(ctx, dirHash, nameHash, contentHash, langExt, topK)
+	componentGroups, err := s.scanRepo.SearchByHashes(ctx, dirHash, nameHash, contentHash, langExt, topK, rankThreshold)
 	if err != nil {
 		return nil, err
 	}
