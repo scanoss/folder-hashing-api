@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -29,7 +28,7 @@ const (
 	VectorDim  = 64   // Single 64-bit hash per collection
 )
 
-var rankMap map[string]bool
+var rankMap map[string]int
 
 func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
@@ -433,10 +432,10 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		hasher.Write([]byte(idStringToHash))
 		pointId := hasher.Sum64()
 
-		// If the PURL is on the preferred list of purls, set rank to 1
+		// If the PURL is on the preferred list of purls, take that value
 		purl := strings.TrimSpace(record[9])
-		if rankMap[purl] {
-			rank = 1
+		if r, exists := rankMap[purl]; exists {
+			rank = r
 		}
 
 		// Common payload for all collections
@@ -561,7 +560,7 @@ func showCollectionStats(ctx context.Context, client *qdrant.Client, collectionN
 	log.Printf("  Segments count: %d", info.SegmentsCount)
 }
 
-func initPurlMap(filename string) (map[string]bool, error) {
+func initPurlMap(filename string) (map[string]int, error) {
 	absPath, err := filepath.Abs(filename)
 	if err != nil {
 		return nil, err
@@ -572,19 +571,17 @@ func initPurlMap(filename string) (map[string]bool, error) {
 	}
 	defer file.Close()
 
-	repoMap := make(map[string]bool)
-
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			repoMap[line] = true
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	data, err := os.ReadFile(filename)
+	if err != nil {
 		return nil, err
 	}
 
-	return repoMap, nil
+	var result map[string]int
+
+	err = json.Unmarshal(data, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
