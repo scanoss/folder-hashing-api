@@ -96,6 +96,8 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 
 		protoResult.Components = append(protoResult.Components, &scanningv2.HFHResponse_Component{
 			Purl:     group.PURL,
+			Name:     group.Name,
+			Vendor:   group.Vendor,
 			Versions: versions,
 			Rank:     group.Rank,
 			Order:    group.Order,

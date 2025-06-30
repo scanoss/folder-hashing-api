@@ -368,6 +368,8 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 
 		componentGroups = append(componentGroups, entities.ComponentGroup{
 			PURL:     purl,
+			Name:     group[0].Component,
+			Vendor:   group[0].Vendor,
 			Versions: versions,
 			Rank:     int32(group[0].Rank), // Best rank of the group
 			Order:    int32(i + 1),         // Sequential order

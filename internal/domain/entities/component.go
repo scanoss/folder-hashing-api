@@ -3,6 +3,8 @@ package entities
 // ComponentGroup represents a grouped component with versions
 type ComponentGroup struct {
 	PURL     string    `json:"purl"`
+	Name     string    `json:"name"`
+	Vendor   string    `json:"vendor"`
 	Versions []Version `json:"versions"`
 	Rank     int32     `json:"rank"`
 	Order    int32     `json:"order"`
