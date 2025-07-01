@@ -16,6 +16,7 @@ services:
       - ./config:/app/config:ro # Config files
       - ./snapshots:/app/snapshots # For import/export operations
       - hfh_logs:/var/log/scanoss # Persistent logs
+      - ./config/certs:/app/certs:ro # TLS certificates
 
   qdrant:
     environment:

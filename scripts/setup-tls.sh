@@ -65,9 +65,14 @@ echo "🔒 Setting secure permissions..."
 # Make certificate readable by all, key readable only by owner
 # The container runs as UID 1000 (scanoss user)
 chmod 644 "$CERT_FILE"
-chmod 600 "$KEY_FILE"
+chmod 640 "$KEY_FILE"
 
-echo "✅ Permissions set successfully"
+# Change ownership to UID 1000 (scanoss user in container)
+# This ensures the container user can read the files
+echo "👤 Setting ownership for container user (UID 1000)..."
+chown 1000:1000 "$CERT_FILE" "$KEY_FILE"
+
+echo "✅ Permissions and ownership set successfully"
 
 # Create TLS-enabled config if it doesn't exist
 TLS_CONFIG="./config/app-config-tls.json"
