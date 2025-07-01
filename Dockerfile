@@ -27,21 +27,27 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Create necessary directories
-RUN mkdir -p /app/config /app/snapshots /var/log/scanoss
+RUN mkdir -p /app/config /app/snapshots /app/certs /var/log/scanoss
 
 # Copy the binary from build stage
 COPY --from=build /app/scanoss-hfh-api /app/scanoss-hfh-api
 
+# Copy healthcheck script
+COPY scripts/docker-healthcheck.sh /app/healthcheck.sh
+RUN chmod +x /app/healthcheck.sh
+
 # Create non-root user for security
 RUN groupadd -r scanoss && useradd -r -g scanoss scanoss
 RUN chown -R scanoss:scanoss /app /var/log/scanoss
+# Set specific permissions for certs directory
+RUN chmod 755 /app/certs
 
 # Switch to non-root user
 USER scanoss
 
-# Health check for the REST API
+# Health check for the REST API (supports both HTTP and HTTPS)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:40061 || exit 1
+    CMD /app/healthcheck.sh
 
 # Expose ports
 EXPOSE 40061 50061 60061

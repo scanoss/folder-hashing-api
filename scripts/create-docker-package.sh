@@ -167,8 +167,8 @@ cp scripts/docker-deploy.sh "$package_dir/scripts/deploy.sh"
 cp scripts/create-collection-snapshots.sh "$package_dir/scripts/"
 cp scripts/import-collections.sh "$package_dir/scripts/"
 
-# Create snapshots directory
-mkdir -p "$package_dir/snapshots"
+# Copy TLS setup script
+cp scripts/setup-tls.sh "$package_dir/scripts/"
 
 # Create images directory for Docker images
 mkdir -p "$package_dir/images"
@@ -187,17 +187,17 @@ verify_built_image() {
 generate_deployment_compose_files() {
     local version="$1"
     local package_dir="$2"
-    
+
     echo "  - Generating deployment-specific Docker Compose files..."
-    
+
     # Process docker-compose.yml - replace build directive with image reference
     sed "s|build: \.|image: scanoss/hfh-api:${version}|g" \
-        docker-compose.yml > "${package_dir}/docker-compose.yml"
-    
+        docker-compose.yml >"${package_dir}/docker-compose.yml"
+
     # Copy production and development compose files (they override, don't build)
     cp docker-compose.prod.yml "${package_dir}/"
     cp docker-compose.dev.yml "${package_dir}/"
-    
+
     echo "  - Docker Compose files configured for pre-built images"
 }
 

@@ -20,6 +20,7 @@ The SCANOSS HFH API now uses a modern containerized approach:
 - **`create-docker-package.sh`** - Creates Docker-based distribution packages
 - **`create-collection-snapshots.sh`** - Exports collections for backup/distribution
 - **`import-collections.sh`** - Imports collection snapshots into Qdrant
+- **`setup-tls.sh`** - Configures TLS/SSL encryption for secure communications
 
 ### Legacy Scripts (Removed)
 
@@ -157,6 +158,84 @@ Imports collection snapshots into Qdrant:
 - ✅ Progress monitoring and health checks
 - ✅ Automatic retry logic for failed imports
 
+### setup-tls.sh
+
+Configures TLS/SSL encryption for secure communications:
+
+```bash
+./scripts/setup-tls.sh <cert-file> <key-file>
+
+# Example:
+./scripts/setup-tls.sh /path/to/server.crt /path/to/server.key
+```
+
+**Features:**
+- ✅ Automatic certificate directory creation
+- ✅ Secure file permissions (600 for private key)
+- ✅ TLS configuration template generation
+- ✅ Health check auto-detection of HTTPS
+
+## 🔐 TLS/SSL Configuration
+
+### Quick TLS Setup
+
+1. **Prepare your certificate files**:
+   ```bash
+   # You need:
+   # - A certificate file (e.g., server.crt)
+   # - A private key file (e.g., server.key)
+   ```
+
+2. **Run the TLS setup script**:
+   ```bash
+   ./scripts/setup-tls.sh /path/to/server.crt /path/to/server.key
+   ```
+
+3. **Use the TLS configuration**:
+   ```bash
+   cp ./config/app-config-tls.json ./config/app-config.json
+   ```
+
+4. **Deploy with TLS enabled**:
+   ```bash
+   ./scripts/docker-deploy.sh prod
+   ```
+
+### TLS Configuration Details
+
+Add the TLS section to your `app-config.json`:
+
+```json
+{
+  "TLS": {
+    "CertFile": "/app/certs/server.crt",
+    "KeyFile": "/app/certs/server.key",
+    "CN": "your-domain.com"
+  }
+}
+```
+
+Or use environment variables:
+- `COMP_TLS_CERT`: Path to certificate file
+- `COMP_TLS_KEY`: Path to private key file
+- `COMP_TLS_CN`: Common Name (optional)
+
+### Testing TLS
+
+```bash
+# Test REST API over HTTPS
+curl -v https://localhost:40061/api/v2/scanning/echo \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"message":"TLS test"}'
+
+# For self-signed certificates
+curl -vk https://localhost:40061/api/v2/scanning/echo \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"message":"TLS test"}'
+```
+
+For more detailed TLS configuration and troubleshooting, see [docs/TLS-SETUP.md](../docs/TLS-SETUP.md).
+
 ## 🏗️ Architecture Overview
 
 ### Docker Compose Structure
@@ -211,7 +290,11 @@ networks:
 ```
 config/
 ├── app-config.example.json    # JSON configuration template
-└── .env.example              # Environment variables template
+├── app-config-tls.json       # TLS-enabled config (created by setup-tls.sh)
+├── .env.example              # Environment variables template
+└── certs/                    # TLS certificates directory (created by setup-tls.sh)
+    ├── server.crt           # TLS certificate
+    └── server.key           # Private key
 ```
 
 ## 📦 Distribution Workflow
@@ -431,12 +514,14 @@ Enable telemetry in configuration for metrics:
 - **Isolated networks**: Services communicate via dedicated Docker network
 - **Port exposure**: Only necessary ports exposed to host
 - **Internal communication**: Services use container names for resolution
+- **TLS encryption**: Optional TLS/SSL support for all endpoints
 
 ### Data Security
 
 - **Volume encryption**: Consider encrypting Docker volumes for sensitive data
 - **Access controls**: Use proper file permissions on host-mounted volumes
 - **Network policies**: Implement firewall rules for exposed ports
+- **Certificate security**: Private keys stored with 600 permissions
 
 ## 💡 Migration from Legacy Deployment
 
