@@ -36,8 +36,9 @@ COPY --from=build /app/scanoss-hfh-api /app/scanoss-hfh-api
 COPY scripts/docker-healthcheck.sh /app/healthcheck.sh
 RUN chmod +x /app/healthcheck.sh
 
-# Create non-root user for security
-RUN groupadd -r scanoss && useradd -r -g scanoss scanoss
+# Create non-root user for security with explicit UID/GID
+# Using UID/GID 1000 to match the setup-tls.sh script expectations
+RUN groupadd -r -g 1000 scanoss && useradd -r -u 1000 -g scanoss scanoss
 RUN chown -R scanoss:scanoss /app /var/log/scanoss
 # Set specific permissions for certs directory
 RUN chmod 755 /app/certs
