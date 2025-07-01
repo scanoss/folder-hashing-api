@@ -46,6 +46,7 @@ services:
       - ./config:/app/config:ro # Config files
       - ./snapshots:/app/snapshots # For import/export operations
       - hfh_logs:/var/log/scanoss # Persistent logs
+      - ./config/certs:/app/certs:ro # TLS certificates
     environment:
       # Point to Qdrant container
       - QDRANT_HOST=qdrant
@@ -61,9 +62,14 @@ services:
       # Logging
       - LOG_DYNAMIC=true
       - LOG_DYNAMIC_PORT=localhost:60061
+      # TLS configuration
+      - COMP_TLS_CERT=${COMP_TLS_CERT-/app/certs/cert.pem}
+      - COMP_TLS_KEY=${COMP_TLS_KEY-/app/certs/key.pem}
+      # Port for healthcheck
+      - REST_PORT=40061
     command: ["--json-config", "/app/config/app-config.json"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f -X POST -H 'Content-Type: application/json' -d '{\"message\":\"health-check\"}' http://localhost:40061/api/v2/scanning/echo || exit 1"]
+      test: ["CMD", "/app/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3

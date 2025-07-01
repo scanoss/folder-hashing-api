@@ -90,16 +90,16 @@ echo "✅ Docker prerequisites check passed"
 # Helper function to check required images are available
 check_required_images() {
     echo "🐳 Checking required Docker images..."
-    
+
     # Get version from package metadata or use 'latest' as fallback
     local version="latest"
     if [ -f "./package-info.json" ]; then
         version=$(grep '"version"' package-info.json | cut -d'"' -f4 2>/dev/null || echo "latest")
     fi
-    
+
     local required_images=("scanoss/hfh-api:${version}" "qdrant/qdrant:latest")
     local missing_images=()
-    
+
     for image in "${required_images[@]}"; do
         if docker image inspect "$image" >/dev/null 2>&1; then
             echo "✅ Image available: $image"
@@ -108,7 +108,7 @@ check_required_images() {
             missing_images+=("$image")
         fi
     done
-    
+
     if [ "${#missing_images[@]}" -gt 0 ]; then
         echo ""
         echo "❌ Missing required Docker images!"
@@ -121,13 +121,14 @@ check_required_images() {
         echo ""
         exit 1
     fi
-    
+
     echo "✅ All required images are available"
 }
 
 # Create necessary directories
 echo "📁 Creating necessary directories..."
 mkdir -p ./config
+mkdir -p ./config/certs
 mkdir -p ./snapshots
 
 # Perform the requested action
@@ -210,13 +211,30 @@ case "$ACTION" in
     echo ""
     echo "🎉 SCANOSS HFH API deployment complete!"
     echo ""
+
+    # Check if TLS is configured
+    TLS_CONFIGURED="no"
+    if [ -f "./config/certs/cert.pem" ] && [ -f "./config/certs/key.pem" ]; then
+        TLS_CONFIGURED="yes"
+    fi
+
     echo "🌐 Service endpoints:"
-    echo "  - REST API:        http://localhost:40061"
-    echo "  - gRPC API:        localhost:50061"
+    if [ "$TLS_CONFIGURED" = "yes" ]; then
+        echo "  - REST API:        https://localhost:40061 (TLS enabled)"
+        echo "  - gRPC API:        localhost:50061 (TLS enabled)"
+    else
+        echo "  - REST API:        http://localhost:40061"
+        echo "  - gRPC API:        localhost:50061"
+    fi
     echo "  - Dynamic Logging: localhost:60061"
     echo "  - Qdrant API:      http://localhost:6333"
     echo "  - Qdrant Dashboard: http://localhost:6333/dashboard"
     echo ""
+    if [ "$TLS_CONFIGURED" = "no" ]; then
+        echo "🔐 TLS Setup (optional):"
+        echo "  - Run: ./scripts/setup-tls.sh /path/to/cert.crt /path/to/cert.key"
+        echo ""
+    fi
     echo "📋 Next steps:"
     echo "  - Import collections: ./scripts/import-collections.sh /path/to/snapshots/"
     echo "  - View logs: $0 $ENVIRONMENT logs"
