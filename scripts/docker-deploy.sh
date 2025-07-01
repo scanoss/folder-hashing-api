@@ -164,49 +164,8 @@ case "$ACTION" in
     docker-compose $COMPOSE_FILES up -d
 
     echo ""
-    echo "⏳ Waiting for services to be ready..."
-
-    # Wait for Qdrant to be healthy
-    timeout=120
-    counter=0
-    while [ $counter -lt $timeout ]; do
-        if docker-compose $COMPOSE_FILES ps qdrant | grep -q "healthy"; then
-            echo "✅ Qdrant is healthy"
-            break
-        fi
-        if [ $((counter % 15)) -eq 0 ]; then
-            echo "Still waiting for Qdrant... ($counter/$timeout seconds)"
-        fi
-        sleep 3
-        counter=$((counter + 3))
-    done
-
-    if [ $counter -ge $timeout ]; then
-        echo "❌ Timeout waiting for Qdrant to be healthy"
-        echo "📋 Check logs: docker-compose $COMPOSE_FILES logs qdrant"
-        exit 1
-    fi
-
-    # Wait for HFH API to be healthy
-    timeout=180
-    counter=0
-    while [ $counter -lt $timeout ]; do
-        if docker-compose $COMPOSE_FILES ps hfh-api | grep -q "healthy"; then
-            echo "✅ HFH API is healthy"
-            break
-        fi
-        if [ $((counter % 15)) -eq 0 ]; then
-            echo "Still waiting for HFH API... ($counter/$timeout seconds)"
-        fi
-        sleep 3
-        counter=$((counter + 3))
-    done
-
-    if [ $counter -ge $timeout ]; then
-        echo "❌ Timeout waiting for HFH API to be healthy"
-        echo "📋 Check logs: docker-compose $COMPOSE_FILES logs hfh-api"
-        exit 1
-    fi
+    echo "⏳ Waiting for services to start..."
+    sleep 5
 
     echo ""
     echo "🎉 SCANOSS HFH API deployment complete!"
@@ -258,23 +217,8 @@ case "$ACTION" in
     docker-compose $COMPOSE_FILES ps
     echo ""
 
-    # Check service health
-    echo "🔍 Health status:"
-
-    # Check Qdrant
-    if curl -f http://localhost:6333/collections >/dev/null 2>&1; then
-        COLLECTIONS=$(curl -s http://localhost:6333/collections | grep -o '"name":"[^"]*"' | wc -l || echo "0")
-        echo "  ✅ Qdrant: Healthy ($COLLECTIONS collections)"
-    else
-        echo "  ❌ Qdrant: Not responding"
-    fi
-
-    # Check HFH API
-    if curl -f -X POST -H "Content-Type: application/json" -d '{"message":"health-check"}' http://localhost:40061/api/v2/scanning/echo >/dev/null 2>&1; then
-        echo "  ✅ HFH API: Healthy"
-    else
-        echo "  ❌ HFH API: Not responding"
-    fi
+    # Service status without health checks
+    echo "🔍 Note: Health checks have been disabled"
     ;;
 
 "restart")

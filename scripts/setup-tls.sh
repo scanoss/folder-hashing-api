@@ -56,7 +56,7 @@ if [ ! -r "$1" ] || [ ! -r "$2" ]; then
     echo "   Try running with sudo: sudo $0 $@"
     exit 1
   fi
-fi"
+fi
 
 # Create certificate directory
 echo "📁 Creating certificate directory..."

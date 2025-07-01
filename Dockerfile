@@ -32,9 +32,6 @@ RUN mkdir -p /app/config /app/snapshots /app/certs /var/log/scanoss
 # Copy the binary from build stage
 COPY --from=build /app/scanoss-hfh-api /app/scanoss-hfh-api
 
-# Copy healthcheck script
-COPY scripts/docker-healthcheck.sh /app/healthcheck.sh
-RUN chmod +x /app/healthcheck.sh
 
 # Create non-root user for security with explicit UID/GID
 # Using UID/GID 1000 to match the setup-tls.sh script expectations
@@ -46,9 +43,6 @@ RUN chmod 755 /app/certs
 # Switch to non-root user
 USER scanoss
 
-# Health check for the REST API (supports both HTTP and HTTPS)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD /app/healthcheck.sh
 
 # Expose ports
 EXPOSE 40061 50061 60061

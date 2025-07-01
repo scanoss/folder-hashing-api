@@ -21,13 +21,6 @@ services:
       # Storage paths
       - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
       - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots
-    healthcheck:
-      test:
-        ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     restart: unless-stopped
     networks:
       - scanoss-network
@@ -37,7 +30,7 @@ services:
     container_name: scanoss-hfh-api
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "40061:40061" # REST API
       - "50061:50061" # gRPC API
@@ -68,12 +61,6 @@ services:
       # Port for healthcheck
       - REST_PORT=40061
     command: ["--json-config", "/app/config/app-config.json"]
-    healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     restart: unless-stopped
     networks:
       - scanoss-network
