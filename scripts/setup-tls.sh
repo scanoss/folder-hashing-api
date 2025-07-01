@@ -12,29 +12,29 @@
 set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "$0 [-help] <cert-file> <key-file>"
-    echo "   Set up TLS certificates for SCANOSS HFH API"
-    echo ""
-    echo "Arguments:"
-    echo "   <cert-file>   Path to TLS certificate file (required)"
-    echo "   <key-file>    Path to TLS private key file (required)"
-    echo ""
-    echo "Examples:"
-    echo "   $0 /path/to/server.crt /path/to/server.key"
-    echo ""
-    exit 1
+  echo "$0 [-help] <cert-file> <key-file>"
+  echo "   Set up TLS certificates for SCANOSS HFH API"
+  echo ""
+  echo "Arguments:"
+  echo "   <cert-file>   Path to TLS certificate file (required)"
+  echo "   <key-file>    Path to TLS private key file (required)"
+  echo ""
+  echo "Examples:"
+  echo "   $0 /path/to/cert.pem /path/to/key.pem"
+  echo ""
+  exit 1
 fi
 
 if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "❌ Error: Certificate and key files are required"
-    echo "Usage: $0 <cert-file> <key-file>"
-    exit 1
+  echo "❌ Error: Certificate and key files are required"
+  echo "Usage: $0 <cert-file> <key-file>"
+  exit 1
 fi
 
 # Certificate directory (mounted into Docker container)
 CERT_DIR="./config/certs"
-CERT_FILE="$CERT_DIR/server.crt"
-KEY_FILE="$CERT_DIR/server.key"
+CERT_FILE="$CERT_DIR/cert.pem"
+KEY_FILE="$CERT_DIR/key.pem"
 
 echo "🔐 SCANOSS HFH API - TLS Certificate Setup"
 echo "=========================================="
@@ -45,13 +45,13 @@ mkdir -p "$CERT_DIR"
 
 # Copy provided certificate files
 if [ ! -f "$1" ]; then
-    echo "❌ Certificate file not found: $1"
-    exit 1
+  echo "❌ Certificate file not found: $1"
+  exit 1
 fi
 
 if [ ! -f "$2" ]; then
-    echo "❌ Key file not found: $2"
-    exit 1
+  echo "❌ Key file not found: $2"
+  exit 1
 fi
 
 echo "📋 Copying provided certificate files..."
@@ -72,8 +72,8 @@ echo "✅ Permissions set successfully"
 # Create TLS-enabled config if it doesn't exist
 TLS_CONFIG="./config/app-config-tls.json"
 if [ ! -f "$TLS_CONFIG" ]; then
-    echo "📝 Creating TLS-enabled configuration template..."
-    cat > "$TLS_CONFIG" <<EOF
+  echo "📝 Creating TLS-enabled configuration template..."
+  cat >"$TLS_CONFIG" <<EOF
 {
   "App": {
     "Name": "SCANOSS HFH Server",
@@ -92,8 +92,8 @@ if [ ! -f "$TLS_CONFIG" ]; then
     "OltpExporter": "0.0.0.0:4317"
   },
   "TLS": {
-    "CertFile": "/app/certs/server.crt",
-    "KeyFile": "/app/certs/server.key",
+    "CertFile": "/app/certs/cert.pem",
+    "KeyFile": "/app/certs/key.pem",
     "CN": "localhost"
   },
   "Hfh": {
@@ -102,7 +102,7 @@ if [ ! -f "$TLS_CONFIG" ]; then
   }
 }
 EOF
-    echo "✅ TLS configuration template created: $TLS_CONFIG"
+  echo "✅ TLS configuration template created: $TLS_CONFIG"
 fi
 
 echo ""

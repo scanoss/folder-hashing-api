@@ -63,8 +63,8 @@ services:
       - LOG_DYNAMIC=true
       - LOG_DYNAMIC_PORT=localhost:60061
       # TLS configuration
-      - COMP_TLS_CERT=/app/certs/server.crt
-      - COMP_TLS_KEY=/app/certs/server.key
+      - COMP_TLS_CERT=${COMP_TLS_CERT-/app/certs/cert.pem}
+      - COMP_TLS_KEY=${COMP_TLS_KEY-/app/certs/key.pem}
       # Port for healthcheck
       - REST_PORT=40061
     command: ["--json-config", "/app/config/app-config.json"]

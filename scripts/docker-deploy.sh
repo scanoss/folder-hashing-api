@@ -90,16 +90,16 @@ echo "✅ Docker prerequisites check passed"
 # Helper function to check required images are available
 check_required_images() {
     echo "🐳 Checking required Docker images..."
-    
+
     # Get version from package metadata or use 'latest' as fallback
     local version="latest"
     if [ -f "./package-info.json" ]; then
         version=$(grep '"version"' package-info.json | cut -d'"' -f4 2>/dev/null || echo "latest")
     fi
-    
+
     local required_images=("scanoss/hfh-api:${version}" "qdrant/qdrant:latest")
     local missing_images=()
-    
+
     for image in "${required_images[@]}"; do
         if docker image inspect "$image" >/dev/null 2>&1; then
             echo "✅ Image available: $image"
@@ -108,7 +108,7 @@ check_required_images() {
             missing_images+=("$image")
         fi
     done
-    
+
     if [ "${#missing_images[@]}" -gt 0 ]; then
         echo ""
         echo "❌ Missing required Docker images!"
@@ -121,7 +121,7 @@ check_required_images() {
         echo ""
         exit 1
     fi
-    
+
     echo "✅ All required images are available"
 }
 
@@ -211,13 +211,13 @@ case "$ACTION" in
     echo ""
     echo "🎉 SCANOSS HFH API deployment complete!"
     echo ""
-    
+
     # Check if TLS is configured
     TLS_CONFIGURED="no"
-    if [ -f "./config/certs/server.crt" ] && [ -f "./config/certs/server.key" ]; then
+    if [ -f "./config/certs/cert.pem" ] && [ -f "./config/certs/key.pem" ]; then
         TLS_CONFIGURED="yes"
     fi
-    
+
     echo "🌐 Service endpoints:"
     if [ "$TLS_CONFIGURED" = "yes" ]; then
         echo "  - REST API:        https://localhost:40061 (TLS enabled)"

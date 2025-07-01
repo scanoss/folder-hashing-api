@@ -166,7 +166,7 @@ Configures TLS/SSL encryption for secure communications:
 ./scripts/setup-tls.sh <cert-file> <key-file>
 
 # Example:
-./scripts/setup-tls.sh /path/to/server.crt /path/to/server.key
+./scripts/setup-tls.sh /path/to/cert.pem /path/to/key.pem
 ```
 
 **Features:**
@@ -182,13 +182,13 @@ Configures TLS/SSL encryption for secure communications:
 1. **Prepare your certificate files**:
    ```bash
    # You need:
-   # - A certificate file (e.g., server.crt)
-   # - A private key file (e.g., server.key)
+   # - A certificate file (e.g., cert.pem)
+   # - A private key file (e.g., key.pem)
    ```
 
 2. **Run the TLS setup script**:
    ```bash
-   ./scripts/setup-tls.sh /path/to/server.crt /path/to/server.key
+   ./scripts/setup-tls.sh /path/to/cert.pem /path/to/key.pem
    ```
 
 3. **Use the TLS configuration**:
@@ -208,8 +208,8 @@ Add the TLS section to your `app-config.json`:
 ```json
 {
   "TLS": {
-    "CertFile": "/app/certs/server.crt",
-    "KeyFile": "/app/certs/server.key",
+    "CertFile": "/app/certs/cert.pem",
+    "KeyFile": "/app/certs/key.pem",
     "CN": "your-domain.com"
   }
 }
@@ -293,8 +293,8 @@ config/
 ├── app-config-tls.json       # TLS-enabled config (created by setup-tls.sh)
 ├── .env.example              # Environment variables template
 └── certs/                    # TLS certificates directory (created by setup-tls.sh)
-    ├── server.crt           # TLS certificate
-    └── server.key           # Private key
+    ├── cert.pem           # TLS certificate
+    └── key.pem           # Private key
 ```
 
 ## 📦 Distribution Workflow
