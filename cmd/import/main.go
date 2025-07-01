@@ -426,7 +426,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		url := strings.TrimSpace(record[10])
 
 		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s", vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
-		categoryToRank := map[string]int{"github_popular": 3, "github": 5, "common": 6, "fork": 9}
+		categoryToRank := map[string]int{"github_popular": 3, "github": 5, "common": 6, "forks": 9}
 		rank := categoryToRank[categoryStr]
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash))
