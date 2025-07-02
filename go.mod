@@ -8,7 +8,7 @@ require (
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/golobby/config/v3 v3.4.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
-	github.com/qdrant/go-client v1.14.0
+	github.com/qdrant/go-client v1.14.1
 	github.com/scanoss/go-grpc-helper v0.8.0
 	github.com/scanoss/papi v0.11.0
 	github.com/scanoss/zap-logging-helper v0.3.2
