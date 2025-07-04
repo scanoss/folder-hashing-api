@@ -98,6 +98,9 @@ check_required_images() {
 
     # Get version from package metadata or use 'latest' as fallback
     local version="latest"
+    if [ -f "./package-info.json" ]; then
+        version=$(grep '"version"' package-info.json | cut -d'"' -f4 2>/dev/null || echo "latest")
+    fi
     local required_images=()
     if [[ "$SERVICE" == "api" ]] || [[ "$SERVICE" == "all" ]]; then
         required_images+=("scanoss/hfh-api:${version}")

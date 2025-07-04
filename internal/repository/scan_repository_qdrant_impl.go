@@ -129,35 +129,11 @@ func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdra
 // Uses 4 branches to give content hash more weight for tie-breaking and exact match detection
 func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
 	// Create rank conditions
-	rank1Conditions := r.createExactRankCondition(1)
 	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
-
-	// Create filters
-	rank1Filter := &qdrant.Filter{Must: rank1Conditions}
 	rankThresholdFilter := &qdrant.Filter{Must: rankThresholdConditions}
 
-	// Build 4-branch prefetch structure for enhanced content weighting
-	// This gives content hash multiple pathways to influence scoring
 	prefetchQueries := []*qdrant.PrefetchQuery{
-		// Branch A: Names-first with rank 1 priority (discovery)
-		{
-			Prefetch: []*qdrant.PrefetchQuery{
-				{
-					Query:  qdrant.NewQuery(dirsVector...),
-					Using:  qdrant.PtrOf("dirs"),
-					Filter: rank1Filter,
-				},
-				{
-					Query:  qdrant.NewQuery(contentVector...),
-					Using:  qdrant.PtrOf("contents"),
-					Filter: rank1Filter,
-				},
-			},
-			Query:  qdrant.NewQuery(nameVector...),
-			Using:  qdrant.PtrOf("names"),
-			Filter: rank1Filter,
-		},
-		// Branch B: Names-first with rank <= rankThreshold (broader discovery)
+		// Branch B: Names-first with rank <= rankThreshold (discovery)
 		{
 			Prefetch: []*qdrant.PrefetchQuery{
 				{
@@ -175,20 +151,6 @@ func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Conte
 			Using:  qdrant.PtrOf("names"),
 			Filter: rankThresholdFilter,
 		},
-		// Branch C: Content-first with rank 1 (exact match emphasis)
-		{
-			Prefetch: []*qdrant.PrefetchQuery{
-				{
-					Query:  qdrant.NewQuery(nameVector...),
-					Using:  qdrant.PtrOf("names"),
-					Filter: rank1Filter,
-				},
-			},
-			Query:  qdrant.NewQuery(contentVector...),
-			Using:  qdrant.PtrOf("contents"),
-			Filter: rank1Filter,
-		},
-		// Branch D: Content-first with rank <= rankThreshold (content-driven tie-breaking)
 		{
 			Prefetch: []*qdrant.PrefetchQuery{
 				{
@@ -221,6 +183,9 @@ func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.Sco
 	var allResults []entities.SearchResult
 
 	for _, point := range searchResp {
+		if point.Score < 0.5 {
+			continue
+		}
 		result := r.convertPointToResult(point)
 		allResults = append(allResults, result)
 	}

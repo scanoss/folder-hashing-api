@@ -780,6 +780,45 @@ EOF
 
 chmod +x "$package_dir/scripts/verify-installation.sh"
 
+# Create package metadata
+echo "  - Creating package metadata..."
+cat >"$package_dir/package-info.json" <<EOF
+{
+  "name": "scanoss-hfh-api",
+  "version": "$version",
+  "platform": "$platform",
+  "build": $build,
+  "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "package_type": "docker_containers",
+  "components": {
+    "hfh_api": "SCANOSS Folder Hashing API Docker Image",
+    "qdrant": "Qdrant Vector Database Docker Image",
+    "compose": "Docker Compose Configuration Files",
+    "scripts": "Deployment and Management Scripts",
+  },
+  "requirements": {
+    "docker": "Docker Engine 20.10+",
+    "docker_compose": "Docker Compose v2.0+",
+    "platforms": "linux/amd64, linux/arm64"
+  },
+  "deployment_workflow": [
+    "Extract package",
+    "Load Docker images with load-images.sh",
+    "Configure service using config templates",
+    "Deploy with deploy.sh script",
+    "Import data using import-collections.sh (optional)",
+    "Verify with verify-installation.sh"
+  ],
+  "endpoints": {
+    "rest_api": "http://localhost:40061",
+    "grpc_api": "localhost:50061",
+    "dynamic_logging": "localhost:60061",
+    "qdrant_api": "http://localhost:6333",
+    "qdrant_dashboard": "http://localhost:6333/dashboard"
+  }
+}
+EOF
+
 # Calculate package sizes
 echo "📊 Calculating package sizes..."
 total_size=$(du -sh "$package_dir" | cut -f1)
