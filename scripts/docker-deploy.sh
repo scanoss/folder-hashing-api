@@ -4,60 +4,65 @@
 #
 # SCANOSS Folder Hashing API - Docker Deployment Script
 #
-# This script deploys the SCANOSS HFH API and Qdrant using Docker Compose
-# Supports development and production environments
+# This script deploys the SCANOSS HFH API and optionally Qdrant using Docker Compose
+# Supports independent service deployment
 #
 ################################################################
 
 set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "-help" ]; then
-    echo "$0 [-help] [environment] [action]"
-    echo "   Deploy SCANOSS Folder Hashing API using Docker Compose"
+    echo "$0 [-help] [service] [action]"
+    echo "   Deploy SCANOSS Folder Hashing API services using Docker Compose"
     echo ""
     echo "Arguments:"
-    echo "   [environment]   Environment to deploy: dev, prod (default: prod)"
+    echo "   [service]       Service to deploy: api, qdrant, all (default: api)"
     echo "   [action]        Action to perform: up, down, logs, status (default: up)"
     echo ""
     echo "Examples:"
-    echo "   $0                    # Deploy production environment"
-    echo "   $0 dev                # Deploy development environment"
-    echo "   $0 prod up            # Deploy production environment"
-    echo "   $0 dev down           # Stop development environment"
-    echo "   $0 prod logs          # View production logs"
-    echo "   $0 prod status        # Check production status"
+    echo "   $0                    # Deploy API service only"
+    echo "   $0 qdrant             # Deploy Qdrant only"
+    echo "   $0 all                # Deploy both API and Qdrant"
+    echo "   $0 api down           # Stop API service"
+    echo "   $0 qdrant logs        # View Qdrant logs"
+    echo "   $0 all status         # Check status of all services"
     echo ""
     echo "Prerequisites:"
     echo "   - Docker and Docker Compose installed"
     echo "   - Configuration file in ./config/app-config.json"
     echo "   - Snapshots directory ./snapshots/ (for collection import/export)"
+    echo ""
+    echo "Note: Qdrant should be started before the API service"
     exit 1
 fi
 
-ENVIRONMENT="${1:-prod}"
+SERVICE="${1:-api}"
 ACTION="${2:-up}"
 
-# Validate environment
-case "$ENVIRONMENT" in
-"dev" | "development")
-    ENVIRONMENT="dev"
-    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.dev.yml"
-    echo "🚀 SCANOSS HFH API - Development Deployment"
+# Validate service
+case "$SERVICE" in
+"api")
+    COMPOSE_FILES="-f docker-compose.yml"
+    SERVICE_NAME="HFH API"
     ;;
-"prod" | "production")
-    ENVIRONMENT="prod"
-    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
-    echo "🚀 SCANOSS HFH API - Production Deployment"
+"qdrant")
+    COMPOSE_FILES="-f docker-compose.qdrant.yml"
+    SERVICE_NAME="Qdrant"
+    ;;
+"all")
+    COMPOSE_FILES="-f docker-compose.qdrant.yml -f docker-compose.yml"
+    SERVICE_NAME="All services"
     ;;
 *)
-    echo "❌ Invalid environment: $ENVIRONMENT"
-    echo "Valid environments: dev, prod"
+    echo "❌ Invalid service: $SERVICE"
+    echo "Valid services: api, qdrant, all"
     exit 1
     ;;
 esac
 
-echo "=================================="
-echo "Environment: $ENVIRONMENT"
+echo "🚀 SCANOSS Folder Hashing API - Docker Deployment"
+echo "============================================="
+echo "Service: $SERVICE_NAME"
 echo "Action: $ACTION"
 echo ""
 
@@ -93,11 +98,14 @@ check_required_images() {
 
     # Get version from package metadata or use 'latest' as fallback
     local version="latest"
-    if [ -f "./package-info.json" ]; then
-        version=$(grep '"version"' package-info.json | cut -d'"' -f4 2>/dev/null || echo "latest")
+    local required_images=()
+    if [[ "$SERVICE" == "api" ]] || [[ "$SERVICE" == "all" ]]; then
+        required_images+=("scanoss/hfh-api:${version}")
+    fi
+    if [[ "$SERVICE" == "qdrant" ]] || [[ "$SERVICE" == "all" ]]; then
+        required_images+=("qdrant/qdrant:latest")
     fi
 
-    local required_images=("scanoss/hfh-api:${version}" "qdrant/qdrant:latest")
     local missing_images=()
 
     for image in "${required_images[@]}"; do
@@ -134,29 +142,31 @@ mkdir -p ./snapshots
 # Perform the requested action
 case "$ACTION" in
 "up")
-    echo "🚀 Starting SCANOSS HFH API services..."
+    echo "🚀 Starting $SERVICE_NAME..."
 
     # Check required images are available
     check_required_images
     echo ""
 
-    # Check for configuration file
-    if [ ! -f "./config/app-config.json" ]; then
-        echo "⚠️  Configuration file not found: ./config/app-config.json"
-        if [ -f "./config.example.json" ]; then
-            echo "📝 Copying example configuration..."
-            cp "./config.example.json" "./config/app-config.json"
-            echo "✅ Configuration template copied to ./config/app-config.json"
-            echo "📝 Please review and customize the configuration before proceeding"
-        elif [ -f "./config/app-config.example.json" ]; then
-            echo "📝 Copying example configuration..."
-            cp "./config/app-config.example.json" "./config/app-config.json"
-            echo "✅ Configuration template copied to ./config/app-config.json"
-            echo "📝 Please review and customize the configuration before proceeding"
-        else
-            echo "❌ No configuration template found"
-            echo "Please create ./config/app-config.json with your configuration"
-            exit 1
+    # Check for configuration file (only for API service)
+    if [[ "$SERVICE" == "api" ]] || [[ "$SERVICE" == "all" ]]; then
+        if [ ! -f "./config/app-config.json" ]; then
+            echo "⚠️  Configuration file not found: ./config/app-config.json"
+            if [ -f "./config.example.json" ]; then
+                echo "📝 Copying example configuration..."
+                cp "./config.example.json" "./config/app-config.json"
+                echo "✅ Configuration template copied to ./config/app-config.json"
+                echo "📝 Please review and customize the configuration before proceeding"
+            elif [ -f "./config/app-config.example.json" ]; then
+                echo "📝 Copying example configuration..."
+                cp "./config/app-config.example.json" "./config/app-config.json"
+                echo "✅ Configuration template copied to ./config/app-config.json"
+                echo "📝 Please review and customize the configuration before proceeding"
+            else
+                echo "❌ No configuration template found"
+                echo "Please create ./config/app-config.json with your configuration"
+                exit 1
+            fi
         fi
     fi
 
@@ -168,67 +178,85 @@ case "$ACTION" in
     sleep 5
 
     echo ""
-    echo "🎉 SCANOSS HFH API deployment complete!"
+    echo "🎉 $SERVICE_NAME deployment complete!"
     echo ""
 
-    # Check if TLS is configured
-    TLS_CONFIGURED="no"
-    if [ -f "./config/certs/cert.pem" ] && [ -f "./config/certs/key.pem" ]; then
-        TLS_CONFIGURED="yes"
-    fi
-
+    # Show relevant endpoints based on service
     echo "🌐 Service endpoints:"
-    if [ "$TLS_CONFIGURED" = "yes" ]; then
-        echo "  - REST API:        https://localhost:40061 (TLS enabled)"
-        echo "  - gRPC API:        localhost:50061 (TLS enabled)"
-    else
-        echo "  - REST API:        http://localhost:40061"
-        echo "  - gRPC API:        localhost:50061"
+    if [[ "$SERVICE" == "api" ]] || [[ "$SERVICE" == "all" ]]; then
+        # Check if TLS is configured
+        TLS_CONFIGURED="no"
+        if [ -f "./config/certs/cert.pem" ] && [ -f "./config/certs/key.pem" ]; then
+            TLS_CONFIGURED="yes"
+        fi
+
+        if [ "$TLS_CONFIGURED" = "yes" ]; then
+            echo "  - REST API:        https://localhost:40061 (TLS enabled)"
+            echo "  - gRPC API:        localhost:50061 (TLS enabled)"
+        else
+            echo "  - REST API:        http://localhost:40061"
+            echo "  - gRPC API:        localhost:50061"
+        fi
+        echo "  - Dynamic Logging: localhost:60061"
     fi
-    echo "  - Dynamic Logging: localhost:60061"
-    echo "  - Qdrant API:      http://localhost:6333"
-    echo "  - Qdrant Dashboard: http://localhost:6333/dashboard"
+
+    if [[ "$SERVICE" == "qdrant" ]] || [[ "$SERVICE" == "all" ]]; then
+        echo "  - Qdrant API:      http://localhost:6333"
+        echo "  - Qdrant Dashboard: http://localhost:6333/dashboard"
+    fi
+
     echo ""
-    if [ "$TLS_CONFIGURED" = "no" ]; then
-        echo "🔐 TLS Setup (optional):"
-        echo "  - Run: ./scripts/setup-tls.sh /path/to/cert.crt /path/to/cert.key"
-        echo ""
-    fi
+
+    # Show next steps based on service
     echo "📋 Next steps:"
-    echo "  - Import collections: ./scripts/import-collections.sh /path/to/snapshots/"
-    echo "  - View logs: $0 $ENVIRONMENT logs"
-    echo "  - Check status: $0 $ENVIRONMENT status"
+    if [[ "$SERVICE" == "qdrant" ]]; then
+        echo "  - Start API service: $0 api"
+        echo "  - Import collections: ./scripts/import-collections.sh /path/to/snapshots/"
+    elif [[ "$SERVICE" == "api" ]]; then
+        echo "  - Import collections: ./scripts/import-collections.sh /path/to/snapshots/"
+        echo "  - View logs: $0 $SERVICE logs"
+        echo "  - Check status: $0 $SERVICE status"
+    else
+        echo "  - Import collections: ./scripts/import-collections.sh /path/to/snapshots/"
+        echo "  - View logs: $0 all logs"
+        echo "  - Check status: $0 all status"
+    fi
+
+    if [[ "$SERVICE" == "api" ]] || [[ "$SERVICE" == "all" ]]; then
+        if [ "$TLS_CONFIGURED" = "no" ]; then
+            echo ""
+            echo "🔐 TLS Setup (optional):"
+            echo "  - Run: ./scripts/setup-tls.sh /path/to/cert.crt /path/to/cert.key"
+        fi
+    fi
     ;;
 
 "down")
-    echo "🛑 Stopping SCANOSS HFH API services..."
+    echo "🛑 Stopping $SERVICE_NAME..."
     docker-compose $COMPOSE_FILES down
-    echo "✅ Services stopped"
+    echo "✅ $SERVICE_NAME stopped"
     ;;
 
 "logs")
-    echo "📋 Viewing service logs..."
+    echo "📋 Viewing $SERVICE_NAME logs..."
     docker-compose $COMPOSE_FILES logs -f
     ;;
 
 "status")
-    echo "📊 Service status:"
+    echo "📊 $SERVICE_NAME status:"
     echo ""
     docker-compose $COMPOSE_FILES ps
     echo ""
-
-    # Service status without health checks
-    echo "🔍 Note: Health checks have been disabled"
     ;;
 
 "restart")
-    echo "🔄 Restarting SCANOSS HFH API services..."
+    echo "🔄 Restarting $SERVICE_NAME..."
     docker-compose $COMPOSE_FILES restart
-    echo "✅ Services restarted"
+    echo "✅ $SERVICE_NAME restarted"
     ;;
 
 "pull")
-    echo "📥 Pulling latest images..."
+    echo "📥 Pulling latest images for $SERVICE_NAME..."
     docker-compose $COMPOSE_FILES pull
     echo "✅ Images updated"
     ;;

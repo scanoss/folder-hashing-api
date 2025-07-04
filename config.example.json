@@ -16,7 +16,7 @@
     "OltpExporter": "0.0.0.0:4317"
   },
   "Hfh": {
-    "QdrantHost": "localhost",
+    "QdrantHost": "scanoss-qdrant",
     "QdrantPort": 6334
   }
 }

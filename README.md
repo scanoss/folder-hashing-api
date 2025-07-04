@@ -335,15 +335,6 @@ make docker_debug_api
 curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
 ```
 
-### Performance Tuning
-
-For production deployments, consider:
-
-- **Memory allocation**: Increase Docker memory limits in `docker-compose.prod.yml`
-- **CPU resources**: Adjust CPU limits based on load
-- **Qdrant configuration**: Tune vector database settings for your dataset size
-- **Network configuration**: Use dedicated networks for service isolation
-
 ## 📚 Documentation
 
 - **API Documentation**: Available at REST endpoints when service is running
@@ -356,10 +347,9 @@ For production deployments, consider:
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests (`make test`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+4. Commit your changes (`git commit -m 'Add amazing feature'`)
+5. Push to the branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request
 
 ## 📄 License
 

@@ -144,8 +144,9 @@ mkdir -p "$package_dir"
 
 echo "📁 Creating package structure..."
 
-# Note: Docker Compose files will be generated later with deployment-specific modifications
-# to use pre-built images instead of building from source
+# Copy Docker Compose files
+echo "  - Docker Compose files..."
+cp docker-compose.qdrant.yml "$package_dir/"
 
 # Create config directory and copy templates
 echo "  - Configuration templates..."
@@ -162,6 +163,7 @@ mkdir -p "$package_dir/scripts"
 
 # Copy Docker deployment script
 cp scripts/docker-deploy.sh "$package_dir/scripts/deploy.sh"
+chmod +x "$package_dir/scripts/deploy.sh"
 
 # Copy collection management scripts (they work great with Docker!)
 cp scripts/create-collection-snapshots.sh "$package_dir/scripts/"
@@ -193,10 +195,6 @@ generate_deployment_compose_files() {
     # Process docker-compose.yml - replace build directive with image reference
     sed "s|build: \.|image: scanoss/hfh-api:${version}|g" \
         docker-compose.yml >"${package_dir}/docker-compose.yml"
-
-    # Copy production and development compose files (they override, don't build)
-    cp docker-compose.prod.yml "${package_dir}/"
-    cp docker-compose.dev.yml "${package_dir}/"
 
     echo "  - Docker Compose files configured for pre-built images"
 }
@@ -433,11 +431,14 @@ cp config/app-config.example.json config/app-config.json
 
 ### 4. Deploy Services
 \`\`\`bash
-# Start production environment
-./scripts/deploy.sh prod
+# Start Qdrant first (recommended)
+./scripts/deploy.sh qdrant
 
-# Or start development environment
-./scripts/deploy.sh dev
+# Then start the API service
+./scripts/deploy.sh api
+
+# Or start both services together
+./scripts/deploy.sh all
 \`\`\`
 
 ### 5. Import Knowledge Base (Optional)
@@ -449,7 +450,7 @@ cp config/app-config.example.json config/app-config.json
 ### 6. Verify Deployment
 \`\`\`bash
 # Check service status
-./scripts/deploy.sh prod status
+./scripts/deploy.sh all status
 
 # Test API endpoint
 curl -X POST -H "Content-Type: application/json" -d '{"message":"test"}' http://localhost:40061/api/v2/scanning/echo
@@ -493,19 +494,23 @@ You can also use environment variables by setting them in docker-compose files o
 
 \`\`\`bash
 # Start services
-./scripts/deploy.sh prod up
+./scripts/deploy.sh qdrant up   # Start Qdrant
+./scripts/deploy.sh api up       # Start API
+./scripts/deploy.sh all up       # Start both
 
 # Stop services
-./scripts/deploy.sh prod down
+./scripts/deploy.sh all down     # Stop all services
+./scripts/deploy.sh api down     # Stop API only
+./scripts/deploy.sh qdrant down  # Stop Qdrant only
 
 # View logs
-./scripts/deploy.sh prod logs
+./scripts/deploy.sh all logs
 
 # Check status
-./scripts/deploy.sh prod status
+./scripts/deploy.sh all status
 
 # Restart services
-./scripts/deploy.sh prod restart
+./scripts/deploy.sh all restart
 \`\`\`
 
 ## Collection Management
@@ -526,12 +531,12 @@ You can also use environment variables by setting them in docker-compose files o
 
 ### Check Service Health
 \`\`\`bash
-./scripts/deploy.sh prod status
+./scripts/deploy.sh all status
 \`\`\`
 
 ### View Service Logs
 \`\`\`bash
-./scripts/deploy.sh prod logs
+./scripts/deploy.sh all logs
 \`\`\`
 
 ### Check Docker Images
@@ -542,24 +547,39 @@ docker images --filter reference="scanoss/*" --filter reference="qdrant/*"
 ### Reset Environment
 \`\`\`bash
 # Stop services and remove containers
-./scripts/deploy.sh prod down
+./scripts/deploy.sh all down
 
 # Remove Docker volumes (⚠️ This will delete data!)
 docker volume prune
 
 # Restart deployment
-./scripts/deploy.sh prod up
+./scripts/deploy.sh qdrant up
+./scripts/deploy.sh api up
 \`\`\`
 
-## Development Mode
+## Service Deployment Options
 
-For development with live code reloading:
+### Independent Deployment
+You can deploy Qdrant and the API service independently:
 
 \`\`\`bash
-# Start development environment
-./scripts/deploy.sh dev
+# Deploy Qdrant on one machine
+./scripts/deploy.sh qdrant
 
-# This enables debug logging and development features
+# Deploy API on another machine (configure Qdrant host in config/app-config.json)
+./scripts/deploy.sh api
+\`\`\`
+
+### Remote Qdrant
+To connect to a remote Qdrant instance, edit \`config/app-config.json\`:
+
+\`\`\`json
+{
+  "Hfh": {
+    "QdrantHost": "remote-qdrant-host",
+    "QdrantPort": 6334
+  }
+}
 \`\`\`
 
 ## Production Considerations
@@ -759,48 +779,6 @@ main
 EOF
 
 chmod +x "$package_dir/scripts/verify-installation.sh"
-
-# Create package metadata
-echo "  - Creating package metadata..."
-cat >"$package_dir/package-info.json" <<EOF
-{
-  "name": "scanoss-hfh-api-docker",
-  "version": "$version",
-  "platform": "$platform",
-  "build": $build,
-  "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "package_type": "docker_containers",
-  "components": {
-    "hfh_api": "SCANOSS Folder Hashing API Docker Image",
-    "qdrant": "Qdrant Vector Database Docker Image",
-    "compose": "Docker Compose Configuration Files",
-    "scripts": "Deployment and Management Scripts",
-    "config_templates": "Configuration Templates"
-  },
-  "requirements": {
-    "docker": "Docker Engine 20.10+",
-    "docker_compose": "Docker Compose v2.0+",
-    "ram": "4GB minimum, 8GB recommended",
-    "disk": "20GB minimum",
-    "platforms": "linux/amd64, linux/arm64"
-  },
-  "deployment_workflow": [
-    "Extract package",
-    "Load Docker images with load-images.sh",
-    "Configure service using config templates",
-    "Deploy with deploy.sh script",
-    "Import data using import-collections.sh (optional)",
-    "Verify with verify-installation.sh"
-  ],
-  "endpoints": {
-    "rest_api": "http://localhost:40061",
-    "grpc_api": "localhost:50061",
-    "dynamic_logging": "localhost:60061",
-    "qdrant_api": "http://localhost:6333",
-    "qdrant_dashboard": "http://localhost:6333/dashboard"
-  }
-}
-EOF
 
 # Calculate package sizes
 echo "📊 Calculating package sizes..."

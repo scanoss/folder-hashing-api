@@ -1,36 +1,7 @@
-version: "3.8"
-
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: scanoss-qdrant
-    ports:
-      - "6333:6333" # HTTP API port
-      - "6334:6334" # gRPC API port (used by our Go client)
-    volumes:
-      - qdrant_data:/qdrant/storage
-      - qdrant_snapshots:/qdrant/snapshots
-    environment:
-      # Enable all CORS origins for development
-      - QDRANT__SERVICE__HTTP_CORS_ENABLED=true
-      # Log level
-      - QDRANT__LOG_LEVEL=INFO
-      # Performance optimizations
-      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=32
-      - QDRANT__SERVICE__GRPC_TIMEOUT_MS=60000
-      # Storage paths
-      - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
-      - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots
-    restart: unless-stopped
-    networks:
-      - scanoss-network
-
   hfh-api:
     build: .
     container_name: scanoss-hfh-api
-    depends_on:
-      qdrant:
-        condition: service_started
     ports:
       - "40061:40061" # REST API
       - "50061:50061" # gRPC API
@@ -40,40 +11,15 @@ services:
       - ./snapshots:/app/snapshots # For import/export operations
       - hfh_logs:/var/log/scanoss # Persistent logs
       - ./config/certs:/app/certs:ro # TLS certificates
-    environment:
-      # Point to Qdrant container
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6334
-      # Default app settings
-      - APP_MODE=production
-      - APP_NAME=SCANOSS HFH Server
-      - APP_DEBUG=false
-      - APP_TRACE=false
-      # Telemetry
-      - OTEL_ENABLED=false
-      - OTEL_EXPORTER_OLTP=0.0.0.0:4317
-      # Logging
-      - LOG_DYNAMIC=true
-      - LOG_DYNAMIC_PORT=localhost:60061
-      # TLS configuration
-      - COMP_TLS_CERT=${COMP_TLS_CERT-/app/certs/cert.pem}
-      - COMP_TLS_KEY=${COMP_TLS_KEY-/app/certs/key.pem}
-      # Port for healthcheck
-      - REST_PORT=40061
     command: ["--json-config", "/app/config/app-config.json"]
     restart: unless-stopped
     networks:
       - scanoss-network
 
 volumes:
-  qdrant_data:
-    driver: local
-  qdrant_snapshots:
-    driver: local
   hfh_logs:
     driver: local
 
 networks:
   scanoss-network:
     driver: bridge
-
