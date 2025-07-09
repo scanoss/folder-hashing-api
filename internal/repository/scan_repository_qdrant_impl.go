@@ -44,10 +44,10 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 }
 
 // SearchByHashes performs a search using directory, name, and content hashes
-// Uses a two-phase approach: broad search followed by refinement
+// Uses single query with multi-stage prefetch structure
 func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
-	s.Info("Starting two-phase language-based search")
+	s.Info("Starting optimized multi-stage search")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
@@ -83,10 +83,10 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert dir hash to vector: " + err.Error())
 	}
 
-	// Execute two-phase search
-	searchResp, err := r.executeTwoPhaseSearch(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
+	// Execute optimized query
+	searchResp, err := r.executeOptimizedQuery(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
 	if err != nil {
-		return nil, fmt.Errorf("error performing two-phase search in %s: %v", collectionName, err)
+		return nil, fmt.Errorf("error performing optimized search in %s: %v", collectionName, err)
 	}
 
 	return r.processSearchResults(searchResp)
@@ -126,8 +126,10 @@ func (r *ScanRepositoryQdrantImpl) createExactRankCondition(rank int) []*qdrant.
 	}
 }
 
-// executeTwoPhaseSearch executes a two-phase search strategy
-func (r *ScanRepositoryQdrantImpl) executeTwoPhaseSearch(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
+// executeOptimizedQuery executes a single query with multi-stage prefetch
+// The key insight: we use multiple prefetch branches at the SAME level to get different candidate sets
+// Then use nested prefetches to apply progressive filtering
+func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
 	// Create rank filters
 	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
 	rankThresholdFilter := &qdrant.Filter{Must: rankThresholdConditions}
@@ -135,248 +137,152 @@ func (r *ScanRepositoryQdrantImpl) executeTwoPhaseSearch(ctx context.Context, co
 	exactRank1Conditions := r.createExactRankCondition(1)
 	exactRank1Filter := &qdrant.Filter{Must: exactRank1Conditions}
 
-	// Phase 1: Broad search with high limits
-	// CORRECT STRUCTURE: Start with names, then filter by contents, then by dirs
-
-	// First, search by names to get all candidates
-	nameQuery1 := &qdrant.QueryPoints{
+	// Build the query with proper prefetch structure
+	// The prefetch queries run FIRST and their results are used by the main query
+	hybridQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(nameVector...),
-		Using:          qdrant.PtrOf("names"),
-		Filter:         rankThresholdFilter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
+		Prefetch: []*qdrant.PrefetchQuery{
+			// Branch 1: Start with broad name search
+			{
+				Query:  qdrant.NewQuery(nameVector...),
+				Using:  qdrant.PtrOf("names"),
+				Filter: rankThresholdFilter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit: qdrant.PtrOf(uint64(40000)), // Very broad initial search
+			},
+			// Branch 2: Ensure rank 1 components are included
+			{
+				Query:  qdrant.NewQuery(nameVector...),
+				Using:  qdrant.PtrOf("names"),
+				Filter: exactRank1Filter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit: qdrant.PtrOf(uint64(5000)), // Dedicated search for popular components
+			},
+		},
+		// After prefetch collects candidates by name, apply content filtering
+		Query:  qdrant.NewQuery(contentVector...),
+		Using:  qdrant.PtrOf("contents"),
+		Filter: rankThresholdFilter,
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit: qdrant.PtrOf(uint64(40000)), // Get all name candidates
+		Limit:       qdrant.PtrOf(uint64(25000)), // Filter down by content similarity
+		WithPayload: qdrant.NewWithPayload(false),
+		WithVectors: qdrant.NewWithVectors(false),
 	}
 
-	// Also search for rank 1 components specifically
-	nameQueryRank1 := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(nameVector...),
-		Using:          qdrant.PtrOf("names"),
-		Filter:         exactRank1Filter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			Exact: qdrant.PtrOf(true),
-		},
-		Limit: qdrant.PtrOf(uint64(5000)), // Get rank 1 candidates
-	}
-
-	// Execute both name searches
-	nameResults1, err := r.client.Query(ctx, nameQuery1)
+	// Execute the first stage
+	stage1Results, err := r.client.Query(ctx, hybridQuery)
 	if err != nil {
-		return nil, fmt.Errorf("phase 1 name search failed: %w", err)
+		return nil, fmt.Errorf("stage 1 search failed: %w", err)
 	}
 
-	nameResultsRank1, err := r.client.Query(ctx, nameQueryRank1)
-	if err != nil {
-		return nil, fmt.Errorf("phase 1 rank 1 name search failed: %w", err)
+	// If we have few results, fetch payload and return
+	if len(stage1Results) <= 20 {
+		return r.fetchResultsWithPayload(ctx, collectionName, stage1Results)
 	}
 
-	// Combine and deduplicate results
-	combinedIDs := make(map[uint64]float32)
-	for _, point := range nameResults1 {
-		combinedIDs[point.Id.GetNum()] = point.Score
-	}
-	for _, point := range nameResultsRank1 {
-		if existingScore, exists := combinedIDs[point.Id.GetNum()]; !exists || point.Score < existingScore {
-			combinedIDs[point.Id.GetNum()] = point.Score
-		}
+	// Stage 2: Apply dirs filtering on the results from stage 1
+	stage1IDs := make([]uint64, len(stage1Results))
+	for i, point := range stage1Results {
+		stage1IDs[i] = point.Id.GetNum()
 	}
 
-	// Convert to IDs for next phase
-	nameIDs := make([]uint64, 0, len(combinedIDs))
-	for id := range combinedIDs {
-		nameIDs = append(nameIDs, id)
-	}
-
-	// If we have no results, return empty
-	if len(nameIDs) == 0 {
-		return []*qdrant.ScoredPoint{}, nil
-	}
-
-	// Phase 1.2: Filter by contents
-	contentFilter := &qdrant.Filter{
+	stage2Filter := &qdrant.Filter{
 		Must: []*qdrant.Condition{
 			{
 				ConditionOneOf: &qdrant.Condition_HasId{
 					HasId: &qdrant.HasIdCondition{
-						HasId: r.convertIDsToPointIDs(nameIDs),
+						HasId: r.convertIDsToPointIDs(stage1IDs),
 					},
 				},
 			},
 		},
 	}
 
-	contentQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(contentVector...),
-		Using:          qdrant.PtrOf("contents"),
-		Filter:         contentFilter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			Exact: qdrant.PtrOf(true),
-		},
-		Limit: qdrant.PtrOf(uint64(25000)), // Filter to 15000 by content
-	}
-
-	contentResults, err := r.client.Query(ctx, contentQuery)
-	if err != nil {
-		return nil, fmt.Errorf("phase 1 content search failed: %w", err)
-	}
-
-	// Extract IDs from content results
-	contentIDs := make([]uint64, len(contentResults))
-	for i, point := range contentResults {
-		contentIDs[i] = point.Id.GetNum()
-	}
-
-	// Phase 1.3: Final filter by dirs
-	dirsFilter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_HasId{
-					HasId: &qdrant.HasIdCondition{
-						HasId: r.convertIDsToPointIDs(contentIDs),
-					},
-				},
-			},
-		},
-	}
-
-	dirsQuery := &qdrant.QueryPoints{
+	// Apply dirs filtering
+	stage2Query := &qdrant.QueryPoints{
 		CollectionName: collectionName,
 		Query:          qdrant.NewQuery(dirsVector...),
 		Using:          qdrant.PtrOf("dirs"),
-		Filter:         dirsFilter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
+		Filter:         stage2Filter,
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit: qdrant.PtrOf(uint64(10000)), // Reduce to 10000 candidates
+		Limit:       qdrant.PtrOf(uint64(10000)), // Reduce to 10000
+		WithPayload: qdrant.NewWithPayload(false),
+		WithVectors: qdrant.NewWithVectors(false),
 	}
 
-	phase1Results, err := r.client.Query(ctx, dirsQuery)
+	stage2Results, err := r.client.Query(ctx, stage2Query)
 	if err != nil {
-		return nil, fmt.Errorf("phase 1 dirs search failed: %w", err)
+		return nil, fmt.Errorf("stage 2 search failed: %w", err)
 	}
 
-	// If we have 10 or fewer results, return them directly
-	if len(phase1Results) <= 10 {
-		return r.fetchResultsWithPayload(ctx, collectionName, phase1Results)
+	// If we have 20 or fewer results, return them
+	if len(stage2Results) <= 20 {
+		return r.fetchResultsWithPayload(ctx, collectionName, stage2Results)
 	}
 
-	// Phase 2: Refined search on the 10000 candidates
-	// Extract IDs from phase 1 results
-	phase1IDs := make([]uint64, len(phase1Results))
-	for i, point := range phase1Results {
-		phase1IDs[i] = point.Id.GetNum()
+	// Stage 3: Final refinement using nested prefetch for the best results
+	stage2IDs := make([]uint64, len(stage2Results))
+	for i, point := range stage2Results {
+		stage2IDs[i] = point.Id.GetNum()
 	}
 
-	// Phase 2.1: Re-filter by names with lower limit
-	phase2NameFilter := &qdrant.Filter{
+	finalFilter := &qdrant.Filter{
 		Must: []*qdrant.Condition{
 			{
 				ConditionOneOf: &qdrant.Condition_HasId{
 					HasId: &qdrant.HasIdCondition{
-						HasId: r.convertIDsToPointIDs(phase1IDs),
+						HasId: r.convertIDsToPointIDs(stage2IDs),
 					},
 				},
 			},
 		},
 	}
 
-	phase2NameQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(nameVector...),
-		Using:          qdrant.PtrOf("names"),
-		Filter:         phase2NameFilter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			Exact: qdrant.PtrOf(true),
-		},
-		Limit: qdrant.PtrOf(uint64(5000)), // More selective
-	}
-
-	phase2NameResults, err := r.client.Query(ctx, phase2NameQuery)
-	if err != nil {
-		return nil, fmt.Errorf("phase 2 name search failed: %w", err)
-	}
-
-	// Extract IDs for content filtering
-	phase2NameIDs := make([]uint64, len(phase2NameResults))
-	for i, point := range phase2NameResults {
-		phase2NameIDs[i] = point.Id.GetNum()
-	}
-
-	// Phase 2.2: Filter by contents
-	phase2ContentFilter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_HasId{
-					HasId: &qdrant.HasIdCondition{
-						HasId: r.convertIDsToPointIDs(phase2NameIDs),
-					},
-				},
-			},
-		},
-	}
-
-	phase2ContentQuery := &qdrant.QueryPoints{
-		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(dirsVector...),
-		Using:          qdrant.PtrOf("dirs"),
-		Filter:         phase2ContentFilter,
-		WithPayload:    qdrant.NewWithPayload(false),
-		WithVectors:    qdrant.NewWithVectors(false),
-		Params: &qdrant.SearchParams{
-			Exact: qdrant.PtrOf(true),
-		},
-		Limit: qdrant.PtrOf(uint64(100)), // Aggressive filtering
-	}
-
-	phase2ContentResults, err := r.client.Query(ctx, phase2ContentQuery)
-	if err != nil {
-		return nil, fmt.Errorf("phase 2 content search failed: %w", err)
-	}
-
-	// Extract IDs for final dirs filtering
-	phase2ContentIDs := make([]uint64, len(phase2ContentResults))
-	for i, point := range phase2ContentResults {
-		phase2ContentIDs[i] = point.Id.GetNum()
-	}
-
-	// Phase 2.3: Final filter by dirs with payload
-	phase2DirsFilter := &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_HasId{
-					HasId: &qdrant.HasIdCondition{
-						HasId: r.convertIDsToPointIDs(phase2ContentIDs),
-					},
-				},
-			},
-		},
-	}
-
+	// Final query with nested prefetch for optimal ranking
 	finalQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQuery(contentVector...),
-		Using:          qdrant.PtrOf("contents"),
-		Filter:         phase2DirsFilter,
-		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
+		Prefetch: []*qdrant.PrefetchQuery{
+			// Re-rank by names within our candidate set
+			{
+				Query:  qdrant.NewQuery(nameVector...),
+				Using:  qdrant.PtrOf("names"),
+				Filter: finalFilter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit: qdrant.PtrOf(uint64(5000)),
+				Prefetch: []*qdrant.PrefetchQuery{
+					// Then by dirs
+					{
+						Query:  qdrant.NewQuery(dirsVector...),
+						Using:  qdrant.PtrOf("dirs"),
+						Filter: finalFilter,
+						Params: &qdrant.SearchParams{
+							Exact: qdrant.PtrOf(true),
+						},
+						Limit: qdrant.PtrOf(uint64(100)),
+					},
+				},
+			},
+		},
+		// Final ranking by content
+		Query:       qdrant.NewQuery(contentVector...),
+		Using:       qdrant.PtrOf("contents"),
+		Filter:      finalFilter,
+		WithPayload: qdrant.NewWithPayload(true),
+		WithVectors: qdrant.NewWithVectors(false),
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit: qdrant.PtrOf(uint64(20)), // Final 10 results
+		Limit: qdrant.PtrOf(uint64(20)), // Final results
 	}
 
 	return r.client.Query(ctx, finalQuery)
