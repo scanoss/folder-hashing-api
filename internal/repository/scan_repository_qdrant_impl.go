@@ -150,7 +150,8 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 				Params: &qdrant.SearchParams{
 					Exact: qdrant.PtrOf(true),
 				},
-				Limit: qdrant.PtrOf(uint64(40000)), // Very broad initial search
+				Limit:          qdrant.PtrOf(uint64(40000)), // Very broad initial search
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
 			},
 			// Branch 2: Ensure rank 1 components are included
 			{
@@ -160,7 +161,8 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 				Params: &qdrant.SearchParams{
 					Exact: qdrant.PtrOf(true),
 				},
-				Limit: qdrant.PtrOf(uint64(5000)), // Dedicated search for popular components
+				Limit:          qdrant.PtrOf(uint64(40000)), // Dedicated search for popular components
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
 			},
 		},
 		// After prefetch collects candidates by name, apply content filtering
@@ -170,7 +172,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit:       qdrant.PtrOf(uint64(25000)), // Filter down by content similarity
+		Limit:       qdrant.PtrOf(uint64(60000)), // Filter down by content similarity
 		WithPayload: qdrant.NewWithPayload(false),
 		WithVectors: qdrant.NewWithVectors(false),
 	}
@@ -213,7 +215,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit:       qdrant.PtrOf(uint64(10000)), // Reduce to 10000
+		Limit:       qdrant.PtrOf(uint64(40000)), // Reduce to 20000
 		WithPayload: qdrant.NewWithPayload(false),
 		WithVectors: qdrant.NewWithVectors(false),
 	}
@@ -229,9 +231,12 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 	}
 
 	// Stage 3: Final refinement using nested prefetch for the best results
-	stage2IDs := make([]uint64, len(stage2Results))
-	for i, point := range stage2Results {
-		stage2IDs[i] = point.Id.GetNum()
+	var stage2IDs []uint64
+	for _, point := range stage2Results {
+		if point.Score > (stage2Results[0].Score*1.1)+5 {
+			break
+		}
+		stage2IDs = append(stage2IDs, point.Id.GetNum())
 	}
 
 	finalFilter := &qdrant.Filter{
@@ -246,7 +251,23 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		},
 	}
 
+	finalFilterPreferred := &qdrant.Filter{
+		Must: append(
+			[]*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_HasId{
+						HasId: &qdrant.HasIdCondition{
+							HasId: r.convertIDsToPointIDs(stage2IDs), // Nota: debería ser stage3IDs, no stage2IDs
+						},
+					},
+				},
+			},
+			exactRank1Conditions...,
+		),
+	}
+
 	// Final query with nested prefetch for optimal ranking
+	dirsThreshold := stage2Results[0].Score*1.1 + 5
 	finalQuery := &qdrant.QueryPoints{
 		CollectionName: collectionName,
 		Prefetch: []*qdrant.PrefetchQuery{
@@ -258,7 +279,8 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 				Params: &qdrant.SearchParams{
 					Exact: qdrant.PtrOf(true),
 				},
-				Limit: qdrant.PtrOf(uint64(75)),
+				Limit:          qdrant.PtrOf(uint64(1000)),
+				ScoreThreshold: qdrant.PtrOf(dirsThreshold),
 				Prefetch: []*qdrant.PrefetchQuery{
 					// Then by dirs
 					{
@@ -268,7 +290,16 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 						Params: &qdrant.SearchParams{
 							Exact: qdrant.PtrOf(true),
 						},
-						Limit: qdrant.PtrOf(uint64(750)),
+						Limit: qdrant.PtrOf(uint64(1000)),
+					},
+					{
+						Query:  qdrant.NewQuery(nameVector...),
+						Using:  qdrant.PtrOf("names"),
+						Filter: finalFilterPreferred,
+						Params: &qdrant.SearchParams{
+							Exact: qdrant.PtrOf(true),
+						},
+						Limit: qdrant.PtrOf(uint64(1000)),
 					},
 				},
 			},
@@ -282,7 +313,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		Params: &qdrant.SearchParams{
 			Exact: qdrant.PtrOf(true),
 		},
-		Limit: qdrant.PtrOf(uint64(20)), // Final results
+		Limit: qdrant.PtrOf(uint64(100)), // Final results
 	}
 
 	return r.client.Query(ctx, finalQuery)
@@ -349,7 +380,8 @@ func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.Sco
 	// Convert all points to results
 	for _, point := range searchResp {
 		result := r.convertPointToResult(point)
-		if result.Score > (searchResp[0].Score+2.0)*1.1 {
+		// Avoid results with higher distances. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
+		if result.Score > searchResp[0].Score*1.1+2.0 {
 			break
 		}
 		allResults = append(allResults, result)
@@ -462,9 +494,9 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 
 	// Sort all results by score (lower is better for distance) then by rank (lower is better)
 	sort.Slice(results, func(i, j int) bool {
-		// If scores are very similar (within 10%), prefer lower rank
+		// If scores are very similar (within 10%), prefer lower rank. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
 		scoreDiff := results[j].Score - results[i].Score
-		if scoreDiff < 0.2*results[i].Score {
+		if scoreDiff <= 0.2*results[i].Score+2 {
 			return results[i].Rank < results[j].Rank
 		}
 		// Otherwise, prefer lower score (closer distance)
