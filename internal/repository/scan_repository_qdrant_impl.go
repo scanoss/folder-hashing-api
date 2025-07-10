@@ -252,23 +252,23 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		Prefetch: []*qdrant.PrefetchQuery{
 			// Re-rank by names within our candidate set
 			{
-				Query:  qdrant.NewQuery(nameVector...),
-				Using:  qdrant.PtrOf("names"),
+				Query:  qdrant.NewQuery(dirsVector...),
+				Using:  qdrant.PtrOf("dirs"),
 				Filter: finalFilter,
 				Params: &qdrant.SearchParams{
 					Exact: qdrant.PtrOf(true),
 				},
-				Limit: qdrant.PtrOf(uint64(5000)),
+				Limit: qdrant.PtrOf(uint64(75)),
 				Prefetch: []*qdrant.PrefetchQuery{
 					// Then by dirs
 					{
-						Query:  qdrant.NewQuery(dirsVector...),
-						Using:  qdrant.PtrOf("dirs"),
+						Query:  qdrant.NewQuery(nameVector...),
+						Using:  qdrant.PtrOf("names"),
 						Filter: finalFilter,
 						Params: &qdrant.SearchParams{
 							Exact: qdrant.PtrOf(true),
 						},
-						Limit: qdrant.PtrOf(uint64(100)),
+						Limit: qdrant.PtrOf(uint64(750)),
 					},
 				},
 			},
@@ -349,6 +349,9 @@ func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.Sco
 	// Convert all points to results
 	for _, point := range searchResp {
 		result := r.convertPointToResult(point)
+		if result.Score > (searchResp[0].Score+2.0)*1.1 {
+			break
+		}
 		allResults = append(allResults, result)
 	}
 
@@ -461,7 +464,7 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	sort.Slice(results, func(i, j int) bool {
 		// If scores are very similar (within 10%), prefer lower rank
 		scoreDiff := results[j].Score - results[i].Score
-		if scoreDiff < 0.1*results[i].Score {
+		if scoreDiff < 0.2*results[i].Score {
 			return results[i].Rank < results[j].Rank
 		}
 		// Otherwise, prefer lower score (closer distance)
