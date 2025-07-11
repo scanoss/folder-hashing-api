@@ -528,7 +528,7 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		for _, item := range group {
 			versions = append(versions, entities.Version{
 				Version: item.Version,
-				Score:   ScoreToMatch(item.Score),
+				Score:   scoreToMatch(item.Score),
 			})
 		}
 
@@ -546,7 +546,7 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 }
 
 // Convert an absolute score to matching score [0,1].
-func ScoreToMatch(score float32) float32 {
+func scoreToMatch(score float32) float32 {
 	const k = 0.05365 // -ln(0.2) / 30
 	return float32(math.Exp(-k * float64(score)))
 }
