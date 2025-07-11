@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 
@@ -44,14 +45,14 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 }
 
 // SearchByHashes performs a search using directory, name, and content hashes
-// Uses single query with 4-branch rank-aware prefetch structure to prioritize rank 1 entries
+// Uses single query with multi-stage prefetch structure
 func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
-	s.Info("Starting language-based search with content-enhanced prefetching")
+	s.Info("Starting optimized multi-stage search")
 
 	// Determine target collection based on primary language
 	collectionName := entities.GetCollectionNameFromLanguageExtensions(langExt)
-	s.Info("Using collection: %s for language extensions: %v", collectionName, langExt)
+	s.Infof("Using collection: %s for language extensions: %v", collectionName, langExt)
 
 	// Check if collection exists
 	exists, err := r.client.CollectionExists(ctx, collectionName)
@@ -83,12 +84,29 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 		return nil, errors.New("failed to convert dir hash to vector: " + err.Error())
 	}
 
-	searchResp, err := r.executeRankAwareHybridQuery(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
+	// Execute optimized query
+	searchResp, err := r.executeOptimizedQuery(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
 	if err != nil {
-		return nil, fmt.Errorf("error performing rank-aware search in %s: %v", collectionName, err)
+		return nil, fmt.Errorf("error performing optimized search in %s: %v", collectionName, err)
 	}
 
 	return r.processSearchResults(searchResp)
+}
+
+// createRangeRankCondition creates a condition for rank range matching (rank <= maxRank)
+func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdrant.Condition {
+	return []*qdrant.Condition{
+		{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "rank",
+					Range: &qdrant.Range{
+						Lte: qdrant.PtrOf(float64(maxRank)),
+					},
+				},
+			},
+		},
+	}
 }
 
 // createExactRankCondition creates a condition for exact rank matching
@@ -109,84 +127,264 @@ func (r *ScanRepositoryQdrantImpl) createExactRankCondition(rank int) []*qdrant.
 	}
 }
 
-// createRangeRankCondition creates a condition for rank range matching (rank <= maxRank)
-func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdrant.Condition {
-	return []*qdrant.Condition{
-		{
-			ConditionOneOf: &qdrant.Condition_Field{
-				Field: &qdrant.FieldCondition{
-					Key: "rank",
-					Range: &qdrant.Range{
-						Lte: qdrant.PtrOf(float64(maxRank)),
+// executeOptimizedQuery executes a single query with multi-stage prefetch
+// The key insight: we use multiple prefetch branches at the SAME level to get different candidate sets
+// Then use nested prefetches to apply progressive filtering
+func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
+	// Create rank filters
+	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
+	rankThresholdFilter := &qdrant.Filter{Must: rankThresholdConditions}
+
+	exactRank1Conditions := r.createExactRankCondition(1)
+	exactRank1Filter := &qdrant.Filter{Must: exactRank1Conditions}
+
+	// Build the query with proper prefetch structure
+	// The prefetch queries run FIRST and their results are used by the main query
+	hybridQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Prefetch: []*qdrant.PrefetchQuery{
+			// Branch 1: Start with broad name search
+			{
+				Query:  qdrant.NewQuery(nameVector...),
+				Using:  qdrant.PtrOf("names"),
+				Filter: rankThresholdFilter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit:          qdrant.PtrOf(uint64(40000)), // Very broad initial search
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
+			},
+			// Branch 2: Ensure rank 1 components are included
+			{
+				Query:  qdrant.NewQuery(nameVector...),
+				Using:  qdrant.PtrOf("names"),
+				Filter: exactRank1Filter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit:          qdrant.PtrOf(uint64(40000)), // Dedicated search for popular components
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
+			},
+		},
+		// After prefetch collects candidates by name, apply content filtering
+		Query:  qdrant.NewQuery(contentVector...),
+		Using:  qdrant.PtrOf("contents"),
+		Filter: rankThresholdFilter,
+		Params: &qdrant.SearchParams{
+			Exact: qdrant.PtrOf(true),
+		},
+		Limit:       qdrant.PtrOf(uint64(60000)), // Filter down by content similarity
+		WithPayload: qdrant.NewWithPayload(false),
+		WithVectors: qdrant.NewWithVectors(false),
+	}
+
+	// Execute the first stage
+	stage1Results, err := r.client.Query(ctx, hybridQuery)
+	if err != nil {
+		return nil, fmt.Errorf("stage 1 search failed: %w", err)
+	}
+
+	// If we have few results, fetch payload and return
+	if len(stage1Results) <= 20 {
+		return r.fetchResultsWithPayload(ctx, collectionName, stage1Results)
+	}
+
+	// Stage 2: Apply dirs filtering on the results from stage 1
+	stage1IDs := make([]uint64, len(stage1Results))
+	for i, point := range stage1Results {
+		stage1IDs[i] = point.Id.GetNum()
+	}
+
+	stage2Filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: r.convertIDsToPointIDs(stage1IDs),
 					},
 				},
 			},
 		},
 	}
+
+	// Apply dirs filtering
+	stage2Query := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Query:          qdrant.NewQuery(dirsVector...),
+		Using:          qdrant.PtrOf("dirs"),
+		Filter:         stage2Filter,
+		Params: &qdrant.SearchParams{
+			Exact: qdrant.PtrOf(true),
+		},
+		Limit:       qdrant.PtrOf(uint64(40000)), // Reduce to 20000
+		WithPayload: qdrant.NewWithPayload(false),
+		WithVectors: qdrant.NewWithVectors(false),
+	}
+
+	stage2Results, err := r.client.Query(ctx, stage2Query)
+	if err != nil {
+		return nil, fmt.Errorf("stage 2 search failed: %w", err)
+	}
+
+	// If we have 20 or fewer results, return them
+	if len(stage2Results) <= 20 {
+		return r.fetchResultsWithPayload(ctx, collectionName, stage2Results)
+	}
+
+	// Stage 3: Final refinement using nested prefetch for the best results
+	var stage2IDs []uint64
+	for _, point := range stage2Results {
+		if point.Score > (stage2Results[0].Score*1.1)+5 {
+			break
+		}
+		stage2IDs = append(stage2IDs, point.Id.GetNum())
+	}
+
+	finalFilter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_HasId{
+					HasId: &qdrant.HasIdCondition{
+						HasId: r.convertIDsToPointIDs(stage2IDs),
+					},
+				},
+			},
+		},
+	}
+
+	finalFilterPreferred := &qdrant.Filter{
+		Must: append(
+			[]*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_HasId{
+						HasId: &qdrant.HasIdCondition{
+							HasId: r.convertIDsToPointIDs(stage2IDs), // Nota: debería ser stage3IDs, no stage2IDs
+						},
+					},
+				},
+			},
+			exactRank1Conditions...,
+		),
+	}
+
+	// Final query with nested prefetch for optimal ranking
+	dirsThreshold := stage2Results[0].Score*1.1 + 5
+	finalQuery := &qdrant.QueryPoints{
+		CollectionName: collectionName,
+		Prefetch: []*qdrant.PrefetchQuery{
+			// Re-rank by names within our candidate set
+			{
+				Query:  qdrant.NewQuery(dirsVector...),
+				Using:  qdrant.PtrOf("dirs"),
+				Filter: finalFilter,
+				Params: &qdrant.SearchParams{
+					Exact: qdrant.PtrOf(true),
+				},
+				Limit:          qdrant.PtrOf(uint64(1000)),
+				ScoreThreshold: qdrant.PtrOf(dirsThreshold),
+				Prefetch: []*qdrant.PrefetchQuery{
+					// Then by dirs
+					{
+						Query:  qdrant.NewQuery(nameVector...),
+						Using:  qdrant.PtrOf("names"),
+						Filter: finalFilter,
+						Params: &qdrant.SearchParams{
+							Exact: qdrant.PtrOf(true),
+						},
+						Limit: qdrant.PtrOf(uint64(1000)),
+					},
+					{
+						Query:  qdrant.NewQuery(nameVector...),
+						Using:  qdrant.PtrOf("names"),
+						Filter: finalFilterPreferred,
+						Params: &qdrant.SearchParams{
+							Exact: qdrant.PtrOf(true),
+						},
+						Limit: qdrant.PtrOf(uint64(1000)),
+					},
+				},
+			},
+		},
+		// Final ranking by content
+		Query:       qdrant.NewQuery(contentVector...),
+		Using:       qdrant.PtrOf("contents"),
+		Filter:      finalFilter,
+		WithPayload: qdrant.NewWithPayload(true),
+		WithVectors: qdrant.NewWithVectors(false),
+		Params: &qdrant.SearchParams{
+			Exact: qdrant.PtrOf(true),
+		},
+		Limit: qdrant.PtrOf(uint64(100)), // Final results
+	}
+
+	return r.client.Query(ctx, finalQuery)
 }
 
-// executeRankAwareHybridQuery executes a hybrid query with rank-aware prefetch structure
-// Uses 4 branches to give content hash more weight for tie-breaking and exact match detection
-func (r *ScanRepositoryQdrantImpl) executeRankAwareHybridQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
-	// Create rank conditions
-	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
-	rankThresholdFilter := &qdrant.Filter{Must: rankThresholdConditions}
+// convertIDsToPointIDs converts uint64 IDs to PointId format
+func (r *ScanRepositoryQdrantImpl) convertIDsToPointIDs(ids []uint64) []*qdrant.PointId {
+	pointIDs := make([]*qdrant.PointId, len(ids))
+	for i, id := range ids {
+		pointIDs[i] = &qdrant.PointId{
+			PointIdOptions: &qdrant.PointId_Num{
+				Num: id,
+			},
+		}
+	}
+	return pointIDs
+}
 
-	prefetchQueries := []*qdrant.PrefetchQuery{
-		// Branch B: Names-first with rank <= rankThreshold (discovery)
-		{
-			Prefetch: []*qdrant.PrefetchQuery{
-				{
-					Query:  qdrant.NewQuery(dirsVector...),
-					Using:  qdrant.PtrOf("dirs"),
-					Filter: rankThresholdFilter,
-				},
-				{
-					Query:  qdrant.NewQuery(contentVector...),
-					Using:  qdrant.PtrOf("contents"),
-					Filter: rankThresholdFilter,
-				},
-			},
-			Query:  qdrant.NewQuery(nameVector...),
-			Using:  qdrant.PtrOf("names"),
-			Filter: rankThresholdFilter,
-		},
-		{
-			Prefetch: []*qdrant.PrefetchQuery{
-				{
-					Query:  qdrant.NewQuery(nameVector...),
-					Using:  qdrant.PtrOf("names"),
-					Filter: rankThresholdFilter,
-				},
-			},
-			Query:  qdrant.NewQuery(contentVector...),
-			Using:  qdrant.PtrOf("contents"),
-			Filter: rankThresholdFilter,
-		},
+// fetchResultsWithPayload re-queries points to get their payload
+func (r *ScanRepositoryQdrantImpl) fetchResultsWithPayload(ctx context.Context, collectionName string, points []*qdrant.ScoredPoint) ([]*qdrant.ScoredPoint, error) {
+	if len(points) == 0 {
+		return points, nil
 	}
 
-	// Execute hybrid query with RRF fusion
-	hybridQuery := &qdrant.QueryPoints{
+	ids := make([]*qdrant.PointId, len(points))
+	for i, point := range points {
+		ids[i] = point.Id
+	}
+
+	// Get points with payload
+	retrievedPoints, err := r.client.Get(ctx, &qdrant.GetPoints{
 		CollectionName: collectionName,
-		Query:          qdrant.NewQueryFusion(qdrant.Fusion_RRF),
-		Prefetch:       prefetchQueries,
+		Ids:            ids,
 		WithPayload:    qdrant.NewWithPayload(true),
 		WithVectors:    qdrant.NewWithVectors(false),
-		Filter:         rankThresholdFilter, // Overall filter for rank <= rankThreshold
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch points with payload: %w", err)
 	}
 
-	return r.client.Query(ctx, hybridQuery)
+	// Map scores back to points
+	resultMap := make(map[uint64]float32)
+	for _, point := range points {
+		resultMap[point.Id.GetNum()] = point.Score
+	}
+
+	// Create scored points with payload
+	results := make([]*qdrant.ScoredPoint, len(retrievedPoints))
+	for i, point := range retrievedPoints {
+		results[i] = &qdrant.ScoredPoint{
+			Id:      point.Id,
+			Score:   resultMap[point.Id.GetNum()],
+			Payload: point.Payload,
+		}
+	}
+
+	return results, nil
 }
 
 // processSearchResults processes search results and returns component groups
 func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.ScoredPoint) ([]entities.ComponentGroup, error) {
 	var allResults []entities.SearchResult
 
+	// Convert all points to results
 	for _, point := range searchResp {
-		if point.Score < 0.5 {
-			continue
-		}
 		result := r.convertPointToResult(point)
+		// Avoid results with higher distances. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
+		if result.Score > searchResp[0].Score*1.1+2.0 {
+			break
+		}
 		allResults = append(allResults, result)
 	}
 
@@ -289,18 +487,21 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 	return result
 }
 
-// groupByPurl groups search results by PURL
+// groupByPurl groups search results by PURL and sorts by score and rank
 func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) []entities.ComponentGroup {
 	if len(results) == 0 {
 		return []entities.ComponentGroup{}
 	}
 
-	// Sort all results by score (higher is better) then by rank (lower is better)
+	// Sort all results by score (lower is better for distance) then by rank (lower is better)
 	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score == results[j].Score {
+		// If scores are very similar (within 10%), prefer lower rank. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
+		scoreDiff := results[j].Score - results[i].Score
+		if scoreDiff <= 0.2*results[i].Score+2 {
 			return results[i].Rank < results[j].Rank
 		}
-		return results[i].Score > results[j].Score
+		// Otherwise, prefer lower score (closer distance)
+		return results[i].Score < results[j].Score
 	})
 
 	// Group results by PURL
@@ -314,20 +515,20 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	}
 
 	var componentGroups []entities.ComponentGroup
-	// Process groups in the order of their first appearance (which is sorted by score)
+	// Process groups in the order of their first appearance (which is sorted by score and rank)
 	for i, purl := range orderedPurls {
 		group := purlGroups[purl]
 
-		// Sort versions within the group by score (higher is better)
+		// Sort versions within the group by score
 		sort.Slice(group, func(i, j int) bool {
-			return group[i].Score > group[j].Score
+			return group[i].Score < group[j].Score
 		})
 
 		var versions []entities.Version
 		for _, item := range group {
 			versions = append(versions, entities.Version{
 				Version: item.Version,
-				Score:   item.Score,
+				Score:   scoreToMatch(item.Score),
 			})
 		}
 
@@ -342,4 +543,10 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	}
 
 	return componentGroups
+}
+
+// Convert an absolute score to matching score [0,1].
+func scoreToMatch(score float32) float32 {
+	const k = 0.05365 // -ln(0.2) / 30
+	return float32(math.Exp(-k * float64(score)))
 }
