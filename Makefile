@@ -45,7 +45,7 @@ lint_docker: ## Run docker instance of linting across the code base
 
 run_local:  ## Launch the API locally for test
 	@echo "Launching API locally..."
-	go run cmd/server/main.go -ldflags "-X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(VERSION)"
+	go run cmd/server/main.go
 
 # Docker Operations
 docker_build: ## Build Docker image

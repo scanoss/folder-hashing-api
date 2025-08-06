@@ -15,7 +15,7 @@ type CollectionStats struct {
 
 type ScanRepository interface {
 	// SearchByHashes performs a search using directory, name, and content hashes
-	SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error)
+	SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, rankThreshold int) ([]entities.ComponentGroup, error)
 
 	// GetCollectionStats returns statistics for a given collection
 	GetCollectionStats(ctx context.Context, collectionName string) (*CollectionStats, error)

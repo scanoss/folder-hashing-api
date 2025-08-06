@@ -20,10 +20,11 @@ func (m *ScanMapperImpl) ProtoToDomain(req *scanningv2.HFHRequest) *entities.Sca
 	}
 
 	return &entities.ScanRequest{
-		RankThreshold: int(req.RankThreshold),
-		Category:      req.Category,
-		QueryLimit:    int(req.QueryLimit),
-		Root:          m.ChildrenToDomain(req.Root),
+		RankThreshold:      int(req.RankThreshold),
+		MinCutoffThreshold: req.MinCutoffThreshold,
+		Category:           req.Category,
+		QueryLimit:         int(req.QueryLimit),
+		Root:               m.ChildrenToDomain(req.Root),
 	}
 }
 

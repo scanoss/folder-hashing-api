@@ -46,7 +46,7 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 
 // SearchByHashes performs a search using directory, name, and content hashes
 // Uses single query with multi-stage prefetch structure
-func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error) {
+func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, rankThreshold int) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
 	s.Info("Starting optimized multi-stage search")
 
@@ -184,8 +184,11 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		return nil, fmt.Errorf("stage 1 search failed: %w", err)
 	}
 
+	fmt.Printf("Stage 1 query returned %d results\n", len(stage1Results))
+
 	// If we have few results, fetch payload and return
 	if len(stage1Results) <= 20 {
+		fmt.Printf("Returning early with %d results (<=20)\n", len(stage1Results))
 		return r.fetchResultsWithPayload(ctx, collectionName, stage1Results)
 	}
 
@@ -226,8 +229,11 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		return nil, fmt.Errorf("stage 2 search failed: %w", err)
 	}
 
+	fmt.Printf("Stage 2 query (dirs filtering) returned %d results\n", len(stage2Results))
+
 	// If we have 20 or fewer results, return them
 	if len(stage2Results) <= 20 {
+		fmt.Printf("Returning with %d results after stage 2 (<=20)\n", len(stage2Results))
 		return r.fetchResultsWithPayload(ctx, collectionName, stage2Results)
 	}
 
@@ -378,18 +384,28 @@ func (r *ScanRepositoryQdrantImpl) fetchResultsWithPayload(ctx context.Context, 
 func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.ScoredPoint) ([]entities.ComponentGroup, error) {
 	var allResults []entities.SearchResult
 
+	if len(searchResp) == 0 {
+		return []entities.ComponentGroup{}, nil
+	}
+
 	// Convert all points to results
-	for _, point := range searchResp {
+	for i, point := range searchResp {
 		result := r.convertPointToResult(point)
 		// Avoid results with higher distances. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
-		if result.Score > searchResp[0].Score*1.1+2.0 {
+		scoreThreshold := searchResp[0].Score*1.1 + 2.0
+		if result.Score > scoreThreshold {
+			fmt.Printf("Filtering out results starting at index %d. Best score: %f, threshold: %f, current score: %f\n", i, searchResp[0].Score, scoreThreshold, result.Score)
 			break
 		}
 		allResults = append(allResults, result)
 	}
 
+	fmt.Printf("processSearchResults: converted %d points to %d results\n", len(searchResp), len(allResults))
+
 	// Group by component
 	purlGroups := r.groupByPurl(allResults)
+
+	fmt.Printf("processSearchResults: grouped into %d component groups\n", len(purlGroups))
 
 	return purlGroups, nil
 }
@@ -528,7 +544,7 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		for _, item := range group {
 			versions = append(versions, entities.Version{
 				Version: item.Version,
-				Score:   scoreToMatch(item.Score),
+				Score:   distanceToScore(item.Score),
 			})
 		}
 
@@ -545,8 +561,14 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	return componentGroups
 }
 
-// Convert an absolute score to matching score [0,1].
-func scoreToMatch(score float32) float32 {
+// Convert an absolute distance to matching score [0,1].
+func distanceToScore(distance float32) float32 {
 	const k = 0.05365 // -ln(0.2) / 30
-	return float32(math.Exp(-k * float64(score)))
+	return float32(math.Exp(-k * float64(distance)))
+}
+
+// Convert a matching score [0,1] to absolute distance.
+func ScoreToDistance(match float32) float32 {
+	const k = 0.05365 // -ln(0.2) / 30
+	return float32(-math.Log(float64(match)) / k)
 }

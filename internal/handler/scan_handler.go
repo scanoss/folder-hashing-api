@@ -67,7 +67,6 @@ func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHReq
 
 	s.Info("Scan starts")
 
-	// Perform the scan using the service layer
 	domainResponse, err := h.scanService.ScanFolder(ctx, domainRequest)
 	if err != nil {
 		s.Errorf("error during hfh scanning: %v", err)
