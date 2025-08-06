@@ -113,21 +113,3 @@ func (s *ScanServiceImpl) hasHighScoreMatch(componentGroups []entities.Component
 	}
 	return false
 }
-
-// hasHighScoreMatchInResults checks if any result contains a component group with a version with score >= threshold
-func (s *ScanServiceImpl) hasHighScoreMatchInResults(results []*entities.ScanResult, threshold float32) bool {
-	for _, result := range results {
-		if result != nil {
-			for _, group := range result.ComponentGroups {
-				if group != nil {
-					for _, version := range group.Versions {
-						if version.Score >= threshold {
-							return true
-						}
-					}
-				}
-			}
-		}
-	}
-	return false
-}
