@@ -106,6 +106,50 @@ make collections_import
 ./scripts/import-collections.sh /path/to/snapshots/
 ```
 
+### Import from CSV Files
+
+The `cmd/import/main.go` tool allows you to import component data from CSV files directly into Qdrant collections:
+
+```bash
+# Build the import tool
+go build -o dist/import-tool cmd/import/main.go
+
+# Import CSV files from a directory
+./dist/import-tool \
+  -dir /path/to/csv/directory \
+  -top-purls /path/to/top-purls.json \
+  [-overwrite]
+
+# Options:
+#   -dir        Directory containing CSV files to import (required)
+#   -top-purls  JSON file with top-rated PURLs for ranking (required)
+#   -overwrite  Delete existing collections before import (optional)
+```
+
+**CSV File Format:**
+Each CSV file should contain component data with the following columns:
+- Columns 0-2: Hash values (dirs, names, contents)
+- Column 3: URL hash
+- Columns 4-10: Component metadata (vendor, component, version, etc.)
+- Columns 11-16: File metrics and category
+- Column 17: Language extensions (JSON format)
+
+**Top PURLs File:**
+A JSON file mapping PURLs to ranking scores for prioritizing search results:
+```json
+{
+  "pkg:github/apache/commons-lang": 1,
+  "pkg:npm/react": 2,
+  "pkg:pypi/requests": 3
+}
+```
+
+The import tool will:
+- Process CSV files in parallel using multiple workers
+- Group components by programming language into separate collections
+- Create optimized vector indexes for fast similarity search
+- Handle large datasets with configurable batch processing
+
 ### Verify Collections
 
 ```bash
