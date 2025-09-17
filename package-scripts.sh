@@ -41,7 +41,7 @@ export COPYFILE_DISABLE=true  # Required if packaging on OSX
 platform=$1
 version=$2
 build=1
-prefix_name="scanoss-hfh-api"
+prefix_name="scanoss-folder-hashing-api"
 tar_name="${prefix_name}_${platform}_${version}-${build}.tgz"
 # Get a unique archive name
 while [ -f "$tar_name" ] ; do

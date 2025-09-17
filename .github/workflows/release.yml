@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get tags to allow build script to get build version
+          fetch-depth: 0 # Get tags to allow build script to get build version
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -37,7 +37,8 @@ jobs:
         with:
           draft: true
           files: |
-            target/scanoss-hfh-api-linux-amd64
-            target/scanoss-hfh-api-linux-arm64
-            scanoss-hfh-api_linux-amd64_${{ github.ref_name }}-1.tgz
-            scanoss-hfh-api_linux-arm64_${{ github.ref_name }}-1.tgz
+            target/scanoss-folder-hashing-api-linux-amd64
+            target/scanoss-folder-hashing-api-linux-arm64
+            scanoss-folder-hashing-api_linux-amd64_${{ github.ref_name }}-1.tgz
+            scanoss-folder-hashing-api_linux-arm64_${{ github.ref_name }}-1.tgz
+

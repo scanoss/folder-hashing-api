@@ -3,8 +3,8 @@
 ##########################################
 #
 # This script will copy all the required files into the correct locations on the server
-# Config goes into: /usr/local/etc/scanoss/hfh
-# Logs go into: /var/log/scanoss/hfh
+# Config goes into: /usr/local/etc/scanoss/folder-hashing-api
+# Logs go into: /var/log/scanoss/folder-hashing-api
 # Service definition goes into: /etc/systemd/system
 # Binary & startup go into: /usr/local/bin
 #
@@ -12,7 +12,7 @@
 
 show_help() {
   echo "$0 [-h|--help] [-f|--force] [environment]"
-  echo "   Setup and copy the required files into place on a server to run the SCANOSS HFH API"
+  echo "   Setup and copy the required files into place on a server to run the SCANOSS Folder Hashing API"
   echo "   [environment] allows the optional specification of a suffix to allow multiple services"
   echo "   -f | --force  Run without interactive prompts (skip questions, skip SQLite setup, do not overwrite config)"
   exit 1
@@ -40,11 +40,11 @@ done
 
 ENVIRONMENT="${ENVIRONMENT:-$DEFAULT_ENV}"
 export BASE_C_PATH=/usr/local/etc/scanoss
-export CONFIG_DIR="${BASE_C_PATH}/hfh"
+export CONFIG_DIR="${BASE_C_PATH}/folder-hashing-api"
 export LOG_DIR=/var/log/scanoss
-export L_PATH="${LOG_DIR}/hfh"
+export L_PATH="${LOG_DIR}/folder-hashing-api"
 export DB_PATH_BASE=/var/lib/scanoss
-export SQLITE_PATH="${DB_PATH_BASE}/db/sqlite/hfh"
+export SQLITE_PATH="${DB_PATH_BASE}/db/sqlite/folder-hashing-api"
 export SQLITE_DB_NAME=base.sqlite
 export TARGET_SQLITE_DB_NAME=db.sqlite
 export CONF_DOWNLOAD_URL="https://raw.githubusercontent.com/scanoss/hfh/refs/heads/main/config/app-config-prod.json"
@@ -63,18 +63,18 @@ if [ "$EUID" -ne 0 ] ; then
 fi
 
 if [ "$FORCE" = false ]; then
-  read -p "Install SCANOSS HFH API $ENVIRONMENT (y/n) [n]? " -n 1 -r
+  read -p "Install SCANOSS Folder Hashing API $ENVIRONMENT (y/n) [n]? " -n 1 -r
   echo
   if [[ ! $REPLY =~ ^[Yy]$ ]] ; then
     echo "Stopping."
     exit 1
   fi
 else
-  echo "[FORCE] Auto-accept installation of SCANOSS HFH API $ENVIRONMENT"
+  echo "[FORCE] Auto-accept installation of SCANOSS Folder Hashing API $ENVIRONMENT"
 fi
 
 # Setup all the required folders and ownership
-echo "Setting up HFH API system folders..."
+echo "Setting up Folder Hashing API system folders..."
 mkdir -p "$CONFIG_DIR" || { echo "Error: Problem creating $CONFIG_DIR"; exit 1; }
 mkdir -p "$L_PATH" || { echo "Error: Problem creating $L_PATH"; exit 1; }
 
@@ -84,11 +84,11 @@ if [ "$RUNTIME_USER" != "root" ] ; then
 fi
 
 # Setup the service on the system
-SC_SERVICE_FILE="scanoss-hfh-api.service"
-SC_SERVICE_NAME="scanoss-hfh-api"
+SC_SERVICE_FILE="scanoss-folder-hashing-api.service"
+SC_SERVICE_NAME="scanoss-folder-hashing-api"
 if [ -n "$ENVIRONMENT" ] ; then
-  SC_SERVICE_FILE="scanoss-hfh-api-${ENVIRONMENT}.service"
-  SC_SERVICE_NAME="scanoss-hfh-api-${ENVIRONMENT}"
+  SC_SERVICE_FILE="scanoss-folder-hashing-api-${ENVIRONMENT}.service"
+  SC_SERVICE_NAME="scanoss-folder-hashing-api-${ENVIRONMENT}"
 fi
 
 service_stopped=""
@@ -102,7 +102,7 @@ echo "Copying service startup config..."
 if [ -f "$SC_SERVICE_FILE" ] ; then
   cp "$SC_SERVICE_FILE" /etc/systemd/system || { echo "Error: service copy failed"; exit 1; }
 fi
-cp scanoss-hfh-api.sh /usr/local/bin || { echo "Error: startup script copy failed"; exit 1; }
+cp scanoss-folder-hashing-api.sh /usr/local/bin || { echo "Error: startup script copy failed"; exit 1; }
 
 ####################################################
 #                SEARCH CONFIG FILE                #
@@ -198,7 +198,7 @@ find "$DB_PATH_BASE" -type d -exec chmod 0750 "{}" \;
 find "$DB_PATH_BASE" -type f -exec chmod 0640 "{}" \;
 
 # Copy the binaries if requested
-BINARY=scanoss-hfh-api
+BINARY=scanoss-folder-hashing-api
 if [ -f $BINARY ] ; then
   echo "Copying app binary to /usr/local/bin ..."
   cp $BINARY /usr/local/bin || { echo "Error copying $BINARY"; exit 1; }

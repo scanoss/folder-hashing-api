@@ -9,8 +9,8 @@
 ################################################################
 DEFAULT_ENV="prod"
 ENVIRONMENT="${1:-$DEFAULT_ENV}"
-LOGFILE=/var/log/scanoss/hfh/scanoss-hfh-${ENVIRONMENT}.log
-CONF_FILE=/usr/local/etc/scanoss/hfh/app-config-${ENVIRONMENT}.json
+LOGFILE=/var/log/scanoss/folder-hashing-api/scanoss-folder-hashing-api-${ENVIRONMENT}.log
+CONF_FILE=/usr/local/etc/scanoss/folder-hashing-api/app-config-${ENVIRONMENT}.json
 # Rotate log
 if [ -f "$LOGFILE" ] ; then
   echo "rotating logfile..."
@@ -22,6 +22,6 @@ fi
 echo > "$LOGFILE"
 
 #start API
-echo "Starting SCANOSS HFH API"
+echo "Starting SCANOSS Folder Hashing API"
 
-exec /usr/local/bin/scanoss-hfh-api --json-config "$CONF_FILE" > "$LOGFILE" 2>&1
+exec /usr/local/bin/scanoss-folder-hashing-api --json-config "$CONF_FILE" > "$LOGFILE" 2>&1

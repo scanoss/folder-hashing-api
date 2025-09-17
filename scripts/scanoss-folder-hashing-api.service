@@ -1,5 +1,5 @@
 [Unit]
-Description=SCANOSS HFH API Service
+Description=SCANOSS Folder Hashing API Service
 After=network.target
 StartLimitIntervalSec=0
 
@@ -8,7 +8,7 @@ Type=simple
 Restart=always
 RestartSec=5
 User=scanoss
-ExecStart=/usr/local/bin/scanoss-hfh-api.sh
+ExecStart=/usr/local/bin/scanoss-folder-hashing-api.sh
 
 [Install]
 WantedBy=multi-user.target
