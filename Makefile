@@ -229,3 +229,15 @@ version_tag: ## Create a new version tag
 release: docker_package_all ## Build and package everything for release
 	@echo "🎉 Release $(VERSION) packages created!"
 	@ls -la scanoss-hfh-api-docker-*-$(VERSION)-*.tar.gz
+
+package_amd: version  ## Build & Package an AMD 64 binary
+	@echo "Building AMD binary $(VERSION) and placing into scripts..."
+	go generate ./cmd/server/main.go
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-hfh-api ./cmd/server/main.go
+	bash ./package-scripts.sh linux-amd64 $(VERSION)
+
+package_arm: version  ## Build & Package an ARM 64 binary
+	@echo "Building ARM binary $(VERSION) and placing into scripts..."
+	go generate ./cmd/server/main.go
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-hfh-api ./cmd/server/main.go
+	bash ./package-scripts.sh linux-arm64 $(VERSION)
