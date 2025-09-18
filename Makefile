@@ -108,13 +108,23 @@ ghcr_all: ghcr_build ghcr_push  ## Execute all GitHub Package container actions
 # Binary Building (for local development)
 build_amd:  ## Build an AMD 64 binary
 	@echo "Building AMD binary $(VERSION)..."
-	@mkdir -p ./dist
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(VERSION)" -o ./dist/scanoss-hfh-api ./cmd/server
+	@mkdir -p ./target
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(VERSION)" -o ./target/scanoss-folder-hashing-api-linux-amd64 ./cmd/server
 
 build_arm:  ## Build an ARM 64 binary
 	@echo "Building ARM binary $(VERSION)..."
-	@mkdir -p ./dist
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(VERSION)" -o ./dist/scanoss-hfh-api ./cmd/server
+	@mkdir -p ./target
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(VERSION)" -o ./target/scanoss-folder-hashing-api-linux-arm64 ./cmd/server
+
+build_import_amd:  ## Build import script for AMD64
+	@echo "Building import script for AMD64 $(VERSION)..."
+	@mkdir -p ./target
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o ./target/scanoss-hfh-import-linux-amd64 ./cmd/import
+
+build_import_arm:  ## Build import script for ARM64
+	@echo "Building import script for ARM64 $(VERSION)..."
+	@mkdir -p ./target
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o ./target/scanoss-hfh-import-linux-arm64 ./cmd/import
 
 # Docker Package Creation
 package: docker_package_amd  ## Create Docker distribution package (AMD64)
