@@ -27,10 +27,13 @@ func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequ
 		return nil, err
 	}
 
-	results, err := s.scanNode(ctx, req.Root, req.RankThreshold, req.RecursiveThreshold, true)
+	results, err := s.scanNode(ctx, req.Root, req.RankThreshold, req.RecursiveThreshold, req.MinAcceptedScore, true)
 	if err != nil {
 		return nil, err
 	}
+
+	// Deduplicate components across folders, keeping only the highest scoring instance
+	results = s.deduplicateComponents(results)
 
 	response := &entities.ScanResponse{
 		Results: results,
@@ -41,29 +44,45 @@ func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequ
 	return response, nil
 }
 
-func (s *ScanServiceImpl) processComponentGroups(componentGroups []entities.ComponentGroup, path string) []*entities.ScanResult {
+func (s *ScanServiceImpl) processComponentGroups(componentGroups []entities.ComponentGroup, path string, minAcceptedScore float32) []*entities.ScanResult {
 	if len(componentGroups) == 0 {
 		return []*entities.ScanResult{}
 	}
 
 	var results []*entities.ScanResult
+	var filteredGroups []*entities.ComponentGroup
 
-	result := &entities.ScanResult{
-		PathID:          path,
-		ComponentGroups: make([]*entities.ComponentGroup, len(componentGroups)),
+	// Filter component groups based on minimum accepted score
+	for _, group := range componentGroups {
+		// Filter versions within the group
+		var filteredVersions []entities.Version
+		for _, version := range group.Versions {
+			if version.Score > minAcceptedScore {
+				filteredVersions = append(filteredVersions, version)
+			}
+		}
+
+		// Only include the group if it has at least one version above the threshold
+		if len(filteredVersions) > 0 {
+			groupCopy := group
+			groupCopy.Versions = filteredVersions
+			filteredGroups = append(filteredGroups, &groupCopy)
+		}
 	}
 
-	for i, group := range componentGroups {
-		groupCopy := group
-		result.ComponentGroups[i] = &groupCopy
+	// Only create a result if we have filtered groups
+	if len(filteredGroups) > 0 {
+		result := &entities.ScanResult{
+			PathID:          path,
+			ComponentGroups: filteredGroups,
+		}
+		results = append(results, result)
 	}
-
-	results = append(results, result)
 
 	return results
 }
 
-func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, recursiveThreshold float32, isRoot bool) ([]*entities.ScanResult, error) {
+func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, recursiveThreshold float32, minAcceptedScore float32, isRoot bool) ([]*entities.ScanResult, error) {
 	logger := ctxzap.Extract(ctx).Sugar()
 
 	if node.SimHashDirNames == "" && node.SimHashNames == "" && node.SimHashContent == "" {
@@ -86,15 +105,15 @@ func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNod
 	// Check if any component group has a version with score >= recursiveThreshold
 	if shouldCheckThreshold && recursiveThreshold > 0 && s.hasHighScoreMatch(componentGroups, recursiveThreshold) {
 		logger.Infof("Found high score match (>= %f) for node %s, stopping search", recursiveThreshold, node.PathID)
-		results := s.processComponentGroups(componentGroups, node.PathID)
+		results := s.processComponentGroups(componentGroups, node.PathID, minAcceptedScore)
 		return results, nil
 	}
 
-	results := s.processComponentGroups(componentGroups, node.PathID)
+	results := s.processComponentGroups(componentGroups, node.PathID, minAcceptedScore)
 
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			childResults, err := s.scanNode(ctx, child, rankThreshold, recursiveThreshold, false)
+			childResults, err := s.scanNode(ctx, child, rankThreshold, recursiveThreshold, minAcceptedScore, false)
 			if err != nil {
 				return nil, err
 			}
@@ -115,4 +134,70 @@ func (s *ScanServiceImpl) hasHighScoreMatch(componentGroups []entities.Component
 		}
 	}
 	return false
+}
+
+// deduplicateComponents removes duplicate components across folders, keeping only the highest scoring instance
+func (s *ScanServiceImpl) deduplicateComponents(results []*entities.ScanResult) []*entities.ScanResult {
+	if len(results) == 0 {
+		return results
+	}
+
+	// Map to track the best component instance: PURL -> (pathID, componentGroup, maxScore)
+	type componentInfo struct {
+		pathID    string
+		component *entities.ComponentGroup
+		maxScore  float32
+	}
+	bestComponents := make(map[string]*componentInfo)
+
+	// Find the highest scoring instance of each component
+	for _, result := range results {
+		for _, group := range result.ComponentGroups {
+			// Find the maximum score for this component group
+			var maxScore float32
+			for _, version := range group.Versions {
+				if version.Score > maxScore {
+					maxScore = version.Score
+				}
+			}
+
+			// Check if we've seen this component before
+			if existing, exists := bestComponents[group.PURL]; exists {
+				// Keep the one with higher score
+				if maxScore > existing.maxScore {
+					bestComponents[group.PURL] = &componentInfo{
+						pathID:    result.PathID,
+						component: group,
+						maxScore:  maxScore,
+					}
+				}
+			} else {
+				// First time seeing this component
+				bestComponents[group.PURL] = &componentInfo{
+					pathID:    result.PathID,
+					component: group,
+					maxScore:  maxScore,
+				}
+			}
+		}
+	}
+
+	// Rebuild results with deduplicated components
+	pathToComponents := make(map[string][]*entities.ComponentGroup)
+	for _, info := range bestComponents {
+		pathToComponents[info.pathID] = append(pathToComponents[info.pathID], info.component)
+	}
+
+	// Create new result set
+	var deduplicatedResults []*entities.ScanResult
+	for pathID, components := range pathToComponents {
+		if len(components) > 0 {
+			deduplicatedResults = append(deduplicatedResults, &entities.ScanResult{
+				PathID:          pathID,
+				ComponentGroups: components,
+			})
+		}
+	}
+
+	return deduplicatedResults
 }

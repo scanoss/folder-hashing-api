@@ -6,6 +6,8 @@ type ScanRequest struct {
 	RankThreshold int `validate:"omitempty,min=0"`
 	// Recursive threshold (e.g i only want to see results with score above this threshold)
 	RecursiveThreshold float32 `validate:"omitempty,min=0"`
+	// Minimum accepted score - only matches with score bigger than this value will be reported (default: 0.15)
+	MinAcceptedScore float32 `validate:"omitempty,min=0"`
 	// Filter results by category (e.g i only want to see results from github projects, npm, etc)
 	Category string
 	// Maximum number of results to query
