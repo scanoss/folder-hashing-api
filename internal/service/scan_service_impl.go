@@ -27,7 +27,7 @@ func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequ
 		return nil, err
 	}
 
-	results, err := s.scanNode(ctx, req.Root, req.RankThreshold, req.MinCutoffThreshold)
+	results, err := s.scanNode(ctx, req.Root, req.RankThreshold, req.RecursiveThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (s *ScanServiceImpl) processComponentGroups(componentGroups []entities.Comp
 	return results
 }
 
-func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, minCutoffThreshold float32) ([]*entities.ScanResult, error) {
+func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, recursiveThreshold float32) ([]*entities.ScanResult, error) {
 	logger := ctxzap.Extract(ctx).Sugar()
 
 	if node.SimHashDirNames == "" && node.SimHashNames == "" && node.SimHashContent == "" {
@@ -80,9 +80,9 @@ func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNod
 
 	logger.Debugf("SearchByHashes returned %d component groups for node %s", len(componentGroups), node.PathID)
 
-	// Check if any component group has a version with score >= minCutoffThreshold
-	if minCutoffThreshold > 0 && s.hasHighScoreMatch(componentGroups, minCutoffThreshold) {
-		logger.Infof("Found high score match (>= %f) for node %s, stopping search", minCutoffThreshold, node.PathID)
+	// Check if any component group has a version with score >= recursiveThreshold
+	if recursiveThreshold > 0 && s.hasHighScoreMatch(componentGroups, recursiveThreshold) {
+		logger.Infof("Found high score match (>= %f) for node %s, stopping search", recursiveThreshold, node.PathID)
 		results := s.processComponentGroups(componentGroups, node.PathID)
 		return results, nil
 	}
@@ -91,7 +91,7 @@ func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNod
 
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			childResults, err := s.scanNode(ctx, child, rankThreshold, minCutoffThreshold)
+			childResults, err := s.scanNode(ctx, child, rankThreshold, recursiveThreshold)
 			if err != nil {
 				return nil, err
 			}

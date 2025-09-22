@@ -4,8 +4,8 @@ package entities
 type ScanRequest struct {
 	// Get results with rank above this threshold (e.g i only want to see results from rank 3 and above)
 	RankThreshold int `validate:"omitempty,min=0"`
-	// Min cutoff threshold (e.g i only want to see results with score above this threshold)
-	MinCutoffThreshold float32 `validate:"omitempty,min=0"`
+	// Recursive threshold (e.g i only want to see results with score above this threshold)
+	RecursiveThreshold float32 `validate:"omitempty,min=0"`
 	// Filter results by category (e.g i only want to see results from github projects, npm, etc)
 	Category string
 	// Maximum number of results to query
