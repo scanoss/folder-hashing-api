@@ -391,13 +391,17 @@ func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.Sco
 	// Convert all points to results
 	for i, point := range searchResp {
 		result := r.convertPointToResult(point)
-		// Avoid results with higher distances. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
-		scoreThreshold := searchResp[0].Score*1.1 + 2.0
+		// Avoid results with higher distances. Offset of 3 to fix "0" score comparation. Ex 0 vs 1.
+		scoreThreshold := searchResp[0].Score*1.1 + 3.0
 		if result.Score > scoreThreshold {
 			fmt.Printf("Filtering out results starting at index %d. Best score: %f, threshold: %f, current score: %f\n", i, searchResp[0].Score, scoreThreshold, result.Score)
 			break
 		}
+
 		allResults = append(allResults, result)
+		if result.Rank < 2 {
+			break // Stop if the component is popular enough
+		}
 	}
 
 	fmt.Printf("processSearchResults: converted %d points to %d results\n", len(searchResp), len(allResults))
@@ -563,12 +567,12 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 
 // Convert an absolute distance to matching score [0,1].
 func distanceToScore(distance float32) float32 {
-	const k = 0.05365 // -ln(0.2) / 30
+	const k = 0.065 // -ln(0.2) / 30
 	return float32(math.Exp(-k * float64(distance)))
 }
 
 // Convert a matching score [0,1] to absolute distance.
 func ScoreToDistance(match float32) float32 {
-	const k = 0.05365 // -ln(0.2) / 30
+	const k = 0.065 // -ln(0.2) / 30
 	return float32(-math.Log(float64(match)) / k)
 }
