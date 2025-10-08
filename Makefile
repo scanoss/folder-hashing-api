@@ -58,11 +58,11 @@ build_arm64: ## Build ARM64 binary
 
 build_import_amd64: ## Build import tool (AMD64)
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(BUILD_DIR)/hfh-import-linux-amd64 ./cmd/import
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/hfh-import-linux-amd64 ./cmd/import
 
 build_import_arm64: ## Build import tool (ARM64)
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(BUILD_DIR)/hfh-import-linux-arm64 ./cmd/import
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/hfh-import-linux-arm64 ./cmd/import
 
 # Maintenance
 clean: ## Clean build artifacts
@@ -83,11 +83,11 @@ ci: lint test ## Run all CI checks
 package_amd64: version  ## Build & Package an AMD 64 binary
 	@echo "Building AMD binary $(VERSION) and placing into scripts..."
 	go generate ./cmd/server/main.go
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
 	bash ./package-scripts.sh linux-amd64 $(VERSION)
 
 package_arm64: version  ## Build & Package an ARM 64 binary
 	@echo "Building ARM binary $(VERSION) and placing into scripts..."
 	go generate ./cmd/server/main.go
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
 	bash ./package-scripts.sh linux-arm64 $(VERSION)
