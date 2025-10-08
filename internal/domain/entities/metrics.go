@@ -1,6 +1,8 @@
 package entities
 
 import (
+	"log"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -19,6 +21,6 @@ func SetupMetrics() {
 	oltpMetrics.hfhScanHistogram, err = meter.Int64Histogram("hfh.scan.req_time", metric.WithDescription("The time taken to run a hfh scan request (ms)"))
 	if err != nil {
 		// Log error but don't fail - metrics are non-critical
-		_ = err
+		log.Printf("failed to create hfh.scan.req_time histogram: %v", err)
 	}
 }
