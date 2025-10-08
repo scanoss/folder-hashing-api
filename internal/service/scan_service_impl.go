@@ -2,24 +2,28 @@ package service
 
 import (
 	"context"
+	"sort"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 	"github.com/scanoss/folder-hashing-api/internal/repository"
 	"github.com/scanoss/folder-hashing-api/internal/validation"
 )
 
+// ScanServiceImpl implements the ScanService interface.
 type ScanServiceImpl struct {
 	repo repository.ScanRepository
 }
 
+// NewScanService creates a new scan service instance.
 func NewScanService(repo repository.ScanRepository) ScanService {
 	return &ScanServiceImpl{
 		repo: repo,
 	}
 }
 
-// ScanFolder performs a folder hash scan
+// ScanFolder performs a folder hash scan.
 func (s *ScanServiceImpl) ScanFolder(ctx context.Context, req *entities.ScanRequest) (*entities.ScanResponse, error) {
 	logger := ctxzap.Extract(ctx).Sugar()
 
@@ -82,7 +86,7 @@ func (s *ScanServiceImpl) processComponentGroups(componentGroups []entities.Comp
 	return results
 }
 
-func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, recursiveThreshold float32, minAcceptedScore float32, isRoot bool) ([]*entities.ScanResult, error) {
+func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNode, rankThreshold int, recursiveThreshold, minAcceptedScore float32, isRoot bool) ([]*entities.ScanResult, error) {
 	logger := ctxzap.Extract(ctx).Sugar()
 
 	if node.SimHashDirNames == "" && node.SimHashNames == "" && node.SimHashContent == "" {
@@ -124,7 +128,7 @@ func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNod
 	return results, nil
 }
 
-// hasHighScoreMatch checks if any component group has a version with score >= threshold
+// hasHighScoreMatch checks if any component group has a version with score >= threshold.
 func (s *ScanServiceImpl) hasHighScoreMatch(componentGroups []entities.ComponentGroup, threshold float32) bool {
 	for _, group := range componentGroups {
 		for _, version := range group.Versions {
@@ -136,7 +140,9 @@ func (s *ScanServiceImpl) hasHighScoreMatch(componentGroups []entities.Component
 	return false
 }
 
-// deduplicateComponents removes duplicate components across folders, keeping only the highest scoring instance
+// deduplicateComponents removes duplicate components across folders, keeping only the highest scoring instance.
+//
+//nolint:gocognit // Deduplication algorithm complexity is acceptable
 func (s *ScanServiceImpl) deduplicateComponents(results []*entities.ScanResult) []*entities.ScanResult {
 	if len(results) == 0 {
 		return results
@@ -198,6 +204,10 @@ func (s *ScanServiceImpl) deduplicateComponents(results []*entities.ScanResult) 
 			})
 		}
 	}
+
+	sort.Slice(deduplicatedResults, func(i, j int) bool {
+		return deduplicatedResults[i].PathID < deduplicatedResults[j].PathID
+	})
 
 	return deduplicatedResults
 }

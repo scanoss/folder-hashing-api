@@ -14,6 +14,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+// Package config provides configuration loading and management for the HFH service.
 package config
 
 import (
@@ -23,6 +24,7 @@ import (
 
 	"github.com/golobby/config/v3"
 	"github.com/golobby/config/v3/pkg/feeder"
+
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
@@ -69,8 +71,7 @@ type Config struct {
 	} `json:"Hfh"`
 }
 
-// LoadConfig loads configuration from command line flags, JSON file, .env file, and environment variables
-// Priority order: Environment variables > JSON file > .env file > defaults
+// LoadConfig loads configuration with priority: Environment variables > JSON file > .env file > defaults.
 func LoadConfig() (*Config, error) {
 	var jsonConfig, envConfig string
 	debug := flag.Bool("debug", false, "Enable debug")
@@ -122,6 +123,7 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
+// SetDefaults sets default values for the configuration.
 func (c *Config) SetDefaults() {
 	// Set App defaults
 	c.App.Name = "SCANOSS HFH Server"

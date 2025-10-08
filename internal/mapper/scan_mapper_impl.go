@@ -3,17 +3,20 @@ package mapper
 import (
 	"maps"
 
-	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 	"github.com/scanoss/papi/api/scanningv2"
+
+	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
+// ScanMapperImpl implements the ScanMapper interface.
 type ScanMapperImpl struct{}
 
+// NewScanMapper creates a new scan mapper instance.
 func NewScanMapper() ScanMapper {
 	return &ScanMapperImpl{}
 }
 
-// ProtoToDomain converts protobuf HFHRequest to domain ScanRequest
+// ProtoToDomain converts protobuf HFHRequest to domain ScanRequest.
 func (m *ScanMapperImpl) ProtoToDomain(req *scanningv2.HFHRequest) *entities.ScanRequest {
 	if req == nil {
 		return nil
@@ -29,7 +32,7 @@ func (m *ScanMapperImpl) ProtoToDomain(req *scanningv2.HFHRequest) *entities.Sca
 	}
 }
 
-// DomainToProto converts domain ScanResponse to protobuf HFHResponse
+// DomainToProto converts domain ScanResponse to protobuf HFHResponse.
 func (m *ScanMapperImpl) DomainToProto(resp *entities.ScanResponse) *scanningv2.HFHResponse {
 	if resp == nil {
 		return nil
@@ -48,7 +51,7 @@ func (m *ScanMapperImpl) DomainToProto(resp *entities.ScanResponse) *scanningv2.
 	return protoResp
 }
 
-// ChildrenToDomain converts protobuf Children to domain FolderNode
+// ChildrenToDomain converts protobuf Children to domain FolderNode.
 func (m *ScanMapperImpl) ChildrenToDomain(children *scanningv2.HFHRequest_Children) *entities.FolderNode {
 	if children == nil {
 		return nil
@@ -77,7 +80,7 @@ func (m *ScanMapperImpl) ChildrenToDomain(children *scanningv2.HFHRequest_Childr
 	return node
 }
 
-// scanResultToProto converts domain ScanResult to protobuf Result
+// scanResultToProto converts domain ScanResult to protobuf Result.
 func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scanningv2.HFHResponse_Result {
 	if result == nil {
 		return nil

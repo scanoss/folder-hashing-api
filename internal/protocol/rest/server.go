@@ -22,13 +22,16 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/scanoss/folder-hashing-api/internal/config"
 	gw "github.com/scanoss/go-grpc-helper/pkg/grpc/gateway"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
+
+	"github.com/scanoss/folder-hashing-api/internal/config"
 )
 
 // RunServer runs REST grpc gateway to forward requests onto the gRPC server.
+//
+//nolint:revive // context position is determined by existing API design
 func RunServer(config *config.Config, ctx context.Context, grpcPort, httpPort string, allowedIPs, deniedIPs []string, startTLS bool) (*http.Server, error) {
 	// configure the gateway for forwarding to gRPC
 	srv, mux, grpcGateway, opts, err := gw.SetupGateway(

@@ -1,3 +1,4 @@
+// Package validation provides request validation utilities.
 package validation
 
 import (
@@ -11,6 +12,7 @@ var (
 	instance *validator.Validate
 )
 
+// GetValidator returns a singleton validator instance.
 func GetValidator() *validator.Validate {
 	once.Do(func() {
 		instance = validator.New()
@@ -18,6 +20,7 @@ func GetValidator() *validator.Validate {
 	return instance
 }
 
+// ValidateStruct validates a struct using the validator instance.
 func ValidateStruct(s any) error {
 	return GetValidator().Struct(s)
 }

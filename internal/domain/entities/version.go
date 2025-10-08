@@ -16,6 +16,6 @@
 
 package entities
 
-// Gets updated build time using -ldflags
-// Example: "-X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(git tag --sort=-version:refname | head -n 1)"
+// AppVersion is the version of the application, set at build time via ldflags.
+// Example: "-X github.com/scanoss/folder-hashing-api/internal/domain/entities.AppVersion=$(git tag --sort=-version:refname | head -n 1)".
 var AppVersion = ""

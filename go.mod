@@ -1,8 +1,8 @@
 module github.com/scanoss/folder-hashing-api
 
-go 1.24
+go 1.23.0
 
-toolchain go1.24.4
+toolchain go1.23.2
 
 require (
 	github.com/go-playground/validator/v10 v10.26.0

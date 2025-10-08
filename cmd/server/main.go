@@ -23,6 +23,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/scanoss/go-grpc-helper/pkg/files"
+	gs "github.com/scanoss/go-grpc-helper/pkg/grpc/server"
+	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
+
 	"github.com/scanoss/folder-hashing-api/internal/config"
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 	"github.com/scanoss/folder-hashing-api/internal/handler"
@@ -31,12 +35,11 @@ import (
 	"github.com/scanoss/folder-hashing-api/internal/protocol/rest"
 	"github.com/scanoss/folder-hashing-api/internal/repository"
 	"github.com/scanoss/folder-hashing-api/internal/service"
-	"github.com/scanoss/go-grpc-helper/pkg/files"
-	gs "github.com/scanoss/go-grpc-helper/pkg/grpc/server"
-	zlog "github.com/scanoss/zap-logging-helper/pkg/logger"
 )
 
 // main starts the gRPC HFH Service.
+//
+//nolint:gocritic // Initial error before defer setup, fatal exit is appropriate
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -51,6 +54,7 @@ func main() {
 	// Check if TLS/SSL should be enabled
 	startTLS, err := files.CheckTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
+		zlog.S.Errorf("ERROR: TLS check error: %v", err)
 		log.Fatalf("ERROR: TLS check error: %v\n", err)
 	}
 
@@ -85,7 +89,7 @@ func main() {
 
 	// Start the REST grpc-gateway if requested
 	var srv *http.Server
-	if len(cfg.App.RESTPort) > 0 {
+	if cfg.App.RESTPort != "" {
 		if srv, err = rest.RunServer(cfg, ctx, cfg.App.GRPCPort, cfg.App.RESTPort, allowedIPs, deniedIPs, startTLS); err != nil {
 			log.Fatalf("ERROR: REST server setup error: %v\n", err)
 		}
