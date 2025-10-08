@@ -34,6 +34,8 @@ func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
 	overwrite := flag.Bool("overwrite", false, "If true, delete existing collections before import")
 	topPurlsPath := flag.String("top-purls", "", "File with top rated purls (required)")
+	qdrantHost := flag.String("qdrant-host", QdrantHost, "Qdrant server host")
+	qdrantPort := flag.Int("qdrant-port", QdrantPort, "Qdrant server port")
 
 	flag.Parse()
 
@@ -64,8 +66,8 @@ func main() {
 	ctx := context.Background()
 
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: QdrantHost,
-		Port: QdrantPort,
+		Host: *qdrantHost,
+		Port: *qdrantPort,
 	})
 	if err != nil {
 		log.Fatalf("Error connecting to Qdrant: %v", err)
