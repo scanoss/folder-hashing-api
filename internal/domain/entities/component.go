@@ -1,6 +1,7 @@
+// Package entities contains domain entities and data structures for the HFH service.
 package entities
 
-// ComponentGroup represents a grouped component with versions
+// ComponentGroup represents a grouped component with versions.
 type ComponentGroup struct {
 	PURL     string    `json:"purl"`
 	Name     string    `json:"name"`
@@ -10,13 +11,13 @@ type ComponentGroup struct {
 	Order    int32     `json:"order"`
 }
 
-// Version represents a component version with score
+// Version represents a component version with score.
 type Version struct {
 	Version string  `json:"version"`
 	Score   float32 `json:"score"`
 }
 
-// SearchResult represents a search result from Qdrant
+// SearchResult represents a search result from Qdrant.
 type SearchResult struct {
 	Score     float32 `json:"score"`
 	ID        uint64  `json:"id"`

@@ -1,3 +1,4 @@
+// Package main provides a tool to import CSV data into Qdrant collections.
 package main
 
 import (
@@ -17,23 +18,32 @@ import (
 	"time"
 
 	"github.com/qdrant/go-client/qdrant"
+
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
 const (
+	// QdrantHost is the default Qdrant server hostname.
 	QdrantHost = "localhost"
+	// QdrantPort is the default Qdrant server port.
 	QdrantPort = 6334
-	BatchSize  = 2000 // Larger batch size for better performance
-	MaxWorkers = 12   // More workers for parallel processing
-	VectorDim  = 64   // Single 64-bit hash per collection
+	// BatchSize is the number of records to process in each batch.
+	BatchSize = 2000 // Larger batch size for better performance
+	// MaxWorkers is the number of parallel workers for file processing.
+	MaxWorkers = 12 // More workers for parallel processing
+	// VectorDim is the dimensionality of the hash vectors.
+	VectorDim = 64 // Single 64-bit hash per collection
 )
 
 var rankMap map[string]int
 
+//nolint:gocyclo // Main function complexity is acceptable for CLI setup
 func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
 	overwrite := flag.Bool("overwrite", false, "If true, delete existing collections before import")
 	topPurlsPath := flag.String("top-purls", "", "File with top rated purls (required)")
+	qdrantHost := flag.String("qdrant-host", QdrantHost, "Qdrant server host")
+	qdrantPort := flag.Int("qdrant-port", QdrantPort, "Qdrant server port")
 
 	flag.Parse()
 
@@ -64,15 +74,17 @@ func main() {
 	ctx := context.Background()
 
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: QdrantHost,
-		Port: QdrantPort,
+		Host: *qdrantHost,
+		Port: *qdrantPort,
 	})
 	if err != nil {
 		log.Fatalf("Error connecting to Qdrant: %v", err)
 	}
 	defer func() {
 		log.Println("Closing connection to Qdrant")
-		client.Close()
+		if err := client.Close(); err != nil {
+			log.Printf("Warning: Error closing Qdrant connection: %v", err)
+		}
 	}()
 	log.Println("Connected to Qdrant server successfully")
 
@@ -85,13 +97,15 @@ func main() {
 		log.Printf("Checking collection: %s", collectionName)
 		collectionExists, err := client.CollectionExists(ctx, collectionName)
 		if err != nil {
-			log.Fatalf("Error checking if collection %s exists: %v", collectionName, err)
+			log.Printf("Error checking if collection %s exists: %v", collectionName, err)
+			return
 		}
 
 		if *overwrite && collectionExists {
 			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
 			err = client.DeleteCollection(ctx, collectionName)
 			if err != nil {
+				//nolint:gocritic // Error is fatal, defer will not help here
 				log.Fatalf("Error dropping collection %s: %v", collectionName, err)
 			}
 			log.Printf("Collection '%s' dropped successfully", collectionName)
@@ -147,7 +161,7 @@ func main() {
 				err := importCSVFile(ctx, client, file, sectorName)
 				if err != nil {
 					log.Printf("Worker %d: Error importing file %s: %v", workerId, file, err)
-					errorsChan <- fmt.Errorf("error importing file %s: %v", file, err)
+					errorsChan <- fmt.Errorf("error importing file %s: %w", file, err)
 				} else {
 					log.Printf("Worker %d: Successfully processed sector %s", workerId, sectorName)
 				}
@@ -186,7 +200,7 @@ func main() {
 	}
 }
 
-// Create a language-based collection with named vectors (dirs, names, contents)
+// Create a language-based collection with named vectors (dirs, names, contents).
 func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
 
@@ -276,16 +290,20 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	}
 }
 
-// Import data from a CSV file to separate collections
+// Import data from a CSV file to separate collections.
 func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorName string) error {
 	log.Printf("Opening CSV file: %s", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("error opening CSV file: %v", err)
+		return fmt.Errorf("error opening CSV file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Warning: Error closing file %s: %v", filePath, err)
+		}
+	}()
 
-	var validRecords [][]string
+	validRecords := make([][]string, 0, 10000) // Pre-allocate for performance
 	var lineNumber int
 	var errorCount int
 
@@ -345,7 +363,7 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	return nil
 }
 
-// hexSimhashToVector converts hex hash string to vector
+// hexSimhashToVector converts hex hash string to vector.
 func hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	if hexHashString == "" {
 		return nil, fmt.Errorf("input hex string cannot be empty")
@@ -375,7 +393,9 @@ func hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	return vector, nil
 }
 
-// Insert a batch of records to language-based collections
+// Insert a batch of records to language-based collections.
+//
+//nolint:gocyclo,nestif // Batch processing complexity is inherent to CSV import
 func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client, batch [][]string) error {
 	// Group points by collection (language)
 	collectionPoints := make(map[string][]*qdrant.PointStruct)
@@ -411,12 +431,27 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 			continue
 		}
 
-		// Parse metadata
-		totalFiles, _ := strconv.ParseInt(record[11], 10, 32)
-		indexedFiles, _ := strconv.ParseInt(record[12], 10, 32)
-		sourceFiles, _ := strconv.ParseInt(record[13], 10, 32)
-		ignoredFiles, _ := strconv.ParseInt(record[14], 10, 32)
-		size, _ := strconv.ParseInt(record[15], 10, 32)
+		// Parse metadata (default to 0 if parsing fails)
+		totalFiles, err := strconv.ParseInt(record[11], 10, 32)
+		if err != nil {
+			totalFiles = 0
+		}
+		indexedFiles, err := strconv.ParseInt(record[12], 10, 32)
+		if err != nil {
+			indexedFiles = 0
+		}
+		sourceFiles, err := strconv.ParseInt(record[13], 10, 32)
+		if err != nil {
+			sourceFiles = 0
+		}
+		ignoredFiles, err := strconv.ParseInt(record[14], 10, 32)
+		if err != nil {
+			ignoredFiles = 0
+		}
+		size, err := strconv.ParseInt(record[15], 10, 32)
+		if err != nil {
+			size = 0
+		}
 		categoryStr := strings.TrimSpace(record[16])
 
 		// Generate unique point ID based on metadata to handle re-imports gracefully
@@ -430,7 +465,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		rank := categoryToRank[categoryStr]
 		hasher := fnv.New64a()
 		hasher.Write([]byte(idStringToHash))
-		pointId := hasher.Sum64()
+		pointID := hasher.Sum64()
 
 		// If the PURL is on the preferred list of purls, take that value
 		purl := strings.TrimSpace(record[9])
@@ -461,7 +496,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		}
 
 		// Parse language extensions if present (column 17) to determine target collection
-		var targetCollection string = "misc_collection" // default fallback
+		targetCollection := "misc_collection" // default fallback
 		var langExtensions map[string]int
 
 		if len(record) > 17 && strings.TrimSpace(record[17]) != "" {
@@ -483,7 +518,12 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 				// Determine target collection based on language extensions
 				langExt := make(entities.LanguageExtensions)
 				for lang, count := range langExtensions {
-					langExt[lang] = int32(count)
+					// Safe conversion with overflow check
+					if count > 2147483647 {
+						langExt[lang] = 2147483647
+					} else {
+						langExt[lang] = int32(count) // #nosec G115 -- checked above
+					}
 				}
 				targetCollection = entities.GetCollectionNameFromLanguageExtensions(langExt)
 			}
@@ -497,7 +537,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		}
 
 		point := &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(pointId),
+			Id:      qdrant.NewIDNum(pointID),
 			Vectors: qdrant.NewVectorsMap(vectorsMap),
 			Payload: payload,
 		}
@@ -524,7 +564,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 					Points:         pts,
 				})
 				if err != nil {
-					errChan <- fmt.Errorf("error inserting to %s collection: %v", colName, err)
+					errChan <- fmt.Errorf("error inserting to %s collection: %w", colName, err)
 				} else {
 					log.Printf("Successfully inserted %d points to %s", len(pts), colName)
 				}
@@ -545,7 +585,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 	return nil
 }
 
-// Function to show collection statistics
+// Function to show collection statistics.
 func showCollectionStats(ctx context.Context, client *qdrant.Client, collectionName string) {
 	log.Printf("\n=== Collection Statistics (%s) ===", collectionName)
 
@@ -569,7 +609,11 @@ func initPurlMap(filename string) (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Warning: Error closing file %s: %v", filename, err)
+		}
+	}()
 
 	data, err := os.ReadFile(filename)
 	if err != nil {

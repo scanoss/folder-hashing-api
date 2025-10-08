@@ -21,18 +21,18 @@ jobs:
 
       - name: Build API and Import Scripts
         run: |
-          make build_amd
-          make build_arm
-          make build_import_amd
-          make build_import_arm
+          make build_amd64
+          make build_arm64
+          make build_import_amd64
+          make build_import_arm64
 
       - name: Unit Test
         run: make unit_test
 
       - name: Package
         run: |
-          make package_amd
-          make package_arm
+          make package_amd64
+          make package_arm64
 
       - name: Release
         uses: softprops/action-gh-release@v1
@@ -45,4 +45,3 @@ jobs:
             target/scanoss-hfh-import-linux-arm64
             scanoss-folder-hashing-api_linux-amd64_${{ github.ref_name }}-1.tgz
             scanoss-folder-hashing-api_linux-arm64_${{ github.ref_name }}-1.tgz
-

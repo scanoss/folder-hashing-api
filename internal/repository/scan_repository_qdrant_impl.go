@@ -10,25 +10,28 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/qdrant/go-client/qdrant"
+
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
 const (
+	// VectorDim is the dimensionality of hash vectors stored in Qdrant.
 	VectorDim = 64 // Single 64-bit hash per collection
 )
 
+// QdrantConfig contains configuration for connecting to Qdrant.
 type QdrantConfig struct {
 	Host string
 	Port int
 }
 
-// scanRepository implements the ScanRepository interface using Qdrant
+// ScanRepositoryQdrantImpl implements the ScanRepository interface using Qdrant.
 type ScanRepositoryQdrantImpl struct {
 	client *qdrant.Client
 	config QdrantConfig
 }
 
-// NewScanRepository creates a new Qdrant-based scan repository
+// NewScanRepositoryQdrantImpl creates a new Qdrant-based scan repository.
 func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: config.Host,
@@ -44,9 +47,8 @@ func NewScanRepositoryQdrantImpl(config QdrantConfig) (ScanRepository, error) {
 	}, nil
 }
 
-// SearchByHashes performs a search using directory, name, and content hashes
-// Uses single query with multi-stage prefetch structure
-func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error) {
+// SearchByHashes performs a multi-stage prefetch search using directory, name, and content hashes.
+func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, rankThreshold int) ([]entities.ComponentGroup, error) {
 	s := ctxzap.Extract(ctx).Sugar()
 	s.Info("Starting optimized multi-stage search")
 
@@ -87,13 +89,13 @@ func (r *ScanRepositoryQdrantImpl) SearchByHashes(ctx context.Context, dirHash, 
 	// Execute optimized query
 	searchResp, err := r.executeOptimizedQuery(ctx, collectionName, nameVector, dirsVector, contentVector, rankThreshold)
 	if err != nil {
-		return nil, fmt.Errorf("error performing optimized search in %s: %v", collectionName, err)
+		return nil, fmt.Errorf("error performing optimized search in %s: %w", collectionName, err)
 	}
 
 	return r.processSearchResults(searchResp)
 }
 
-// createRangeRankCondition creates a condition for rank range matching (rank <= maxRank)
+// createRangeRankCondition creates a condition for rank range matching (rank <= maxRank).
 func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdrant.Condition {
 	return []*qdrant.Condition{
 		{
@@ -109,7 +111,7 @@ func (r *ScanRepositoryQdrantImpl) createRangeRankCondition(maxRank int) []*qdra
 	}
 }
 
-// createExactRankCondition creates a condition for exact rank matching
+// createExactRankCondition creates a condition for exact rank matching.
 func (r *ScanRepositoryQdrantImpl) createExactRankCondition(rank int) []*qdrant.Condition {
 	return []*qdrant.Condition{
 		{
@@ -127,9 +129,9 @@ func (r *ScanRepositoryQdrantImpl) createExactRankCondition(rank int) []*qdrant.
 	}
 }
 
-// executeOptimizedQuery executes a single query with multi-stage prefetch
-// The key insight: we use multiple prefetch branches at the SAME level to get different candidate sets
-// Then use nested prefetches to apply progressive filtering
+// Then use nested prefetches to apply progressive filtering.
+//
+//nolint:funlen // Multi-stage query complexity is inherent to the search algorithm
 func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, collectionName string, nameVector, dirsVector, contentVector []float32, rankThreshold int) ([]*qdrant.ScoredPoint, error) {
 	// Create rank filters
 	rankThresholdConditions := r.createRangeRankCondition(rankThreshold)
@@ -152,7 +154,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 					Exact: qdrant.PtrOf(true),
 				},
 				Limit:          qdrant.PtrOf(uint64(40000)), // Very broad initial search
-				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   // limit to garbage results
 			},
 			// Branch 2: Ensure rank 1 components are included
 			{
@@ -163,7 +165,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 					Exact: qdrant.PtrOf(true),
 				},
 				Limit:          qdrant.PtrOf(uint64(40000)), // Dedicated search for popular components
-				ScoreThreshold: qdrant.PtrOf(float32(30)),   //limit to garbage results
+				ScoreThreshold: qdrant.PtrOf(float32(30)),   // limit to garbage results
 			},
 		},
 		// After prefetch collects candidates by name, apply content filtering
@@ -184,8 +186,11 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		return nil, fmt.Errorf("stage 1 search failed: %w", err)
 	}
 
+	fmt.Printf("Stage 1 query returned %d results\n", len(stage1Results))
+
 	// If we have few results, fetch payload and return
 	if len(stage1Results) <= 20 {
+		fmt.Printf("Returning early with %d results (<=20)\n", len(stage1Results))
 		return r.fetchResultsWithPayload(ctx, collectionName, stage1Results)
 	}
 
@@ -226,13 +231,16 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 		return nil, fmt.Errorf("stage 2 search failed: %w", err)
 	}
 
+	fmt.Printf("Stage 2 query (dirs filtering) returned %d results\n", len(stage2Results))
+
 	// If we have 20 or fewer results, return them
 	if len(stage2Results) <= 20 {
+		fmt.Printf("Returning with %d results after stage 2 (<=20)\n", len(stage2Results))
 		return r.fetchResultsWithPayload(ctx, collectionName, stage2Results)
 	}
 
 	// Stage 3: Final refinement using nested prefetch for the best results
-	var stage2IDs []uint64
+	stage2IDs := make([]uint64, 0, len(stage2Results))
 	for _, point := range stage2Results {
 		if point.Score > (stage2Results[0].Score*1.1)+5 {
 			break
@@ -320,7 +328,7 @@ func (r *ScanRepositoryQdrantImpl) executeOptimizedQuery(ctx context.Context, co
 	return r.client.Query(ctx, finalQuery)
 }
 
-// convertIDsToPointIDs converts uint64 IDs to PointId format
+// convertIDsToPointIDs converts uint64 IDs to PointId format.
 func (r *ScanRepositoryQdrantImpl) convertIDsToPointIDs(ids []uint64) []*qdrant.PointId {
 	pointIDs := make([]*qdrant.PointId, len(ids))
 	for i, id := range ids {
@@ -333,7 +341,7 @@ func (r *ScanRepositoryQdrantImpl) convertIDsToPointIDs(ids []uint64) []*qdrant.
 	return pointIDs
 }
 
-// fetchResultsWithPayload re-queries points to get their payload
+// fetchResultsWithPayload re-queries points to get their payload.
 func (r *ScanRepositoryQdrantImpl) fetchResultsWithPayload(ctx context.Context, collectionName string, points []*qdrant.ScoredPoint) ([]*qdrant.ScoredPoint, error) {
 	if len(points) == 0 {
 		return points, nil
@@ -374,27 +382,41 @@ func (r *ScanRepositoryQdrantImpl) fetchResultsWithPayload(ctx context.Context, 
 	return results, nil
 }
 
-// processSearchResults processes search results and returns component groups
+// processSearchResults processes search results and returns component groups.
 func (r *ScanRepositoryQdrantImpl) processSearchResults(searchResp []*qdrant.ScoredPoint) ([]entities.ComponentGroup, error) {
-	var allResults []entities.SearchResult
+	allResults := make([]entities.SearchResult, 0, len(searchResp))
+
+	if len(searchResp) == 0 {
+		return []entities.ComponentGroup{}, nil
+	}
 
 	// Convert all points to results
-	for _, point := range searchResp {
+	for i, point := range searchResp {
 		result := r.convertPointToResult(point)
-		// Avoid results with higher distances. Offset of 2 to fix "0" score comparation. Ex 0 vs 1.
-		if result.Score > searchResp[0].Score*1.1+2.0 {
+		// Avoid results with higher distances. Offset of 3 to fix "0" score comparation. Ex 0 vs 1.
+		scoreThreshold := searchResp[0].Score*1.1 + 3.0
+		if result.Score > scoreThreshold {
+			fmt.Printf("Filtering out results starting at index %d. Best score: %f, threshold: %f, current score: %f\n", i, searchResp[0].Score, scoreThreshold, result.Score)
 			break
 		}
+
 		allResults = append(allResults, result)
+		if result.Rank < 2 {
+			break // Stop if the component is popular enough
+		}
 	}
+
+	fmt.Printf("processSearchResults: converted %d points to %d results\n", len(searchResp), len(allResults))
 
 	// Group by component
 	purlGroups := r.groupByPurl(allResults)
 
+	fmt.Printf("processSearchResults: grouped into %d component groups\n", len(purlGroups))
+
 	return purlGroups, nil
 }
 
-// GetCollectionStats returns statistics for a given collection
+// GetCollectionStats returns statistics for a given collection.
 func (r *ScanRepositoryQdrantImpl) GetCollectionStats(ctx context.Context, collectionName string) (*CollectionStats, error) {
 	info, err := r.client.GetCollectionInfo(ctx, collectionName)
 	if err != nil {
@@ -414,7 +436,7 @@ func (r *ScanRepositoryQdrantImpl) GetCollectionStats(ctx context.Context, colle
 	}, nil
 }
 
-// CollectionExists checks if a collection exists
+// CollectionExists checks if a collection exists.
 func (r *ScanRepositoryQdrantImpl) CollectionExists(ctx context.Context, collectionName string) (bool, error) {
 	exists, err := r.client.CollectionExists(ctx, collectionName)
 	if err != nil {
@@ -423,12 +445,12 @@ func (r *ScanRepositoryQdrantImpl) CollectionExists(ctx context.Context, collect
 	return exists, nil
 }
 
-// GetAllSupportedCollections returns all supported collection names
+// GetAllSupportedCollections returns all supported collection names.
 func (r *ScanRepositoryQdrantImpl) GetAllSupportedCollections() []string {
 	return entities.GetAllSupportedCollections()
 }
 
-// hexSimhashToVector converts hex hash string to vector
+// hexSimhashToVector converts hex hash string to vector.
 func (r *ScanRepositoryQdrantImpl) hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 	if hexHashString == "" {
 		return nil, fmt.Errorf("input hex string cannot be empty")
@@ -458,7 +480,7 @@ func (r *ScanRepositoryQdrantImpl) hexSimhashToVector(hexHashString string, bits
 	return vector, nil
 }
 
-// convertPointToResult converts a Qdrant ScoredPoint to SearchResult
+// convertPointToResult converts a Qdrant ScoredPoint to SearchResult.
 func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoint) entities.SearchResult {
 	result := entities.SearchResult{
 		Score: point.Score,
@@ -466,6 +488,7 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 	}
 
 	// Extract payload fields if they exist
+	//nolint:nestif // Payload extraction requires nested checks
 	if point.Payload != nil {
 		if val, exists := point.Payload["vendor"]; exists {
 			result.Vendor = val.GetStringValue()
@@ -487,7 +510,7 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 	return result
 }
 
-// groupByPurl groups search results by PURL and sorts by score and rank
+// groupByPurl groups search results by PURL and sorts by score and rank.
 func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) []entities.ComponentGroup {
 	if len(results) == 0 {
 		return []entities.ComponentGroup{}
@@ -514,7 +537,7 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		purlGroups[result.Purl] = append(purlGroups[result.Purl], result)
 	}
 
-	var componentGroups []entities.ComponentGroup
+	componentGroups := make([]entities.ComponentGroup, 0, len(orderedPurls))
 	// Process groups in the order of their first appearance (which is sorted by score and rank)
 	for i, purl := range orderedPurls {
 		group := purlGroups[purl]
@@ -528,8 +551,20 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		for _, item := range group {
 			versions = append(versions, entities.Version{
 				Version: item.Version,
-				Score:   scoreToMatch(item.Score),
+				Score:   distanceToScore(item.Score),
 			})
+		}
+
+		// Safe int to int32 conversion
+		rank := group[0].Rank
+		if rank > 2147483647 {
+			rank = 2147483647
+		} else if rank < -2147483648 {
+			rank = -2147483648
+		}
+		order := i + 1
+		if order > 2147483647 {
+			order = 2147483647
 		}
 
 		componentGroups = append(componentGroups, entities.ComponentGroup{
@@ -537,16 +572,22 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 			Name:     group[0].Component,
 			Vendor:   group[0].Vendor,
 			Versions: versions,
-			Rank:     int32(group[0].Rank), // Best rank of the group
-			Order:    int32(i + 1),         // Sequential order
+			Rank:     int32(rank),  // #nosec G115 -- bounds checked above
+			Order:    int32(order), // #nosec G115 -- bounds checked above
 		})
 	}
 
 	return componentGroups
 }
 
-// Convert an absolute score to matching score [0,1].
-func scoreToMatch(score float32) float32 {
-	const k = 0.05365 // -ln(0.2) / 30
-	return float32(math.Exp(-k * float64(score)))
+// Convert an absolute distance to matching score [0,1].
+func distanceToScore(distance float32) float32 {
+	const k = 0.065 // -ln(0.2) / 30
+	return float32(math.Exp(-k * float64(distance)))
+}
+
+// ScoreToDistance converts a matching score [0,1] to absolute distance.
+func ScoreToDistance(match float32) float32 {
+	const k = 0.065 // -ln(0.2) / 30
+	return float32(-math.Log(float64(match)) / k)
 }

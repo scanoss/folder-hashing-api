@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-// Language-based collection names (new approach)
+// PrimaryLanguages maps file extensions to their corresponding collection names.
 var PrimaryLanguages = map[string]string{
 	"js":     "javascript_collection",
 	"jsx":    "javascript_collection",
@@ -45,6 +45,7 @@ var PrimaryLanguages = map[string]string{
 	"":       "misc_collection", // Files without extension
 }
 
+// IndexedLangExtensions is a list of all file extensions that are indexed by the system.
 var IndexedLangExtensions = []string{
 	// Web/Frontend
 	"ts", "js", "jsx", "tsx", "html", "css", "scss", "less", "vue", "svelte",
@@ -68,7 +69,7 @@ var IndexedLangExtensions = []string{
 	"",
 }
 
-// GetPrimaryLanguageFromExtensions determines the most common language from extension counts
+// GetPrimaryLanguageFromExtensions determines the most common language from extension counts.
 func GetPrimaryLanguageFromExtensions(langExt LanguageExtensions) string {
 	if len(langExt) == 0 {
 		return "misc"
@@ -90,13 +91,13 @@ func GetPrimaryLanguageFromExtensions(langExt LanguageExtensions) string {
 	return primaryLang
 }
 
-// GetCollectionNameFromLanguageExtensions gets the target collection based on language extensions
+// GetCollectionNameFromLanguageExtensions gets the target collection based on language extensions.
 func GetCollectionNameFromLanguageExtensions(langExt LanguageExtensions) string {
 	primaryLang := GetPrimaryLanguageFromExtensions(langExt)
 	return primaryLang + "_collection"
 }
 
-// GetAllSupportedCollections returns all unique collection names from the PrimaryLanguages map
+// GetAllSupportedCollections returns all unique collection names from the PrimaryLanguages map.
 func GetAllSupportedCollections() []string {
 	collectionsMap := make(map[string]bool)
 	for _, collectionName := range PrimaryLanguages {

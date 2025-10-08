@@ -1,3 +1,4 @@
+// Package repository provides data access implementations for the HFH service.
 package repository
 
 import (
@@ -6,6 +7,7 @@ import (
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
 )
 
+// CollectionStats contains statistics for a Qdrant collection.
 type CollectionStats struct {
 	Name          string
 	Status        string
@@ -13,9 +15,10 @@ type CollectionStats struct {
 	SegmentsCount uint64
 }
 
+// ScanRepository defines the interface for scan data access operations.
 type ScanRepository interface {
 	// SearchByHashes performs a search using directory, name, and content hashes
-	SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, topK uint64, rankThreshold int) ([]entities.ComponentGroup, error)
+	SearchByHashes(ctx context.Context, dirHash, nameHash, contentHash string, langExt entities.LanguageExtensions, rankThreshold int) ([]entities.ComponentGroup, error)
 
 	// GetCollectionStats returns statistics for a given collection
 	GetCollectionStats(ctx context.Context, collectionName string) (*CollectionStats, error)

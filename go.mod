@@ -1,8 +1,8 @@
 module github.com/scanoss/folder-hashing-api
 
-go 1.24
+go 1.23.0
 
-toolchain go1.24.4
+toolchain go1.23.2
 
 require (
 	github.com/go-playground/validator/v10 v10.26.0
@@ -10,7 +10,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/qdrant/go-client v1.14.0
 	github.com/scanoss/go-grpc-helper v0.8.0
-	github.com/scanoss/papi v0.11.0
+	github.com/scanoss/papi v0.22.0
 	github.com/scanoss/zap-logging-helper v0.3.2
 	go.opentelemetry.io/otel v1.35.0
 	go.opentelemetry.io/otel/metric v1.35.0

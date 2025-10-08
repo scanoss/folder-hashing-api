@@ -19,17 +19,18 @@
 package grpc
 
 import (
-	"github.com/scanoss/folder-hashing-api/internal/config"
 	"github.com/scanoss/go-grpc-helper/pkg/grpc/otel"
 	gs "github.com/scanoss/go-grpc-helper/pkg/grpc/server"
 	pb "github.com/scanoss/papi/api/scanningv2"
 	"google.golang.org/grpc"
+
+	"github.com/scanoss/folder-hashing-api/internal/config"
 )
 
 // RunServer runs gRPC service to publish.
 func RunServer(config *config.Config, handler pb.ScanningServer, port string, allowedIPs, deniedIPs []string, startTLS bool, version string) (*grpc.Server, error) {
 	// Start up Open Telemetry is requested
-	var oltpShutdown = func() {}
+	oltpShutdown := func() {}
 	if config.Telemetry.Enabled {
 		var err error
 		oltpShutdown, err = otel.InitTelemetryProviders(config.App.Name, "scanoss-hfh", version,

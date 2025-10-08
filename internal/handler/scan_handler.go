@@ -1,3 +1,4 @@
+// Package handler implements gRPC and REST request handlers for the HFH service.
 package handler
 
 import (
@@ -6,21 +7,22 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/scanoss/papi/api/commonv2"
+	"github.com/scanoss/papi/api/scanningv2"
+
 	"github.com/scanoss/folder-hashing-api/internal/mapper"
 	"github.com/scanoss/folder-hashing-api/internal/service"
 	"github.com/scanoss/folder-hashing-api/internal/validation"
-	"github.com/scanoss/papi/api/commonv2"
-	"github.com/scanoss/papi/api/scanningv2"
 )
 
-// ScanHandler implements the gRPC scanning service
+// ScanHandler implements the gRPC scanning service.
 type ScanHandler struct {
 	scanningv2.UnimplementedScanningServer
 	scanService service.ScanService
 	mapper      mapper.ScanMapper
 }
 
-// NewScanHandler creates a new scan handler
+// NewScanHandler creates a new scan handler.
 func NewScanHandler(scanService service.ScanService, mapper mapper.ScanMapper) *ScanHandler {
 	return &ScanHandler{
 		scanService: scanService,
@@ -28,7 +30,7 @@ func NewScanHandler(scanService service.ScanService, mapper mapper.ScanMapper) *
 	}
 }
 
-// FolderHashScan performs folder hash scanning
+// FolderHashScan performs folder hash scanning.
 func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHRequest) (*scanningv2.HFHResponse, error) {
 	requestStartTime := time.Now()
 	s := ctxzap.Extract(ctx).Sugar()
@@ -67,7 +69,6 @@ func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHReq
 
 	s.Info("Scan starts")
 
-	// Perform the scan using the service layer
 	domainResponse, err := h.scanService.ScanFolder(ctx, domainRequest)
 	if err != nil {
 		s.Errorf("error during hfh scanning: %v", err)
@@ -102,7 +103,7 @@ func (h *ScanHandler) FolderHashScan(ctx context.Context, req *scanningv2.HFHReq
 	return response, nil
 }
 
-// Echo sends back the same message received
+// Echo sends back the same message received.
 func (h *ScanHandler) Echo(ctx context.Context, req *commonv2.EchoRequest) (*commonv2.EchoResponse, error) {
 	s := ctxzap.Extract(ctx).Sugar()
 	s.Infof("Received echo (%v): %v", ctx, req.GetMessage())
