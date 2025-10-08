@@ -42,21 +42,21 @@ vet: ## Run go vet
 	@go vet ./...
 
 # Build
-build: build-amd64 build-arm64 ## Build binaries for all architectures
+build: build_amd64 build_arm64 ## Build binaries for all architectures
 
-build-amd64: ## Build AMD64 binary
+build_amd64: ## Build AMD64 binary
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/folder-hashing-api-linux-amd64 ./cmd/server
 
-build-arm64: ## Build ARM64 binary
+build_arm64: ## Build ARM64 binary
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/folder-hashing-api-linux-arm64 ./cmd/server
 
-build-import-amd64: ## Build import tool (AMD64)
+build_import_amd64: ## Build import tool (AMD64)
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(BUILD_DIR)/hfh-import-linux-amd64 ./cmd/import
 
-build-import-arm64: ## Build import tool (ARM64)
+build_import_arm64: ## Build import tool (ARM64)
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(BUILD_DIR)/hfh-import-linux-arm64 ./cmd/import
 
@@ -69,8 +69,21 @@ tidy: ## Tidy and verify dependencies
 	@go mod tidy
 	@go mod verify
 
-version: ## Show current version
-	@echo $(VERSION)
+version: ## Display current version
+	@echo "Current version: $(VERSION)"
 
 # Quality checks (CI)
 ci: lint test ## Run all CI checks
+
+# Packaging
+package_amd64: version  ## Build & Package an AMD 64 binary
+	@echo "Building AMD binary $(VERSION) and placing into scripts..."
+	go generate ./cmd/server/main.go
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
+	bash ./package-scripts.sh linux-amd64 $(VERSION)
+
+package_arm64: version  ## Build & Package an ARM 64 binary
+	@echo "Building ARM binary $(VERSION) and placing into scripts..."
+	go generate ./cmd/server/main.go
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-w -s" -o ./scripts/scanoss-folder-hashing-api ./cmd/server/main.go
+	bash ./package-scripts.sh linux-arm64 $(VERSION)
