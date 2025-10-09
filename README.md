@@ -109,7 +109,7 @@ make run_local
 
 ```bash
 # Run all tests
-make unit_test
+make test
 
 # Run with coverage
 go test -v -cover ./...
@@ -194,25 +194,28 @@ curl http://localhost:6333/collections
 go mod download
 
 # Run tests
-make unit_test
+make test
 
 # Run linting
-make lint_local
+make lint
 
 # Build locally
-make build_amd
+make build_amd64
+
+# Run locally
+make run
 ```
 
 ### Available Make Targets
 
 ```bash
 make help                 # Show all available commands
-make build_amd            # Build for AMD64
-make build_arm            # Build for ARM64
-make run_local            # Run the service locally
-make unit_test            # Run all unit tests
-make lint_local           # Run linting
-make lint_local_fix       # Run linting with auto-fix
+make build_amd64          # Build for AMD64
+make build_arm64          # Build for ARM64
+make run                  # Run the service locally
+make test                 # Run all unit tests
+make lint                 # Run linting
+make lint-fix             # Run linting with auto-fix
 make clean_testcache      # Clean Go test caches
 ```
 
@@ -265,7 +268,7 @@ cat /path/to/top-purls.json | jq .
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests (`make unit_test`)
+4. Run tests (`make test`)
 5. Run linting (`make lint_local`)
 6. Commit your changes (`git commit -m 'Add amazing feature'`)
 7. Push to the branch (`git push origin feature/amazing-feature`)
