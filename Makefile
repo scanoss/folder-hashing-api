@@ -50,19 +50,19 @@ build: build_amd64 build_arm64 ## Build binaries for all architectures
 
 build_amd64: ## Build AMD64 binary
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/folder-hashing-api-linux-amd64 ./cmd/server
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/scanoss-folder-hashing-api-linux-amd64 ./cmd/server
 
 build_arm64: ## Build ARM64 binary
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/folder-hashing-api-linux-arm64 ./cmd/server
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/scanoss-folder-hashing-api-linux-arm64 ./cmd/server
 
 build_import_amd64: ## Build import tool (AMD64)
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/hfh-import-linux-amd64 ./cmd/import
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/scanoss-folder-hashing-import-linux-amd64 ./cmd/import
 
 build_import_arm64: ## Build import tool (ARM64)
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/hfh-import-linux-arm64 ./cmd/import
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/scanoss-folder-hashing-import-linux-arm64 ./cmd/import
 
 # Maintenance
 clean: ## Clean build artifacts

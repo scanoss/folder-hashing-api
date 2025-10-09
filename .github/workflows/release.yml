@@ -41,7 +41,7 @@ jobs:
           files: |
             target/scanoss-folder-hashing-api-linux-amd64
             target/scanoss-folder-hashing-api-linux-arm64
-            target/scanoss-hfh-import-linux-amd64
-            target/scanoss-hfh-import-linux-arm64
+            target/scanoss-folder-hashing-import-linux-amd64
+            target/scanoss-folder-hashing-import-linux-arm64
             scanoss-folder-hashing-api_linux-amd64_${{ github.ref_name }}-1.tgz
             scanoss-folder-hashing-api_linux-arm64_${{ github.ref_name }}-1.tgz
