@@ -27,7 +27,7 @@ jobs:
           make build_import_arm64
 
       - name: Unit Test
-        run: make unit_test
+        run: make test
 
       - name: Package
         run: |
