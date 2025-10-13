@@ -28,13 +28,13 @@ import (
 )
 
 // RunServer runs gRPC service to publish.
-func RunServer(config *config.Config, handler pb.ScanningServer, port string, allowedIPs, deniedIPs []string, startTLS bool, version string) (*grpc.Server, error) {
+func RunServer(cfg *config.Config, handler pb.ScanningServer, port string, allowedIPs, deniedIPs []string, startTLS bool, version string) (*grpc.Server, error) {
 	// Start up Open Telemetry is requested
 	oltpShutdown := func() {}
-	if config.Telemetry.Enabled {
+	if cfg.Telemetry.Enabled {
 		var err error
-		oltpShutdown, err = otel.InitTelemetryProviders(config.App.Name, "scanoss-hfh", version,
-			config.Telemetry.OltpExporter, otel.GetTraceSampler(config.App.Mode), false)
+		oltpShutdown, err = otel.InitTelemetryProviders(cfg.App.Name, "scanoss-hfh", version,
+			cfg.Telemetry.OltpExporter, otel.GetTraceSampler(cfg.App.Mode), false)
 		if err != nil {
 			return nil, err
 		}
@@ -43,14 +43,14 @@ func RunServer(config *config.Config, handler pb.ScanningServer, port string, al
 	// Configure the port, interceptors, TLS and register the service
 	listen, server, err := gs.SetupGrpcServer(
 		port,
-		config.TLS.CertFile,
-		config.TLS.KeyFile,
+		cfg.TLS.CertFile,
+		cfg.TLS.KeyFile,
 		allowedIPs,
 		deniedIPs,
 		startTLS,
-		config.Filtering.BlockByDefault,
-		config.Filtering.TrustProxy,
-		config.Telemetry.Enabled,
+		cfg.Filtering.BlockByDefault,
+		cfg.Filtering.TrustProxy,
+		cfg.Telemetry.Enabled,
 	)
 	if err != nil {
 		oltpShutdown()

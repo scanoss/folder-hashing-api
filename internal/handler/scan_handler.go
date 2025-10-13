@@ -39,10 +39,10 @@ type ScanHandler struct {
 }
 
 // NewScanHandler creates a new scan handler.
-func NewScanHandler(scanService service.ScanService, mapper mapper.ScanMapper) *ScanHandler {
+func NewScanHandler(scanService service.ScanService, scanMapper mapper.ScanMapper) *ScanHandler {
 	return &ScanHandler{
 		scanService: scanService,
-		mapper:      mapper,
+		mapper:      scanMapper,
 	}
 }
 

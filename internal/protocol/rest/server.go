@@ -32,17 +32,17 @@ import (
 // RunServer runs REST grpc gateway to forward requests onto the gRPC server.
 //
 //nolint:revive // context position is determined by existing API design
-func RunServer(config *config.Config, ctx context.Context, grpcPort, httpPort string, allowedIPs, deniedIPs []string, startTLS bool) (*http.Server, error) {
+func RunServer(cfg *config.Config, ctx context.Context, grpcPort, httpPort string, allowedIPs, deniedIPs []string, startTLS bool) (*http.Server, error) {
 	// configure the gateway for forwarding to gRPC
 	srv, mux, grpcGateway, opts, err := gw.SetupGateway(
 		grpcPort,
 		httpPort,
-		config.TLS.CertFile,
-		config.TLS.CN,
+		cfg.TLS.CertFile,
+		cfg.TLS.CN,
 		allowedIPs,
 		deniedIPs,
-		config.Filtering.BlockByDefault,
-		config.Filtering.TrustProxy,
+		cfg.Filtering.BlockByDefault,
+		cfg.Filtering.TrustProxy,
 		startTLS,
 	)
 	if err != nil {
@@ -56,7 +56,7 @@ func RunServer(config *config.Config, ctx context.Context, grpcPort, httpPort st
 		if err := pb.RegisterScanningHandlerFromEndpoint(ctx2, mux, grpcGateway, opts); err != nil {
 			zlog.S.Panicf("Failed to start HTTP gateway %v", err)
 		}
-		gw.StartGateway(srv, config.TLS.CertFile, config.TLS.KeyFile, startTLS)
+		gw.StartGateway(srv, cfg.TLS.CertFile, cfg.TLS.KeyFile, startTLS)
 	}()
 
 	return srv, nil
