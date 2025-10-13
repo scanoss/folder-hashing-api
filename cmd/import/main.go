@@ -44,11 +44,13 @@ const (
 	// QdrantPort is the default Qdrant server port.
 	QdrantPort = 6334
 	// BatchSize is the number of records to process in each batch.
-	BatchSize = 2000 // Larger batch size for better performance
+	BatchSize = 2000 // Large batches are safe when indexing is disabled
 	// MaxWorkers is the number of parallel workers for file processing.
-	MaxWorkers = 12 // More workers for parallel processing
+	MaxWorkers = 4 // Reduced workers to prevent overwhelming Qdrant
 	// VectorDim is the dimensionality of the hash vectors.
 	VectorDim = 64 // Single 64-bit hash per collection
+	// BatchInsertDelay is the delay between batch insertions to rate limit requests.
+	BatchInsertDelay = 100 * time.Millisecond
 )
 
 var rankMap map[string]int
@@ -70,6 +72,8 @@ func main() {
 	if *topPurlsPath == "" {
 		log.Fatal("Error: You must specify a file with the -top-purls option")
 	}
+
+	log.Println("FAST IMPORT MODE: Importing data without HNSW indexing, will enable indexing after import completes.")
 
 	// Verify that the directory exists
 	if _, err := os.Stat(*csvDir); os.IsNotExist(err) {
@@ -103,6 +107,11 @@ func main() {
 		}
 	}()
 	log.Println("Connected to Qdrant server successfully")
+
+	// Verify connection health before starting
+	if err := verifyQdrantHealth(ctx, client); err != nil {
+		log.Fatalf("Qdrant health check failed: %v", err)
+	}
 
 	collections := entities.GetAllSupportedCollections()
 
@@ -210,24 +219,54 @@ func main() {
 	elapsed := time.Since(startTime)
 	log.Printf("Import process completed. Total time: %s", elapsed)
 
-	// Show collection statistics if possible
+	// Enable HNSW indexing on all collections after import
+	log.Println("\n========================================")
+	log.Println("Enabling HNSW indexing on all collections...")
+	log.Println("========================================")
+	for _, collectionName := range collections {
+		if err := updateCollectionIndexing(ctx, client, collectionName); err != nil {
+			log.Printf("ERROR: Failed to enable indexing for %s: %v", collectionName, err)
+		}
+	}
+	log.Println("Indexing enabled for all collections. Qdrant will build indexes in the background.")
+
+	// Show collection statistics
+	log.Println("\n========================================")
+	log.Println("Collection Statistics")
+	log.Println("========================================")
 	for _, collectionName := range collections {
 		showCollectionStats(ctx, client, collectionName)
 	}
 }
 
+// verifyQdrantHealth checks if Qdrant is healthy and responsive.
+func verifyQdrantHealth(ctx context.Context, client *qdrant.Client) error {
+	log.Println("Performing Qdrant health check...")
+
+	// Try to list collections as a basic health check
+	collections, err := client.ListCollections(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	log.Printf("Qdrant is healthy. Found %d existing collections", len(collections))
+	return nil
+}
+
 // Create a language-based collection with named vectors (dirs, names, contents).
+// Always creates collections with HNSW indexing disabled for fast import.
 func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
+	log.Printf("Collection %s: HNSW indexing DISABLED for fast import (m=0)", collectionName)
 
-	// Create named vectors configuration for dirs, names, and contents
+	// Create named vectors configuration with indexing disabled
 	namedVectors := map[string]*qdrant.VectorParams{
 		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				M:                 qdrant.PtrOf(uint64(0)), // m=0 disables HNSW index building
+				EfConstruct:       qdrant.PtrOf(uint64(100)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -235,8 +274,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				M:                 qdrant.PtrOf(uint64(0)),
+				EfConstruct:       qdrant.PtrOf(uint64(100)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -244,8 +283,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
-				EfConstruct:       qdrant.PtrOf(uint64(500)),
+				M:                 qdrant.PtrOf(uint64(0)),
+				EfConstruct:       qdrant.PtrOf(uint64(100)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -255,11 +294,12 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
-		// Aggressive optimization for large collections
+		ShardNumber:    qdrant.PtrOf(uint32(4)), // 4 shards for parallel WAL processing
+		// Optimize for fast import with indexing disabled
 		OptimizersConfig: &qdrant.OptimizersConfigDiff{
 			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
 			MaxSegmentSize:       qdrant.PtrOf(uint64(500000)), // Large segments for efficiency
-			IndexingThreshold:    qdrant.PtrOf(uint64(100000)), // High threshold for performance
+			IndexingThreshold:    qdrant.PtrOf(uint64(0)),      // Disable indexing during import
 		},
 		// Binary quantization for memory efficiency
 		QuantizationConfig: &qdrant.QuantizationConfig{
@@ -365,7 +405,7 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 		log.Printf("Processing batch %d/%d (%d records) for sector %s",
 			batchNum, (totalRecords+BatchSize-1)/BatchSize, len(batch), sectorName)
 
-		// Insert to all three collections in parallel
+		// Insert batch to collections
 		err := insertBatchToSeparateCollections(ctx, client, batch)
 		if err != nil {
 			log.Printf("WARNING: Error inserting batch %d: %v. Continuing with next batch.", batchNum, err)
@@ -373,6 +413,9 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 		}
 
 		batchesProcessed++
+
+		// Rate limit to avoid overwhelming Qdrant
+		time.Sleep(BatchInsertDelay)
 	}
 
 	log.Printf("All %d batches for sector %s imported successfully", batchesProcessed, sectorName)
@@ -566,38 +609,46 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 		return nil
 	}
 
-	// Insert to language-based collections in parallel using goroutines
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(collectionPoints))
-
+	// Insert to language-based collections sequentially to avoid connection storms
+	// Qdrant with 4 shards will parallelize internally via separate WAL processing
 	for collectionName, points := range collectionPoints {
 		if len(points) > 0 {
-			wg.Add(1)
-			go func(colName string, pts []*qdrant.PointStruct) {
-				defer wg.Done()
-				_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-					CollectionName: colName,
-					Points:         pts,
-				})
-				if err != nil {
-					errChan <- fmt.Errorf("error inserting to %s collection: %w", colName, err)
-				} else {
-					log.Printf("Successfully inserted %d points to %s", len(pts), colName)
-				}
-			}(collectionName, points)
+			_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
+				CollectionName: collectionName,
+				Points:         points,
+			})
+			if err != nil {
+				return fmt.Errorf("error inserting to %s collection: %w", collectionName, err)
+			}
+			log.Printf("Successfully inserted %d points to %s", len(points), collectionName)
 		}
 	}
 
-	wg.Wait()
-	close(errChan)
+	return nil
+}
 
-	// Check for errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
+// updateCollectionIndexing enables HNSW indexing on an existing collection.
+// This is called automatically after import completes to build indexes in the background.
+func updateCollectionIndexing(ctx context.Context, client *qdrant.Client, collectionName string) error {
+	log.Printf("Updating collection %s to enable HNSW indexing...", collectionName)
+
+	// Update indexing threshold
+	err := client.UpdateCollection(ctx, &qdrant.UpdateCollection{
+		CollectionName: collectionName,
+		HnswConfig: &qdrant.HnswConfigDiff{
+			M:                 qdrant.PtrOf(uint64(48)),
+			EfConstruct:       qdrant.PtrOf(uint64(500)),
+			FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+		},
+		OptimizersConfig: &qdrant.OptimizersConfigDiff{
+			IndexingThreshold: qdrant.PtrOf(uint64(100000)),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("error updating indexing threshold for %s: %w", collectionName, err)
 	}
 
+	log.Printf("Successfully enabled indexing for collection: %s. Qdrant will build indexes in the background.", collectionName)
 	return nil
 }
 

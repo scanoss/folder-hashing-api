@@ -1,0 +1,77 @@
+# Qdrant Configuration for Bulk Import Optimization
+# Place this file at: /path/to/qdrant/config/config.yaml
+# Or use with Docker: docker run -v $(pwd)/qdrant-config.yaml:/qdrant/config/production.yaml:ro qdrant/qdrant
+
+log_level: INFO
+
+storage:
+  # Storage path for Qdrant data
+  storage_path: /qdrant/storage
+
+  # Performance optimization for bulk imports
+  performance:
+    # Maximum number of concurrent API workers (default: number of CPU cores)
+    # Increase for better handling of concurrent requests
+    max_workers: 16
+
+    # Maximum concurrent updates to shard replicas
+    # Higher values allow more parallel writes
+    update_concurrency: 10
+
+    # Optimizer CPU budget - threads allocated for optimization jobs
+    # Set to number of cores or less to avoid overloading
+    optimizer_cpu_budget: 8
+
+  # Write-Ahead Log (WAL) configuration for better write throughput
+  wal:
+    # Size of each WAL segment in MB (default: 32)
+    # Larger segments can improve write performance
+    wal_capacity_mb: 64
+
+    # Number of WAL segments to create in advance (default: 0)
+    # Pre-creating segments can reduce latency during writes
+    wal_segments_ahead: 1
+
+  # Optimizer configuration
+  optimizers:
+    # Number of segments created initially (default: auto)
+    # More segments allow better parallelism during indexing
+    default_segment_number: 32
+
+    # Maximum points per segment (default: 100000)
+    # Larger segments reduce overhead but may slow down updates
+    max_segment_size: 500000
+
+    # Vacuum optimizer - controls when to merge small segments
+    vacuum_min_vector_number: 10000
+
+    # Memmap threshold - vectors larger than this use disk storage
+    # Set higher to keep more data in RAM (if you have enough memory)
+    memmap_threshold_kb: 50000
+
+service:
+  # gRPC port (default: 6334)
+  grpc_port: 6334
+
+  # HTTP port (default: 6333)
+  http_port: 6333
+
+  # Maximum size of POST request in MB (default: 32)
+  # Increase for larger batch uploads
+  max_request_size_mb: 128
+
+  # Maximum allowed search/upsert timeout in seconds
+  max_timeout_sec: 120
+
+# Cluster configuration (optional - only if running Qdrant cluster)
+# cluster:
+#   enabled: false
+
+# TLS configuration (optional)
+# service:
+#   enable_tls: false
+#   tls_cert_file: /path/to/cert.pem
+#   tls_key_file: /path/to/key.pem
+
+# Telemetry (optional - set to false to disable)
+telemetry_disabled: false
