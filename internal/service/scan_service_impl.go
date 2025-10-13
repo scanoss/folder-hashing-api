@@ -120,7 +120,7 @@ func (s *ScanServiceImpl) scanNode(ctx context.Context, node *entities.FolderNod
 	logger.Debugf("SearchByHashes returned %d component groups for node %s", len(componentGroups), node.PathID)
 
 	// Skip recursive threshold check for root node when depth is enabled (has children)
-	shouldCheckThreshold := !(isRoot && len(node.Children) > 0)
+	shouldCheckThreshold := !isRoot || len(node.Children) == 0
 
 	// Check if any component group has a version with score >= recursiveThreshold
 	if shouldCheckThreshold && recursiveThreshold > 0 && s.hasHighScoreMatch(componentGroups, recursiveThreshold) {

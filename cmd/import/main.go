@@ -131,7 +131,7 @@ func main() {
 			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
 			err = client.DeleteCollection(ctx, collectionName)
 			if err != nil {
-				log.Fatalf("Error dropping collection %s: %v", collectionName, err)
+				cleanupAndExit(client, "Error dropping collection %s: %v", collectionName, err)
 			}
 			log.Printf("Collection '%s' dropped successfully", collectionName)
 			collectionExists = false
@@ -149,7 +149,7 @@ func main() {
 	log.Printf("Reading directory '%s' for CSV files...", *csvDir)
 	files, err := os.ReadDir(*csvDir)
 	if err != nil {
-		log.Fatalf("Error reading directory: %v", err)
+		cleanupAndExit(client, "Error reading directory: %v", err)
 	}
 
 	var csvFiles []string
@@ -174,24 +174,24 @@ func main() {
 
 	// Start workers to process files in parallel
 	log.Printf("Starting %d worker(s) to process CSV files...", MaxWorkers)
-	for workerId := range MaxWorkers {
+	for workerID := range MaxWorkers {
 		wg.Add(1)
-		go func(workerId int) {
+		go func(workerID int) {
 			defer wg.Done()
 			for file := range filesChan {
 				sectorName := filepath.Base(file)
 				sectorName = strings.TrimSuffix(sectorName, ".csv")
-				log.Printf("Worker %d: Processing sector %s", workerId, sectorName)
+				log.Printf("Worker %d: Processing sector %s", workerID, sectorName)
 
 				err := importCSVFile(ctx, client, file, sectorName)
 				if err != nil {
-					log.Printf("Worker %d: Error importing file %s: %v", workerId, file, err)
+					log.Printf("Worker %d: Error importing file %s: %v", workerID, file, err)
 					errorsChan <- fmt.Errorf("error importing file %s: %w", file, err)
 				} else {
-					log.Printf("Worker %d: Successfully processed sector %s", workerId, sectorName)
+					log.Printf("Worker %d: Successfully processed sector %s", workerID, sectorName)
 				}
 			}
-		}(workerId)
+		}(workerID)
 	}
 
 	// Send files to workers
@@ -253,6 +253,17 @@ func verifyQdrantHealth(ctx context.Context, client *qdrant.Client) error {
 	return nil
 }
 
+// Gracefully terminate qdrant client.
+func cleanupAndExit(client *qdrant.Client, format string, args ...any) {
+	log.Printf(format, args...)
+	if client != nil {
+		if err := client.Close(); err != nil {
+			log.Printf("Failed to close client: %v", err)
+		}
+	}
+	os.Exit(1)
+}
+
 // Create a language-based collection with named vectors (dirs, names, contents).
 // Always creates collections with HNSW indexing disabled for fast import.
 func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
@@ -311,7 +322,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		},
 	})
 	if err != nil {
-		log.Fatalf("Error creating collection %s: %v", collectionName, err)
+		cleanupAndExit(client, "Error creating collection %s: %v", collectionName, err)
 	}
 	log.Printf("Collection '%s' with named vectors created successfully", collectionName)
 
