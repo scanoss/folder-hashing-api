@@ -100,6 +100,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error connecting to Qdrant: %v", err)
 	}
+
+	// Verify connection health before starting
+	if err := verifyQdrantHealth(ctx, client); err != nil {
+		log.Fatalf("Qdrant health check failed: %v", err)
+	}
+
 	defer func() {
 		log.Println("Closing connection to Qdrant")
 		if err := client.Close(); err != nil {
@@ -107,11 +113,6 @@ func main() {
 		}
 	}()
 	log.Println("Connected to Qdrant server successfully")
-
-	// Verify connection health before starting
-	if err := verifyQdrantHealth(ctx, client); err != nil {
-		log.Fatalf("Qdrant health check failed: %v", err)
-	}
 
 	collections := entities.GetAllSupportedCollections()
 
@@ -130,7 +131,6 @@ func main() {
 			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
 			err = client.DeleteCollection(ctx, collectionName)
 			if err != nil {
-				//nolint:gocritic // Error is fatal, defer will not help here
 				log.Fatalf("Error dropping collection %s: %v", collectionName, err)
 			}
 			log.Printf("Collection '%s' dropped successfully", collectionName)
@@ -174,7 +174,7 @@ func main() {
 
 	// Start workers to process files in parallel
 	log.Printf("Starting %d worker(s) to process CSV files...", MaxWorkers)
-	for i := 0; i < MaxWorkers; i++ {
+	for workerId := range MaxWorkers {
 		wg.Add(1)
 		go func(workerId int) {
 			defer wg.Done()
@@ -191,7 +191,7 @@ func main() {
 					log.Printf("Worker %d: Successfully processed sector %s", workerId, sectorName)
 				}
 			}
-		}(i)
+		}(workerId)
 	}
 
 	// Send files to workers
@@ -397,9 +397,7 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	batchesProcessed := 0
 	for i := 0; i < totalRecords; i += BatchSize {
 		end := i + BatchSize
-		if end > totalRecords {
-			end = totalRecords
-		}
+		end = min(end, totalRecords)
 		batch := validRecords[i:end]
 		batchNum := i/BatchSize + 1
 		log.Printf("Processing batch %d/%d (%d records) for sector %s",
