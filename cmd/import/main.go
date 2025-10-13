@@ -408,7 +408,9 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 	batchesProcessed := 0
 	for i := 0; i < totalRecords; i += BatchSize {
 		end := i + BatchSize
-		end = min(end, totalRecords)
+		if end > totalRecords {
+			end = totalRecords
+		}
 		batch := validRecords[i:end]
 		batchNum := i/BatchSize + 1
 		log.Printf("Processing batch %d/%d (%d records) for sector %s",
