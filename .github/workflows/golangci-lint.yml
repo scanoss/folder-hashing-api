@@ -4,9 +4,9 @@ name: Golang CI Lint
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build:
@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get tags to allow build script to get build version
+          fetch-depth: 0 # Get tags to allow build script to get build version
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -25,6 +25,6 @@ jobs:
         run: make version
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           args: --timeout=5m
