@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.2
 
 require (
+	github.com/fatih/color v1.18.0
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/golobby/config/v3 v3.4.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -12,6 +13,7 @@ require (
 	github.com/scanoss/go-grpc-helper v0.8.0
 	github.com/scanoss/papi v0.22.0
 	github.com/scanoss/zap-logging-helper v0.3.2
+	github.com/vbauerster/mpb/v8 v8.10.2
 	go.opentelemetry.io/otel v1.35.0
 	go.opentelemetry.io/otel/metric v1.35.0
 	google.golang.org/grpc v1.73.0
@@ -21,6 +23,8 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/VividCortex/ewma v1.2.0 // indirect
+	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
@@ -34,7 +38,11 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/phuslu/iploc v1.0.20230201 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/scanoss/ipfilter/v2 v2.0.2 // indirect
 	github.com/tomasen/realip v0.0.0-20180522021738-f0c99a92ddce // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
