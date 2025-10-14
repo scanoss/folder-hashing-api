@@ -7,7 +7,6 @@ services:
       - 6334:6334 # gRPC API port (used by our Go client)
     volumes:
       - ./qdrant_data:/qdrant/storage
-      - ./qdrant-config.yaml:/qdrant/config/production.yaml:ro
     expose:
       - 6333
       - 6334
