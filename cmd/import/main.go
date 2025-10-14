@@ -128,8 +128,7 @@ func main() {
 		for _, collectionName := range collections {
 			collectionExists, err := client.CollectionExists(ctx, collectionName)
 			if err != nil {
-				log.Printf("Error checking if collection %s exists: %v", collectionName, err)
-				return
+				cleanupAndExit(client, "Error checking if collection %s exists: %v", collectionName, err)
 			}
 
 			if collectionExists {
@@ -297,7 +296,10 @@ func ensureCollectionExists(ctx context.Context, client *qdrant.Client, collecti
 	}
 
 	log.Printf("Creating collection: %s", collectionName)
-	createCollection(ctx, client, collectionName)
+	err = createCollection(ctx, client, collectionName)
+	if err != nil {
+		return fmt.Errorf("error creating collection %s: %w", collectionName, err)
+	}
 	createdCollections[collectionName] = true
 	log.Printf("Collection %s created and marked as ready", collectionName)
 
@@ -307,7 +309,7 @@ func ensureCollectionExists(ctx context.Context, client *qdrant.Client, collecti
 // Create a language-based collection with named vectors (dirs, names, contents).
 // Always creates collections with HNSW indexing disabled for fast import.
 // Production-optimized with reduced shard/segment counts to prevent memory spikes.
-func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
+func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) error {
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
 	log.Printf("Collection %s: HNSW indexing DISABLED for fast import (m=0)", collectionName)
 
@@ -363,7 +365,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		},
 	})
 	if err != nil {
-		cleanupAndExit(client, "Error creating collection %s: %v", collectionName, err)
+		return fmt.Errorf("failed to create collection: %w", err)
 	}
 	log.Printf("Collection '%s' with named vectors created successfully", collectionName)
 
@@ -396,6 +398,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	} else {
 		log.Printf("Created index for field: rank in %s", collectionName)
 	}
+
+	return nil
 }
 
 // Import data from a CSV file to separate collections.
