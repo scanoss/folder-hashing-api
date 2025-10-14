@@ -55,6 +55,11 @@ const (
 
 var rankMap map[string]int
 
+var (
+	createdCollections   = make(map[string]bool)
+	collectionCreateLock sync.Mutex
+)
+
 //nolint:gocyclo // Main function complexity is acceptable for CLI setup
 func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
@@ -116,32 +121,25 @@ func main() {
 
 	collections := entities.GetAllSupportedCollections()
 
-	log.Printf("Will create/check %d language-based collections: %v", len(collections), collections)
+	log.Printf("Using lazy collection creation for %d language-based collections: %v", len(collections), collections)
 
-	// Check and create collections
-	for _, collectionName := range collections {
-		log.Printf("Checking collection: %s", collectionName)
-		collectionExists, err := client.CollectionExists(ctx, collectionName)
-		if err != nil {
-			log.Printf("Error checking if collection %s exists: %v", collectionName, err)
-			return
-		}
-
-		if *overwrite && collectionExists {
-			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
-			err = client.DeleteCollection(ctx, collectionName)
+	// Only handle overwrite flag - collections will be created lazily
+	if *overwrite {
+		for _, collectionName := range collections {
+			collectionExists, err := client.CollectionExists(ctx, collectionName)
 			if err != nil {
-				cleanupAndExit(client, "Error dropping collection %s: %v", collectionName, err)
+				log.Printf("Error checking if collection %s exists: %v", collectionName, err)
+				return
 			}
-			log.Printf("Collection '%s' dropped successfully", collectionName)
-			collectionExists = false
-		}
 
-		// Create collection if it doesn't exist
-		if !collectionExists {
-			createCollection(ctx, client, collectionName)
-		} else {
-			log.Printf("Using existing collection: %s", collectionName)
+			if collectionExists {
+				log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
+				err = client.DeleteCollection(ctx, collectionName)
+				if err != nil {
+					cleanupAndExit(client, "Error dropping collection %s: %v", collectionName, err)
+				}
+				log.Printf("Collection '%s' dropped successfully", collectionName)
+			}
 		}
 	}
 
@@ -264,8 +262,51 @@ func cleanupAndExit(client *qdrant.Client, format string, args ...any) {
 	os.Exit(1)
 }
 
+// ensureCollectionExists checks if a collection exists and creates it lazily if not.
+func ensureCollectionExists(ctx context.Context, client *qdrant.Client, collectionName string) error {
+	// Check if we've already created this collection
+	collectionCreateLock.Lock()
+	if createdCollections[collectionName] {
+		collectionCreateLock.Unlock()
+		return nil
+	}
+	collectionCreateLock.Unlock()
+
+	// Check if collection exists in Qdrant
+	exists, err := client.CollectionExists(ctx, collectionName)
+	if err != nil {
+		return fmt.Errorf("error checking collection existence: %w", err)
+	}
+
+	if exists {
+		// Mark as created to avoid checking again
+		collectionCreateLock.Lock()
+		createdCollections[collectionName] = true
+		collectionCreateLock.Unlock()
+		log.Printf("Collection %s already exists, using it", collectionName)
+		return nil
+	}
+
+	// Collection doesn't exist, create it (thread-safe)
+	collectionCreateLock.Lock()
+	defer collectionCreateLock.Unlock()
+
+	// Double-check pattern: another goroutine might have created it
+	if createdCollections[collectionName] {
+		return nil
+	}
+
+	log.Printf("Creating collection: %s", collectionName)
+	createCollection(ctx, client, collectionName)
+	createdCollections[collectionName] = true
+	log.Printf("Collection %s created and marked as ready", collectionName)
+
+	return nil
+}
+
 // Create a language-based collection with named vectors (dirs, names, contents).
 // Always creates collections with HNSW indexing disabled for fast import.
+// Production-optimized with reduced shard/segment counts to prevent memory spikes.
 func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
 	log.Printf("Collection %s: HNSW indexing DISABLED for fast import (m=0)", collectionName)
@@ -305,10 +346,10 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
-		ShardNumber:    qdrant.PtrOf(uint32(4)), // 4 shards for parallel WAL processing
+		ShardNumber:    qdrant.PtrOf(uint32(2)),
 		// Optimize for fast import with indexing disabled
 		OptimizersConfig: &qdrant.OptimizersConfigDiff{
-			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
+			DefaultSegmentNumber: qdrant.PtrOf(uint64(4)),
 			MaxSegmentSize:       qdrant.PtrOf(uint64(500000)), // Large segments for efficiency
 			IndexingThreshold:    qdrant.PtrOf(uint64(0)),      // Disable indexing during import
 		},
@@ -621,9 +662,14 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 	}
 
 	// Insert to language-based collections sequentially to avoid connection storms
-	// Qdrant with 4 shards will parallelize internally via separate WAL processing
+	// Collections are created lazily on first use to prevent memory spikes
 	for collectionName, points := range collectionPoints {
 		if len(points) > 0 {
+			// Ensure collection exists before inserting (lazy creation)
+			if err := ensureCollectionExists(ctx, client, collectionName); err != nil {
+				return fmt.Errorf("error ensuring collection %s exists: %w", collectionName, err)
+			}
+
 			_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
 				CollectionName: collectionName,
 				Points:         points,
