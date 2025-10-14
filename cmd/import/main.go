@@ -39,7 +39,7 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
-	"github.com/scanoss/folder-hashing-api/internal/utils"
+	progresstracker "github.com/scanoss/folder-hashing-api/internal/utils"
 )
 
 type WorkerConfig struct {
@@ -171,7 +171,7 @@ func main() {
 		return
 	}
 
-	progress := utils.NewProgressTracker(len(csvFiles))
+	progress := progresstracker.NewProgressTracker(len(csvFiles))
 
 	// Channel to process files
 	filesChan := make(chan string, len(csvFiles))
@@ -188,10 +188,7 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for file := range filesChan {
-				fileName := filepath.Base(file)
-				// Progress bars will show file processing status
-
-				recordCount, err := importCSVFileWithProgress(ctx, client, file, fileName, optimalWorkers.RecommendedBatchSize, progress)
+				recordCount, err := importCSVFileWithProgress(ctx, client, file, optimalWorkers.RecommendedBatchSize, progress)
 				if err != nil {
 					log.Printf("Worker %d: Error importing file %s: %v", workerID, file, err)
 					errorsChan <- fmt.Errorf("error importing file %s: %w", file, err)
@@ -329,7 +326,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 }
 
 // Import data from a CSV file to separate collections.
-func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, filePath, fileName string, batchSize int, progress *utils.ProgressTracker) (int, error) {
+func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, filePath string, batchSize int, progress *progresstracker.ProgressTracker) (int, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("error opening CSV file: %w", err)
@@ -353,7 +350,7 @@ func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, fileP
 		record, err := reader.Read()
 		if err == io.EOF {
 			if len(batch) > 0 {
-				collectionCounts, err := insertBatchToCollections(ctx, client, batch, progress)
+				collectionCounts, err := insertBatchToCollections(ctx, client, batch)
 				if err != nil {
 					log.Printf("WARNING: Error inserting final batch: %v", err)
 				} else {
@@ -378,7 +375,7 @@ func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, fileP
 			batchNum++
 			// Progress bars will show batch processing status
 
-			collectionCounts, err := insertBatchToCollections(ctx, client, batch, progress)
+			collectionCounts, err := insertBatchToCollections(ctx, client, batch)
 			if err != nil {
 				log.Printf("WARNING: Error inserting batch %d: %v", batchNum, err)
 			} else {
@@ -391,7 +388,6 @@ func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, fileP
 
 			batch = make([][]string, 0, batchSize)
 		}
-
 	}
 
 	// File completed successfully - progress bar will reflect this
@@ -431,7 +427,7 @@ func hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 // Insert a batch of records to language-based collections.
 //
 //nolint:gocyclo,nestif // Batch processing complexity is inherent to CSV import
-func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch [][]string, progress *utils.ProgressTracker) (map[string]int, error) {
+func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch [][]string) (map[string]int, error) {
 	// Group points by collection (language)
 	collectionPoints := make(map[string][]*qdrant.PointStruct)
 
@@ -671,13 +667,17 @@ func initPurlMap(filename string) (map[string]int, error) {
 	return result, nil
 }
 
-// GetAvailableMemoryMB returns available memory in MB
+// GetAvailableMemoryMB returns available memory in MB.
 func GetAvailableMemoryMB() (int, error) {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Warning: Error closing file: %v", err)
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -699,7 +699,7 @@ func GetAvailableMemoryMB() (int, error) {
 // CalculateOptimalWorkers calculates the optimal number of workers for processing CSV files,
 // based on the number of files and their average size.
 // It takes into account available memory and CPU cores to determine the optimal number of workers.
-func CalculateOptimalWorkers(fileCount int, avgFileSizeMB int) WorkerConfig {
+func CalculateOptimalWorkers(fileCount, avgFileSizeMB int) WorkerConfig {
 	numCPU := runtime.NumCPU()
 
 	log.Printf("Number of CPU cores: %d", numCPU)

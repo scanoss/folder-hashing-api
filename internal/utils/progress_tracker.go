@@ -1,4 +1,21 @@
-package utils
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2024 SCANOSS.COM
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+// Package progresstracker provides utilities for progress
+package progresstracker
 
 import (
 	"fmt"
@@ -11,7 +28,7 @@ import (
 	"github.com/vbauerster/mpb/v8/decor"
 )
 
-// ProgressTracker tracks import progress across multiple workers
+// ProgressTracker tracks import progress across multiple workers.
 type ProgressTracker struct {
 	mu               sync.Mutex
 	startTime        time.Time
@@ -31,7 +48,7 @@ type ProgressTracker struct {
 	collectionBars map[string]*mpb.Bar
 }
 
-// NewProgressTracker creates a new progress tracker with mpb progress bars
+// NewProgressTracker creates a new progress tracker with mpb progress bars.
 func NewProgressTracker(totalFiles int) *ProgressTracker {
 	p := mpb.New(
 		mpb.WithOutput(color.Output),
@@ -79,7 +96,7 @@ func NewProgressTracker(totalFiles int) *ProgressTracker {
 	}
 }
 
-// AddRecords increments the record count and updates progress bars
+// AddRecords increments the record count and updates progress bars.
 func (pt *ProgressTracker) AddRecords(count int, collectionName string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -111,7 +128,7 @@ func (pt *ProgressTracker) AddRecords(count int, collectionName string) {
 	bar.IncrBy(count)
 }
 
-// FileCompleted marks a file as completed and updates the file progress bar
+// FileCompleted marks a file as completed and updates the file progress bar.
 func (pt *ProgressTracker) FileCompleted(recordCount int, success bool) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -147,26 +164,26 @@ func (pt *ProgressTracker) FileCompleted(recordCount int, success bool) {
 	pt.fileBar.Increment()
 }
 
-// MarkFileFailed increments the failed file counter and can be called separately
+// MarkFileFailed increments the failed file counter and can be called separately.
 func (pt *ProgressTracker) MarkFileFailed() {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	pt.failedFiles++
 }
 
-// GetFailedFiles returns the current number of failed files
+// GetFailedFiles returns the current number of failed files.
 func (pt *ProgressTracker) GetFailedFiles() int {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	return pt.failedFiles
 }
 
-// Wait waits for all progress bars to complete
+// Wait waits for all progress bars to complete.
 func (pt *ProgressTracker) Wait() {
 	pt.progress.Wait()
 }
 
-// PrintFinalSummary prints the final import summary after all bars are complete
+// PrintFinalSummary prints the final import summary after all bars are complete.
 func (pt *ProgressTracker) PrintFinalSummary() {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -228,11 +245,12 @@ func (pt *ProgressTracker) PrintFinalSummary() {
 }
 
 func formatNumber(n int64) string {
-	if n < 1000 {
+	switch {
+	case n < 1000:
 		return fmt.Sprintf("%d", n)
-	} else if n < 1000000 {
+	case n < 1000000:
 		return fmt.Sprintf("%.1fK", float64(n)/1000)
-	} else if n < 1000000000 {
+	case n < 1000000000:
 		return fmt.Sprintf("%.2fM", float64(n)/1000000)
 	}
 	return fmt.Sprintf("%.2fB", float64(n)/1000000000)
