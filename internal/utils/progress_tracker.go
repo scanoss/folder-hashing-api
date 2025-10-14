@@ -111,7 +111,7 @@ func (pt *ProgressTracker) AddRecords(count int, collectionName string) {
 	if _, exists := pt.collectionBars[collectionName]; !exists {
 		// Create a new bar for this collection (unknown total - just shows count)
 		collectionBar := pt.progress.AddBar(0,
-			mpb.BarFillerClearOnComplete(),
+			mpb.BarRemoveOnComplete(),
 			mpb.PrependDecorators(
 				decor.Name("  "+collectionName+": ", decor.WC{C: decor.DindentRight | decor.DextraSpace}),
 				decor.CurrentNoUnit("%d", decor.WCSyncWidth),
@@ -245,9 +245,11 @@ func (pt *ProgressTracker) PrintFinalSummary() {
 
 	// Print all collections sorted by count
 	for _, stat := range stats {
-		percentage := float64(stat.count) / float64(pt.processedRecords) * 100
-		log.Printf("   %-25s %12s  (%.1f%%)",
-			stat.name+":", formatNumber(stat.count), percentage)
+		var percentage float64
+		if pt.processedRecords > 0 {
+			percentage = float64(stat.count) / float64(pt.processedRecords) * 100
+		}
+		log.Printf("   %-25s %12s  (%.1f%%)", stat.name+":", formatNumber(stat.count), percentage)
 	}
 
 	log.Printf("")

@@ -733,7 +733,15 @@ func CalculateOptimalWorkers(fileCount, avgFileSizeMB int) WorkerConfig {
 	))
 
 	// Cap at file count and set bounds between 2 and 32
-	optimalWorkers = max(2, min(optimalWorkers, fileCount, 32))
+	if optimalWorkers < 2 {
+		optimalWorkers = 2
+	}
+	if optimalWorkers > fileCount {
+		optimalWorkers = fileCount
+	}
+	if optimalWorkers > 32 {
+		optimalWorkers = 32
+	}
 
 	log.Printf("Optimal numbers of workers: %d", optimalWorkers)
 
