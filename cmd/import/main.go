@@ -178,8 +178,12 @@ func main() {
 	var wg sync.WaitGroup
 	errorsChan := make(chan error, len(csvFiles))
 
-	avgFileSize := csvFilesSize / int64(len(csvFiles))
-	optimalWorkers := CalculateOptimalWorkers(len(csvFiles), int(avgFileSize))
+	avgFileSizeBytes := csvFilesSize / int64(len(csvFiles))
+	avgFileSizeMB := int(avgFileSizeBytes / (1024 * 1024))
+	if avgFileSizeMB == 0 {
+		avgFileSizeMB = 1
+	}
+	optimalWorkers := CalculateOptimalWorkers(len(csvFiles), avgFileSizeMB)
 
 	// Start workers to process files in parallel
 	log.Printf("Starting %d worker(s) to process CSV files...", optimalWorkers.NumWorkers)

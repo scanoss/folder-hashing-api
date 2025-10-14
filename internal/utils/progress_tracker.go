@@ -180,6 +180,15 @@ func (pt *ProgressTracker) GetFailedFiles() int {
 
 // Wait waits for all progress bars to complete.
 func (pt *ProgressTracker) Wait() {
+	pt.mu.Lock()
+	if pt.recordBar != nil {
+		pt.recordBar.SetTotal(pt.processedRecords, true)
+	}
+	for name, bar := range pt.collectionBars {
+		total := pt.collectionStats[name]
+		bar.SetTotal(total, true)
+	}
+	pt.mu.Unlock()
 	pt.progress.Wait()
 }
 
