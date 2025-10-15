@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -26,8 +27,10 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,29 +39,26 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 
 	"github.com/scanoss/folder-hashing-api/internal/domain/entities"
+	progresstracker "github.com/scanoss/folder-hashing-api/internal/utils"
 )
+
+type WorkerConfig struct {
+	NumWorkers           int
+	RecommendedBatchSize int
+}
 
 const (
 	// QdrantHost is the default Qdrant server hostname.
 	QdrantHost = "localhost"
 	// QdrantPort is the default Qdrant server port.
 	QdrantPort = 6334
-	// BatchSize is the number of records to process in each batch.
-	BatchSize = 2000 // Large batches are safe when indexing is disabled
-	// MaxWorkers is the number of parallel workers for file processing.
-	MaxWorkers = 4 // Reduced workers to prevent overwhelming Qdrant
 	// VectorDim is the dimensionality of the hash vectors.
 	VectorDim = 64 // Single 64-bit hash per collection
-	// BatchInsertDelay is the delay between batch insertions to rate limit requests.
-	BatchInsertDelay = 100 * time.Millisecond
+	// DefaultWorkers is the default number of workers to use.
+	DefaultWorkers = 2
 )
 
 var rankMap map[string]int
-
-var (
-	createdCollections   = make(map[string]bool)
-	collectionCreateLock sync.Mutex
-)
 
 //nolint:gocyclo // Main function complexity is acceptable for CLI setup
 func main() {
@@ -77,8 +77,6 @@ func main() {
 	if *topPurlsPath == "" {
 		log.Fatal("Error: You must specify a file with the -top-purls option")
 	}
-
-	log.Println("FAST IMPORT MODE: Importing data without HNSW indexing, will enable indexing after import completes.")
 
 	// Verify that the directory exists
 	if _, err := os.Stat(*csvDir); os.IsNotExist(err) {
@@ -105,12 +103,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error connecting to Qdrant: %v", err)
 	}
-
-	// Verify connection health before starting
-	if err := verifyQdrantHealth(ctx, client); err != nil {
-		log.Fatalf("Qdrant health check failed: %v", err)
-	}
-
 	defer func() {
 		log.Println("Closing connection to Qdrant")
 		if err := client.Close(); err != nil {
@@ -121,24 +113,33 @@ func main() {
 
 	collections := entities.GetAllSupportedCollections()
 
-	log.Printf("Using lazy collection creation for %d language-based collections: %v", len(collections), collections)
+	log.Printf("Will create/update %d collections: %v", len(collections), collections)
 
-	// Only handle overwrite flag - collections will be created lazily
-	if *overwrite {
-		for _, collectionName := range collections {
-			collectionExists, err := client.CollectionExists(ctx, collectionName)
+	// Check and create collections
+	for _, collectionName := range collections {
+		log.Printf("Checking collection: %s", collectionName)
+		collectionExists, err := client.CollectionExists(ctx, collectionName)
+		if err != nil {
+			log.Printf("Error checking if collection %s exists: %v", collectionName, err)
+			return
+		}
+
+		if *overwrite && collectionExists {
+			log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
+			err = client.DeleteCollection(ctx, collectionName)
 			if err != nil {
-				cleanupAndExit(client, "Error checking if collection %s exists: %v", collectionName, err)
+				//nolint:gocritic // Error is fatal, defer will not help here
+				log.Fatalf("Error dropping collection %s: %v", collectionName, err)
 			}
+			log.Printf("Collection '%s' dropped successfully", collectionName)
+			collectionExists = false
+		}
 
-			if collectionExists {
-				log.Printf("Collection %s exists and overwrite flag is set. Dropping collection...", collectionName)
-				err = client.DeleteCollection(ctx, collectionName)
-				if err != nil {
-					cleanupAndExit(client, "Error dropping collection %s: %v", collectionName, err)
-				}
-				log.Printf("Collection '%s' dropped successfully", collectionName)
-			}
+		// Create collection if it doesn't exist
+		if !collectionExists {
+			createCollection(ctx, client, collectionName)
+		} else {
+			log.Printf("Using existing collection: %s", collectionName)
 		}
 	}
 
@@ -146,13 +147,21 @@ func main() {
 	log.Printf("Reading directory '%s' for CSV files...", *csvDir)
 	files, err := os.ReadDir(*csvDir)
 	if err != nil {
-		cleanupAndExit(client, "Error reading directory: %v", err)
+		log.Fatalf("Error reading directory: %v", err)
 	}
 
 	var csvFiles []string
+	var csvFilesSize int64
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(file.Name(), ".csv") {
 			csvFiles = append(csvFiles, filepath.Join(*csvDir, file.Name()))
+
+			fileInfo, err := os.Stat(filepath.Join(*csvDir, file.Name()))
+			if err != nil {
+				log.Printf("Error getting file size for %s: %v", file.Name(), err)
+				continue
+			}
+			csvFilesSize += fileInfo.Size()
 		}
 	}
 
@@ -162,30 +171,34 @@ func main() {
 		return
 	}
 
+	progress := progresstracker.NewProgressTracker(len(csvFiles))
+
 	// Channel to process files
 	filesChan := make(chan string, len(csvFiles))
 	var wg sync.WaitGroup
-
-	// Error channel to collect errors from workers
 	errorsChan := make(chan error, len(csvFiles))
 
+	avgFileSizeBytes := csvFilesSize / int64(len(csvFiles))
+	avgFileSizeMB := int(avgFileSizeBytes / (1024 * 1024))
+	if avgFileSizeMB == 0 {
+		avgFileSizeMB = 1
+	}
+	optimalWorkers := CalculateOptimalWorkers(len(csvFiles), avgFileSizeMB)
+
 	// Start workers to process files in parallel
-	log.Printf("Starting %d worker(s) to process CSV files...", MaxWorkers)
-	for workerID := range MaxWorkers {
+	log.Printf("Starting %d worker(s) to process CSV files...", optimalWorkers.NumWorkers)
+	for workerID := range optimalWorkers.NumWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			for file := range filesChan {
-				sectorName := filepath.Base(file)
-				sectorName = strings.TrimSuffix(sectorName, ".csv")
-				log.Printf("Worker %d: Processing sector %s", workerID, sectorName)
-
-				err := importCSVFile(ctx, client, file, sectorName)
+				recordCount, err := importCSVFileWithProgress(ctx, client, file, optimalWorkers.RecommendedBatchSize, progress)
 				if err != nil {
 					log.Printf("Worker %d: Error importing file %s: %v", workerID, file, err)
 					errorsChan <- fmt.Errorf("error importing file %s: %w", file, err)
+					progress.FileCompleted(0, false)
 				} else {
-					log.Printf("Worker %d: Successfully processed sector %s", workerID, sectorName)
+					progress.FileCompleted(recordCount, true)
 				}
 			}
 		}(workerID)
@@ -202,6 +215,11 @@ func main() {
 	wg.Wait()
 	close(errorsChan)
 
+	// Wait for all progress bars to complete rendering
+	progress.Wait()
+
+	progress.PrintFinalSummary()
+
 	// Check if there were any errors during processing
 	errCount := 0
 	for err := range errorsChan {
@@ -216,111 +234,24 @@ func main() {
 	elapsed := time.Since(startTime)
 	log.Printf("Import process completed. Total time: %s", elapsed)
 
-	// Enable HNSW indexing on all collections after import
-	log.Println("\n========================================")
-	log.Println("Enabling HNSW indexing on all collections...")
-	log.Println("========================================")
-	for _, collectionName := range collections {
-		if err := updateCollectionIndexing(ctx, client, collectionName); err != nil {
-			log.Printf("ERROR: Failed to enable indexing for %s: %v", collectionName, err)
-		}
-	}
-	log.Println("Indexing enabled for all collections. Qdrant will build indexes in the background.")
-
-	// Show collection statistics
-	log.Println("\n========================================")
-	log.Println("Collection Statistics")
-	log.Println("========================================")
+	// Show collection statistics if possible
 	for _, collectionName := range collections {
 		showCollectionStats(ctx, client, collectionName)
 	}
 }
 
-// verifyQdrantHealth checks if Qdrant is healthy and responsive.
-func verifyQdrantHealth(ctx context.Context, client *qdrant.Client) error {
-	log.Println("Performing Qdrant health check...")
-
-	// Try to list collections as a basic health check
-	collections, err := client.ListCollections(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list collections: %w", err)
-	}
-
-	log.Printf("Qdrant is healthy. Found %d existing collections", len(collections))
-	return nil
-}
-
-// Gracefully terminate qdrant client.
-func cleanupAndExit(client *qdrant.Client, format string, args ...any) {
-	log.Printf(format, args...)
-	if client != nil {
-		if err := client.Close(); err != nil {
-			log.Printf("Failed to close client: %v", err)
-		}
-	}
-	os.Exit(1)
-}
-
-// ensureCollectionExists checks if a collection exists and creates it lazily if not.
-func ensureCollectionExists(ctx context.Context, client *qdrant.Client, collectionName string) error {
-	// Check if we've already created this collection
-	collectionCreateLock.Lock()
-	if createdCollections[collectionName] {
-		collectionCreateLock.Unlock()
-		return nil
-	}
-	collectionCreateLock.Unlock()
-
-	// Check if collection exists in Qdrant
-	exists, err := client.CollectionExists(ctx, collectionName)
-	if err != nil {
-		return fmt.Errorf("error checking collection existence: %w", err)
-	}
-
-	if exists {
-		// Mark as created to avoid checking again
-		collectionCreateLock.Lock()
-		createdCollections[collectionName] = true
-		collectionCreateLock.Unlock()
-		log.Printf("Collection %s already exists, using it", collectionName)
-		return nil
-	}
-
-	// Collection doesn't exist, create it (thread-safe)
-	collectionCreateLock.Lock()
-	defer collectionCreateLock.Unlock()
-
-	// Double-check pattern: another goroutine might have created it
-	if createdCollections[collectionName] {
-		return nil
-	}
-
-	log.Printf("Creating collection: %s", collectionName)
-	err = createCollection(ctx, client, collectionName)
-	if err != nil {
-		return fmt.Errorf("error creating collection %s: %w", collectionName, err)
-	}
-	createdCollections[collectionName] = true
-	log.Printf("Collection %s created and marked as ready", collectionName)
-
-	return nil
-}
-
 // Create a language-based collection with named vectors (dirs, names, contents).
-// Always creates collections with HNSW indexing disabled for fast import.
-// Production-optimized with reduced shard/segment counts to prevent memory spikes.
-func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) error {
+func createCollection(ctx context.Context, client *qdrant.Client, collectionName string) {
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
-	log.Printf("Collection %s: HNSW indexing DISABLED for fast import (m=0)", collectionName)
 
-	// Create named vectors configuration with indexing disabled
+	// Create named vectors configuration for dirs, names, and contents
 	namedVectors := map[string]*qdrant.VectorParams{
 		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(0)), // m=0 disables HNSW index building
-				EfConstruct:       qdrant.PtrOf(uint64(100)),
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -328,8 +259,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(0)),
-				EfConstruct:       qdrant.PtrOf(uint64(100)),
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -337,8 +268,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(0)),
-				EfConstruct:       qdrant.PtrOf(uint64(100)),
+				M:                 qdrant.PtrOf(uint64(48)),
+				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
 			},
 		},
@@ -348,12 +279,10 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig:  qdrant.NewVectorsConfigMap(namedVectors),
-		ShardNumber:    qdrant.PtrOf(uint32(2)),
-		// Optimize for fast import with indexing disabled
+		// Aggressive optimization for large collections
 		OptimizersConfig: &qdrant.OptimizersConfigDiff{
-			DefaultSegmentNumber: qdrant.PtrOf(uint64(4)),
+			DefaultSegmentNumber: qdrant.PtrOf(uint64(32)),     // Many segments for parallelism
 			MaxSegmentSize:       qdrant.PtrOf(uint64(500000)), // Large segments for efficiency
-			IndexingThreshold:    qdrant.PtrOf(uint64(0)),      // Disable indexing during import
 		},
 		// Binary quantization for memory efficiency
 		QuantizationConfig: &qdrant.QuantizationConfig{
@@ -365,7 +294,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create collection: %w", err)
+		log.Fatalf("Error creating collection %s: %v", collectionName, err)
 	}
 	log.Printf("Collection '%s' with named vectors created successfully", collectionName)
 
@@ -398,16 +327,13 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	} else {
 		log.Printf("Created index for field: rank in %s", collectionName)
 	}
-
-	return nil
 }
 
 // Import data from a CSV file to separate collections.
-func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorName string) error {
-	log.Printf("Opening CSV file: %s", filePath)
+func importCSVFileWithProgress(ctx context.Context, client *qdrant.Client, filePath string, batchSize int, progress *progresstracker.ProgressTracker) (int, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("error opening CSV file: %w", err)
+		return 0, fmt.Errorf("error opening CSV file: %w", err)
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
@@ -415,67 +341,61 @@ func importCSVFile(ctx context.Context, client *qdrant.Client, filePath, sectorN
 		}
 	}()
 
-	validRecords := make([][]string, 0, 10000) // Pre-allocate for performance
-	var lineNumber int
-	var errorCount int
-
 	reader := csv.NewReader(file)
 	reader.FieldsPerRecord = 0
 	reader.LazyQuotes = true
 	reader.TrimLeadingSpace = true
 
+	batch := make([][]string, 0, batchSize)
+	totalRecords := 0
+	batchNum := 0
+
 	for {
-		lineNumber++
 		record, err := reader.Read()
-		if err != nil {
-			if err == io.EOF {
-				break
+		if err == io.EOF {
+			if len(batch) > 0 {
+				collectionCounts, err := insertBatchToCollections(ctx, client, batch)
+				if err != nil {
+					log.Printf("WARNING: Error inserting final batch: %v", err)
+				} else {
+					// Update progress for each collection
+					for collection, count := range collectionCounts {
+						progress.AddRecords(count, collection)
+					}
+					totalRecords += len(batch)
+				}
 			}
-			log.Printf("WARNING: Error reading line %d in file %s: %v", lineNumber, filePath, err)
-			continue
+			break
 		}
-		validRecords = append(validRecords, record)
-	}
 
-	totalRecords := len(validRecords)
-	if totalRecords == 0 {
-		log.Printf("No valid records found in %s, skipping", filePath)
-		return nil
-	}
-
-	if errorCount > 0 {
-		log.Printf("Processed %s: %d valid records, %d parsing errors", filePath, totalRecords, errorCount)
-	}
-
-	log.Printf("Importing %d valid records from sector %s to separate collections", totalRecords, sectorName)
-
-	// Process in batches for better performance
-	batchesProcessed := 0
-	for i := 0; i < totalRecords; i += BatchSize {
-		end := i + BatchSize
-		if end > totalRecords {
-			end = totalRecords
-		}
-		batch := validRecords[i:end]
-		batchNum := i/BatchSize + 1
-		log.Printf("Processing batch %d/%d (%d records) for sector %s",
-			batchNum, (totalRecords+BatchSize-1)/BatchSize, len(batch), sectorName)
-
-		// Insert batch to collections
-		err := insertBatchToSeparateCollections(ctx, client, batch)
 		if err != nil {
-			log.Printf("WARNING: Error inserting batch %d: %v. Continuing with next batch.", batchNum, err)
+			log.Printf("WARNING: Error reading line in %s: %v", filePath, err)
 			continue
 		}
 
-		batchesProcessed++
+		batch = append(batch, record)
 
-		// Rate limit to avoid overwhelming Qdrant
-		time.Sleep(BatchInsertDelay)
+		if len(batch) >= batchSize {
+			batchNum++
+			// Progress bars will show batch processing status
+
+			collectionCounts, err := insertBatchToCollections(ctx, client, batch)
+			if err != nil {
+				log.Printf("WARNING: Error inserting batch %d: %v", batchNum, err)
+			} else {
+				// Update progress for each collection
+				for collection, count := range collectionCounts {
+					progress.AddRecords(count, collection)
+				}
+				totalRecords += len(batch)
+			}
+
+			batch = make([][]string, 0, batchSize)
+		}
 	}
 
-	log.Printf("All %d batches for sector %s imported successfully", batchesProcessed, sectorName)
-	return nil
+	// File completed successfully - progress bar will reflect this
+	return totalRecords, nil
 }
 
 // hexSimhashToVector converts hex hash string to vector.
@@ -511,7 +431,7 @@ func hexSimhashToVector(hexHashString string, bits int) ([]float32, error) {
 // Insert a batch of records to language-based collections.
 //
 //nolint:gocyclo,nestif // Batch processing complexity is inherent to CSV import
-func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client, batch [][]string) error {
+func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch [][]string) (map[string]int, error) {
 	// Group points by collection (language)
 	collectionPoints := make(map[string][]*qdrant.PointStruct)
 
@@ -618,7 +538,7 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 			langExtStr := strings.TrimSpace(record[17])
 
 			if err := json.Unmarshal([]byte(langExtStr), &langExtensions); err != nil {
-				log.Printf("WARNING: Failed to parse language_extensions JSON '%s': %v. Using misc_collection.", langExtStr, err)
+				// Failed to parse JSON - use misc_collection
 				payload["language_extensions"] = qdrant.NewValueString(langExtStr)
 			} else {
 				// Convert to Qdrant struct format for proper indexing
@@ -662,55 +582,48 @@ func insertBatchToSeparateCollections(ctx context.Context, client *qdrant.Client
 	}
 
 	if len(collectionPoints) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Insert to language-based collections sequentially to avoid connection storms
-	// Collections are created lazily on first use to prevent memory spikes
+	// Insert to collections in parallel
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	errChan := make(chan error, len(collectionPoints))
+
+	// Track counts per collection
+	collectionCounts := make(map[string]int)
+
 	for collectionName, points := range collectionPoints {
 		if len(points) > 0 {
-			// Ensure collection exists before inserting (lazy creation)
-			if err := ensureCollectionExists(ctx, client, collectionName); err != nil {
-				return fmt.Errorf("error ensuring collection %s exists: %w", collectionName, err)
-			}
-
-			_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
-				CollectionName: collectionName,
-				Points:         points,
-			})
-			if err != nil {
-				return fmt.Errorf("error inserting to %s collection: %w", collectionName, err)
-			}
-			log.Printf("Successfully inserted %d points to %s", len(points), collectionName)
+			wg.Add(1)
+			go func(colName string, pts []*qdrant.PointStruct) {
+				defer wg.Done()
+				_, err := client.Upsert(ctx, &qdrant.UpsertPoints{
+					CollectionName: colName,
+					Points:         pts,
+				})
+				if err != nil {
+					errChan <- fmt.Errorf("error inserting to %s collection: %w", colName, err)
+				} else {
+					mu.Lock()
+					collectionCounts[colName] = len(pts)
+					mu.Unlock()
+				}
+			}(collectionName, points)
 		}
 	}
 
-	return nil
-}
+	wg.Wait()
+	close(errChan)
 
-// updateCollectionIndexing enables HNSW indexing on an existing collection.
-// This is called automatically after import completes to build indexes in the background.
-func updateCollectionIndexing(ctx context.Context, client *qdrant.Client, collectionName string) error {
-	log.Printf("Updating collection %s to enable HNSW indexing...", collectionName)
-
-	// Update indexing threshold
-	err := client.UpdateCollection(ctx, &qdrant.UpdateCollection{
-		CollectionName: collectionName,
-		HnswConfig: &qdrant.HnswConfigDiff{
-			M:                 qdrant.PtrOf(uint64(48)),
-			EfConstruct:       qdrant.PtrOf(uint64(500)),
-			FullScanThreshold: qdrant.PtrOf(uint64(100000)),
-		},
-		OptimizersConfig: &qdrant.OptimizersConfigDiff{
-			IndexingThreshold: qdrant.PtrOf(uint64(100000)),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("error updating indexing threshold for %s: %w", collectionName, err)
+	// Check for errors
+	for err := range errChan {
+		if err != nil {
+			return collectionCounts, err
+		}
 	}
 
-	log.Printf("Successfully enabled indexing for collection: %s. Qdrant will build indexes in the background.", collectionName)
-	return nil
+	return collectionCounts, nil
 }
 
 // Function to show collection statistics.
@@ -756,4 +669,91 @@ func initPurlMap(filename string) (map[string]int, error) {
 	}
 
 	return result, nil
+}
+
+// GetAvailableMemoryMB returns available memory in MB.
+func GetAvailableMemoryMB() (int, error) {
+	file, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Warning: Error closing file: %v", err)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, err := strconv.Atoi(fields[1])
+				if err != nil {
+					return 0, err
+				}
+				return kb / 1024, nil // Convert KB to MB
+			}
+		}
+	}
+	return 0, scanner.Err()
+}
+
+// CalculateOptimalWorkers calculates the optimal number of workers for processing CSV files,
+// based on the number of files and their average size.
+// It takes into account available memory and CPU cores to determine the optimal number of workers.
+func CalculateOptimalWorkers(fileCount, avgFileSizeMB int) WorkerConfig {
+	numCPU := runtime.NumCPU()
+
+	log.Printf("Number of CPU cores: %d", numCPU)
+
+	// Get available memory
+	availableMemMB, err := GetAvailableMemoryMB()
+	if err != nil {
+		log.Printf("Error getting memory info: %v, falling back to conservative estimate", err)
+		availableMemMB = 1024 // 1GB fallback
+	}
+
+	log.Printf("Available memory: %d MB", availableMemMB)
+
+	// Estimate memory per worker (rough calculation)
+	// Each worker might hold BatchSize * record size in memory
+	estimatedMemPerWorkerMB := avgFileSizeMB + 100
+	// Calculate max workers based on memory
+	maxWorkersByMem := availableMemMB / estimatedMemPerWorkerMB / 2 // Use only 50% of available
+
+	// Calculate based on CPU (I/O bound: 2x cores)
+	maxWorkersByCPU := numCPU * 2
+
+	// Take the minimum of constraints
+	optimalWorkers := int(math.Min(
+		float64(maxWorkersByMem),
+		float64(maxWorkersByCPU),
+	))
+
+	// Cap at file count and set bounds between 2 and 32
+	if optimalWorkers < 2 {
+		optimalWorkers = 2
+	}
+	if optimalWorkers > fileCount {
+		optimalWorkers = fileCount
+	}
+	if optimalWorkers > 32 {
+		optimalWorkers = 32
+	}
+
+	log.Printf("Optimal numbers of workers: %d", optimalWorkers)
+
+	// Adjust batch size based on workers
+	recommendedBatchSize := 2000
+	if optimalWorkers > 16 {
+		// More workers = smaller batches for better distribution
+		recommendedBatchSize = 1000
+	}
+
+	return WorkerConfig{
+		NumWorkers:           optimalWorkers,
+		RecommendedBatchSize: recommendedBatchSize,
+	}
 }
