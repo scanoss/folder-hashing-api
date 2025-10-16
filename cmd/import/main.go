@@ -238,6 +238,18 @@ func main() {
 	for _, collectionName := range collections {
 		showCollectionStats(ctx, client, collectionName)
 	}
+
+	// Re-enable production HNSW indexing for all collections
+	log.Println("\n=== Enabling Production HNSW Indexing ===")
+	log.Println("Re-enabling HNSW indexing (M=48) for production queries...")
+	for _, collectionName := range collections {
+		if err := enableProductionIndexing(ctx, client, collectionName); err != nil {
+			log.Printf("WARNING: Failed to enable production indexing for %s: %v", collectionName, err)
+		}
+	}
+	log.Println("\n✓ Production indexing enabled for all collections.")
+	log.Println("The Qdrant optimizer will build HNSW indexes in the background.")
+	log.Println("Monitor collection stats to track indexing progress.")
 }
 
 // Create a language-based collection with named vectors (dirs, names, contents).
@@ -245,32 +257,39 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	log.Printf("Creating language-based collection with named vectors: %s", collectionName)
 
 	// Create named vectors configuration for dirs, names, and contents
+	// Optimized for bulk import: vectors on disk, HNSW disabled (M=0)
 	namedVectors := map[string]*qdrant.VectorParams{
 		"dirs": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
+				M:                 qdrant.PtrOf(uint64(0)), // Disable HNSW during import, re-enabled after
 				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
 		"names": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
+				M:                 qdrant.PtrOf(uint64(0)), // Disable HNSW during import, re-enabled after
 				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
 		"contents": {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
+			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M:                 qdrant.PtrOf(uint64(48)),
+				M:                 qdrant.PtrOf(uint64(0)), // Disable HNSW during import, re-enabled after
 				EfConstruct:       qdrant.PtrOf(uint64(500)),
 				FullScanThreshold: qdrant.PtrOf(uint64(100000)),
+				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
 	}
@@ -288,7 +307,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 		QuantizationConfig: &qdrant.QuantizationConfig{
 			Quantization: &qdrant.QuantizationConfig_Binary{
 				Binary: &qdrant.BinaryQuantization{
-					AlwaysRam: qdrant.PtrOf(true), // Keep quantized vectors in RAM
+					AlwaysRam: qdrant.PtrOf(false), // Allow quantized vectors on disk to reduce RAM
 				},
 			},
 		},
@@ -327,6 +346,50 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	} else {
 		log.Printf("Created index for field: rank in %s", collectionName)
 	}
+}
+
+// enableProductionIndexing re-enables HNSW indexing after bulk import is complete.
+// This should be called after all data has been imported to optimize for production queries.
+func enableProductionIndexing(ctx context.Context, client *qdrant.Client, collectionName string) error {
+	log.Printf("Enabling production HNSW indexing for collection: %s", collectionName)
+
+	// Update HNSW config for each named vector (dirs, names, contents)
+	for _, vectorName := range []string{"dirs", "names", "contents"} {
+		log.Printf("  Updating HNSW config for vector: %s", vectorName)
+
+		err := client.UpdateCollection(ctx, &qdrant.UpdateCollection{
+			CollectionName: collectionName,
+			HnswConfig: &qdrant.HnswConfigDiff{
+				M: qdrant.PtrOf(uint64(48)),
+			},
+			VectorsConfig: &qdrant.VectorsConfigDiff{
+				Config: &qdrant.VectorsConfigDiff_Params{
+					Params: &qdrant.VectorParamsDiff{
+						HnswConfig: &qdrant.HnswConfigDiff{
+							M:      qdrant.PtrOf(uint64(48)),
+							OnDisk: qdrant.PtrOf(false),
+						},
+					},
+				},
+			},
+			OptimizersConfig: &qdrant.OptimizersConfigDiff{
+				IndexingThreshold: qdrant.PtrOf(uint64(0)),
+			},
+			QuantizationConfig: &qdrant.QuantizationConfigDiff{
+				Quantization: &qdrant.QuantizationConfigDiff_Binary{
+					Binary: &qdrant.BinaryQuantization{
+						AlwaysRam: qdrant.PtrOf(true),
+					},
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update HNSW for vector %s: %w", vectorName, err)
+		}
+	}
+
+	log.Printf("✓ HNSW indexing enabled for %s. Optimizer will build indexes in background.", collectionName)
+	return nil
 }
 
 // Import data from a CSV file to separate collections.
