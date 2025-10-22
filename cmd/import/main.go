@@ -353,39 +353,42 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 func enableProductionIndexing(ctx context.Context, client *qdrant.Client, collectionName string) error {
 	log.Printf("Enabling production HNSW indexing for collection: %s", collectionName)
 
-	// Update HNSW config for each named vector (dirs, names, contents)
+	// Build named vectors config map
+	namedVectorsConfig := make(map[string]*qdrant.VectorParamsDiff)
 	for _, vectorName := range []string{"dirs", "names", "contents"} {
-		log.Printf("  Updating HNSW config for vector: %s", vectorName)
-
-		err := client.UpdateCollection(ctx, &qdrant.UpdateCollection{
-			CollectionName: collectionName,
+		namedVectorsConfig[vectorName] = &qdrant.VectorParamsDiff{
 			HnswConfig: &qdrant.HnswConfigDiff{
-				M: qdrant.PtrOf(uint64(48)),
+				M:      qdrant.PtrOf(uint64(48)),
+				OnDisk: qdrant.PtrOf(false),
 			},
-			VectorsConfig: &qdrant.VectorsConfigDiff{
-				Config: &qdrant.VectorsConfigDiff_Params{
-					Params: &qdrant.VectorParamsDiff{
-						HnswConfig: &qdrant.HnswConfigDiff{
-							M:      qdrant.PtrOf(uint64(48)),
-							OnDisk: qdrant.PtrOf(false),
-						},
-					},
-				},
-			},
-			OptimizersConfig: &qdrant.OptimizersConfigDiff{
-				IndexingThreshold: qdrant.PtrOf(uint64(0)),
-			},
-			QuantizationConfig: &qdrant.QuantizationConfigDiff{
-				Quantization: &qdrant.QuantizationConfigDiff_Binary{
-					Binary: &qdrant.BinaryQuantization{
-						AlwaysRam: qdrant.PtrOf(true),
-					},
-				},
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to update HNSW for vector %s: %w", vectorName, err)
+			OnDisk: qdrant.PtrOf(true), // Keep vectors on disk, only HNSW in RAM
 		}
+	}
+
+	// Update all named vectors and collection settings in a single call
+	err := client.UpdateCollection(ctx, &qdrant.UpdateCollection{
+		CollectionName: collectionName,
+		VectorsConfig: &qdrant.VectorsConfigDiff{
+			Config: &qdrant.VectorsConfigDiff_ParamsMap{
+				ParamsMap: &qdrant.VectorParamsDiffMap{
+					Map: namedVectorsConfig,
+				},
+			},
+		},
+		OptimizersConfig: &qdrant.OptimizersConfigDiff{
+			IndexingThreshold: qdrant.PtrOf(uint64(0)),
+		},
+		QuantizationConfig: &qdrant.QuantizationConfigDiff{
+			Quantization: &qdrant.QuantizationConfigDiff_Binary{
+				Binary: &qdrant.BinaryQuantization{
+					AlwaysRam: qdrant.PtrOf(true),
+				},
+			},
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to update HNSW config: %w", err)
 	}
 
 	log.Printf("✓ HNSW indexing enabled for %s. Optimizer will build indexes in background.", collectionName)
