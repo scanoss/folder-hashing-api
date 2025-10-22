@@ -386,7 +386,6 @@ func enableProductionIndexing(ctx context.Context, client *qdrant.Client, collec
 			},
 		},
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to update HNSW config: %w", err)
 	}
