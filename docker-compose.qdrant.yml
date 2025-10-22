@@ -9,15 +9,10 @@ services:
       - ./qdrant_data:/qdrant/storage
     environment:
       # Optimize storage performance for large-scale imports
-      - QDRANT__STORAGE__OPTIMIZERS__MAX_SEGMENT_SIZE=500000
+      - QDRANT__STORAGE__OPTIMIZERS__OVERWRITE__MAX_SEGMENT_SIZE=500000
       - QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=4
       # Enable WAL for durability during bulk imports
       - QDRANT__STORAGE__WAL__WAL_CAPACITY_MB=32
-    deploy:
-      resources:
-        limits:
-          cpus: "16" # Adjust based on your server (recommended: 8-16 for 100M vectors)
-          memory: 32G # Adjust based on your server (recommended: 16-32 GB for 100M vectors)
     expose:
       - 6333
       - 6334
