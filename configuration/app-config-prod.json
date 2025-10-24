@@ -1,0 +1,19 @@
+{
+  "App": {
+    "Name": "Folder-hashing-api Service",
+    "Debug": false,
+    "Mode": "prod",
+    "GRPCPort": "50061",
+    "RESTPort": "40061"
+  },
+  "Telemetry": {
+    "Enabled": true,
+    "OltpExporter": "0.0.0.0:4317"
+  },
+  "Filtering": {
+    "AllowListFile": "",
+    "DenyListFile": "",
+    "BlockByDefault": false,
+    "TrustProxy": false
+  }
+}
