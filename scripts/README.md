@@ -16,7 +16,7 @@ The project includes `docker-compose.qdrant.yml` in the root directory for runni
 
 ```bash
 # Start Qdrant vector database
-docker-compose -f docker-compose.qdrant.yml up -d
+docker-compose -f docker-compose-qdrant.yml up -d
 ```
 
 ## 🚀 Installation
@@ -151,7 +151,7 @@ sudo systemctl enable scanoss-folder-hashing-api
 Start Qdrant using Docker Compose:
 
 ```bash
-docker-compose -f docker-compose.qdrant.yml up -d
+docker-compose -f docker-compose-qdrant.yml up -d
 ```
 
 This starts Qdrant with:
