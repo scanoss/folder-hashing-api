@@ -43,11 +43,7 @@ export BASE_C_PATH=/usr/local/etc/scanoss
 export CONFIG_DIR="${BASE_C_PATH}/folder-hashing-api"
 export LOG_DIR=/var/log/scanoss
 export L_PATH="${LOG_DIR}/folder-hashing-api"
-export DB_PATH_BASE=/var/lib/scanoss
-export SQLITE_PATH="${DB_PATH_BASE}/db/sqlite/folder-hashing-api"
-export SQLITE_DB_NAME=base.sqlite
-export TARGET_SQLITE_DB_NAME=db.sqlite
-export CONF_DOWNLOAD_URL="https://raw.githubusercontent.com/scanoss/hfh/refs/heads/main/config/app-config-prod.json"
+export CONF_DOWNLOAD_URL="https://raw.githubusercontent.com/scanoss/folder-hashing-api/refs/heads/main/configuration/app-config-prod.json"
 
 # Makes sure the scanoss user exists
 export RUNTIME_USER=scanoss
@@ -116,40 +112,6 @@ if [ -f "./$CONF" ]; then
     CONFIG_FILE_PATH="./$CONF"
 elif [ -f "../$CONF" ]; then
     CONFIG_FILE_PATH="../$CONF"
-fi
-
-####################################################
-#                   SETUP SQLITE DB                #
-####################################################
-if [ "$FORCE" = true ]; then
-  echo "[FORCE] Skipping all SQLite DB setup."
-else
-  SQLITE_DB_PATH=""
-  if [ -f "./$SQLITE_DB_NAME" ]; then
-      SQLITE_DB_PATH="./$SQLITE_DB_NAME"
-  elif [ -f "../$SQLITE_DB_NAME" ]; then
-      SQLITE_DB_PATH="../$SQLITE_DB_NAME"
-  fi
-
-  mkdir -p "$SQLITE_PATH" || { echo "Error: Failed to create directory $SQLITE_PATH"; exit 1; }
-  SQLITE_TARGET_PATH="$SQLITE_PATH/$TARGET_SQLITE_DB_NAME"
-
-  if [ -n "$SQLITE_DB_PATH" ]; then
-      if [ -f "$SQLITE_TARGET_PATH" ]; then
-          read -p "SQLite file found. Replace $SQLITE_TARGET_PATH? (n/y) [n]: " -n 1 -r
-          echo
-          if [[ "$REPLY" =~ ^[Yy]$ ]] ; then
-            cp "$SQLITE_DB_PATH" "$SQLITE_TARGET_PATH" || { echo "Error copying DB"; exit 1; }
-          else
-            echo "Skipping DB copy."
-          fi
-      else
-          echo "Copying SQLite DB..."
-          cp "$SQLITE_DB_PATH" "$SQLITE_TARGET_PATH" || { echo "Error copying DB"; exit 1; }
-      fi
-  else
-    echo "Warning: No SQLite DB detected. Skipping DB setup."
-  fi
 fi
 
 ####################################################
