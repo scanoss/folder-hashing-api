@@ -45,4 +45,4 @@ jobs:
             target/scanoss-folder-hashing-import-linux-arm64
             scanoss-folder-hashing-api_linux-amd64_${{ github.ref_name }}-1.tgz
             scanoss-folder-hashing-api_linux-arm64_${{ github.ref_name }}-1.tgz
-            docker-compose.qdrant.yml
+            docker-compose-qdrant.yml
