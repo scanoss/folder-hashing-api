@@ -99,6 +99,7 @@ if [ -f "$SC_SERVICE_FILE" ] ; then
   cp "$SC_SERVICE_FILE" /etc/systemd/system || { echo "Error: service copy failed"; exit 1; }
 fi
 cp scanoss-folder-hashing-api.sh /usr/local/bin || { echo "Error: startup script copy failed"; exit 1; }
+chmod +x /usr/local/bin/scanoss-folder-hashing-api.sh || { echo "Error: chmod failed for /usr/local/bin/scanoss-folder-hashing-api.sh"; exit 1; }
 
 ####################################################
 #                SEARCH CONFIG FILE                #
@@ -155,9 +156,6 @@ fi
 chown -R $RUNTIME_USER:$RUNTIME_USER "$BASE_C_PATH" || { echo "Error chown $BASE_C_PATH"; exit 1; }
 find "$CONFIG_DIR" -type d -exec chmod 0750 "{}" \;
 find "$CONFIG_DIR" -type f -exec chmod 0600 "{}" \;
-chown -R $RUNTIME_USER:$RUNTIME_USER "$DB_PATH_BASE"
-find "$DB_PATH_BASE" -type d -exec chmod 0750 "{}" \;
-find "$DB_PATH_BASE" -type f -exec chmod 0640 "{}" \;
 
 # Copy the binaries if requested
 BINARY=scanoss-folder-hashing-api
