@@ -546,7 +546,7 @@ func TestDeduplicateComponents(t *testing.T) {
 			results := service.deduplicateComponents(tt.input)
 
 			if len(results) != tt.expectedCount {
-				t.Errorf("Expected %d results, got %d. Results: %v", tt.expectedCount, len(results))
+				t.Errorf("Expected %d results, got %d", tt.expectedCount, len(results))
 				return
 			}
 
