@@ -82,6 +82,28 @@ func TestSortByBestComponentOrder(t *testing.T) {
 			expected: []string{"/path/one", "/path/two"},
 		},
 		{
+			name: "Result with empty ComponentGroups sorts last",
+			input: []*entities.ScanResult{
+				{
+					PathID: "/path/with-groups",
+					ComponentGroups: []*entities.ComponentGroup{
+						{Order: 10},
+					},
+				},
+				{
+					PathID:          "/path/empty-groups",
+					ComponentGroups: []*entities.ComponentGroup{},
+				},
+				{
+					PathID: "/path/with-low-order",
+					ComponentGroups: []*entities.ComponentGroup{
+						{Order: 1},
+					},
+				},
+			},
+			expected: []string{"/path/with-low-order", "/path/with-groups", "/path/empty-groups"},
+		},
+		{
 			name: "Multiple results with various orders",
 			input: []*entities.ScanResult{
 				{
@@ -524,7 +546,7 @@ func TestDeduplicateComponents(t *testing.T) {
 			results := service.deduplicateComponents(tt.input)
 
 			if len(results) != tt.expectedCount {
-				t.Errorf("Expected %d results, got %d", tt.expectedCount, len(results))
+				t.Errorf("Expected %d results, got %d. Results: %v", tt.expectedCount, len(results))
 				return
 			}
 

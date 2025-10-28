@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -228,13 +229,13 @@ func (s *ScanServiceImpl) deduplicateComponents(results []*entities.ScanResult) 
 
 // sortByBestComponentOrder sorts the results by the lowest order of the component groups (lower order is better).
 func sortByBestComponentOrder(results []*entities.ScanResult) {
-	sort.Slice(results, func(i, j int) bool {
-		minOrderI := int32(^uint32(0) >> 1) // Max int32
+	sort.SliceStable(results, func(i, j int) bool {
+		minOrderI := int32(math.MaxInt32)
 		for _, group := range results[i].ComponentGroups {
 			minOrderI = min(minOrderI, group.Order)
 		}
 
-		minOrderJ := int32(^uint32(0) >> 1) // Max int32
+		minOrderJ := int32(math.MaxInt32)
 		for _, group := range results[j].ComponentGroups {
 			minOrderJ = min(minOrderJ, group.Order)
 		}
