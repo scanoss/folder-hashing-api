@@ -221,9 +221,23 @@ func (s *ScanServiceImpl) deduplicateComponents(results []*entities.ScanResult) 
 		}
 	}
 
-	sort.Slice(deduplicatedResults, func(i, j int) bool {
-		return deduplicatedResults[i].PathID < deduplicatedResults[j].PathID
-	})
+	sortByBestComponentOrder(deduplicatedResults)
 
 	return deduplicatedResults
+}
+
+// sortByBestComponentOrder sorts the results by the lowest order of the component groups (lower order is better).
+func sortByBestComponentOrder(results []*entities.ScanResult) {
+	sort.Slice(results, func(i, j int) bool {
+		minOrderI := int32(^uint32(0) >> 1) // Max int32
+		for _, group := range results[i].ComponentGroups {
+			minOrderI = min(minOrderI, group.Order)
+		}
+
+		minOrderJ := int32(^uint32(0) >> 1) // Max int32
+		for _, group := range results[j].ComponentGroups {
+			minOrderJ = min(minOrderJ, group.Order)
+		}
+		return minOrderI < minOrderJ
+	})
 }
