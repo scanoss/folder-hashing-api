@@ -159,6 +159,37 @@ go build -o dist/import-tool cmd/import/main.go
 | `-top-purls` | Yes | JSON file with PURL rankings for search prioritization |
 | `-overwrite` | No | Delete and recreate all collections (use for fresh start) |
 
+### CSV Format
+
+Each CSV file is read as **headerless** and must contain exactly **13 columns** per row, in this order:
+
+| Idx | Column | Type | Description |
+|-----|--------|------|-------------|
+| 0 | `hfh_dirs` | hex (16 chars / 64 bits) | Hash of directories, used for the `dirs` vector |
+| 1 | `hfh_names` | hex | Hash of file names, used for the `names` vector |
+| 2 | `hfh_contents` | hex | Hash of file contents, used for the `contents` vector |
+| 3 | `url_hash` | hex (16 chars / 64 bits) | Internal source identifier — used in the Qdrant point ID, not exposed |
+| 4 | `url_md5` | hex (32 chars / MD5) | MD5 of the source URL — exposed in the API response (as `url_hash` per version) |
+| 5 | `purl` | string | Package URL — primary component key |
+| 6 | `vendor` | string | Component vendor — exposed in the API response |
+| 7 | `component` | string | Component name — exposed in the API response |
+| 8 | `version` | string | Component version — exposed in the API response |
+| 9 | `release_date` | string (`YYYY-MM-DD`) | Component release date — exposed per version in the API response |
+| 10 | `license` | string (SPDX id, e.g. `ISC`, `MIT`) | License — exposed per version as a `License` object with `name` and `spdx_id` set to this value. Empty produces an empty list |
+| 11 | `language_extensions` | JSON object `{ext: count}` or empty | Determines the target collection |
+| 12 | `rank` | int | Selection priority — lower is better. Overridden by the `top-purls` file when matched |
+
+Example row:
+
+```csv
+165fda3c6cc3bf1a,c4ed1d7ce8549a19,f57a5525acdaae94,854139ed027322d9,c4ac4ad84052612271d5995cd1553d6b,pkg:github/scanoss/scanoss.py,scanoss,scanoss.py,v1.19.0,2024-12-20,MIT,"{""py"":70,""json"":14,""md"":9}",1
+```
+
+Notes:
+- Rows with fewer than 11 fields are skipped with a warning.
+- Empty `language_extensions` routes the record to `misc_collection`.
+- Invalid or empty `rank` defaults to `0`, which ranks higher than any positive value in the current sort — make sure the generator emits sanitized values.
+
 ### How It Works
 
 The import tool:

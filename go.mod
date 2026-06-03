@@ -19,7 +19,7 @@ require (
 	google.golang.org/grpc v1.73.0
 )
 
-// replace github.com/scanoss/papi => ../papi
+replace github.com/scanoss/papi => /data/mariano/papi
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect

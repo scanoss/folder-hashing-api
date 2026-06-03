@@ -109,9 +109,18 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 	for _, group := range result.ComponentGroups {
 		var versions []*scanningv2.HFHResponse_Version
 		for _, v := range group.Versions {
+			var licenses []*scanningv2.HFHResponse_Version_License
+			if v.License != "" {
+				licenses = []*scanningv2.HFHResponse_Version_License{
+					{Name: v.License, SpdxId: v.License},
+				}
+			}
 			versions = append(versions, &scanningv2.HFHResponse_Version{
-				Version: v.Version,
-				Score:   v.Score,
+				Version:     v.Version,
+				Score:       v.Score,
+				ReleaseDate: v.ReleaseDate,
+				UrlHash:     v.URLMD5,
+				Licenses:    licenses,
 			})
 		}
 

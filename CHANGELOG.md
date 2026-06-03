@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- Import `url_md5`, `release_date` and `license` columns from the CSV and persist them in the Qdrant payload.
+- Expose `release_date`, `url_md5` and `license` per version in the HFH response. `url_md5` is mapped to the proto `Version.url_hash` field, and `license` is mapped to a single `License` entry with `name` and `spdx_id` set to the CSV value (empty produces an empty list).
+
+### Changed
+- Reshape import CSV layout to 13 columns. Removed unused fields (`url`, `total_files`, `indexed_files`, `source_files`, `ignored_files`, `size`, `category`); added `url_md5`, `release_date` and re-added `license`.
+- `rank` is now read directly from the CSV (last column) instead of being derived from `category`. The `top-purls` JSON keeps overriding the CSV value when the PURL matches.
+- Simplify Qdrant point ID hashing to `purl|version|hfh_dirs|hfh_names|hfh_contents|url_hash`.
+
+### Removed
+- `category`, `url`, `total_files`, `indexed_files`, `source_files`, `ignored_files`, `size` payload fields. Also drop their Qdrant payload indexes (`url`, `category`).
+
 ## [0.7.1] - 2025-10-28
 ### Fixed
 - Fix sorting order of results. Now sorting by `Order` field in ascending order, instead of `PathId`.
