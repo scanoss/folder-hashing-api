@@ -555,11 +555,12 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	// Group results by PURL
 	purlGroups := make(map[string][]entities.SearchResult)
 	var orderedPurls []string // Keep track of PURL order
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		if _, exists := purlGroups[result.Purl]; !exists {
 			orderedPurls = append(orderedPurls, result.Purl)
 		}
-		purlGroups[result.Purl] = append(purlGroups[result.Purl], result)
+		purlGroups[result.Purl] = append(purlGroups[result.Purl], *result)
 	}
 
 	componentGroups := make([]entities.ComponentGroup, 0, len(orderedPurls))
@@ -573,7 +574,8 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		})
 
 		var versions []entities.Version
-		for _, item := range group {
+		for j := range group {
+			item := &group[j]
 			versions = append(versions, entities.Version{
 				Version:     item.Version,
 				Score:       distanceToScore(item.Score),

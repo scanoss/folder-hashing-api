@@ -56,6 +56,13 @@ const (
 	VectorDim = 64 // Single 64-bit hash per collection
 	// DefaultWorkers is the default number of workers to use.
 	DefaultWorkers = 2
+
+	// VectorDirs is the named vector for directory hashes.
+	VectorDirs = "dirs"
+	// VectorNames is the named vector for file name hashes.
+	VectorNames = "names"
+	// VectorContents is the named vector for file content hashes.
+	VectorContents = "contents"
 )
 
 var rankMap map[string]int
@@ -260,7 +267,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	// Create named vectors configuration for dirs, names, and contents
 	// Optimized for bulk import: vectors on disk, HNSW disabled (M=0)
 	namedVectors := map[string]*qdrant.VectorParams{
-		"dirs": {
+		VectorDirs: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -271,7 +278,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
-		"names": {
+		VectorNames: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -282,7 +289,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
-		"contents": {
+		VectorContents: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -356,7 +363,7 @@ func enableProductionIndexing(ctx context.Context, client *qdrant.Client, collec
 
 	// Build named vectors config map
 	namedVectorsConfig := make(map[string]*qdrant.VectorParamsDiff)
-	for _, vectorName := range []string{"dirs", "names", "contents"} {
+	for _, vectorName := range []string{VectorDirs, VectorNames, VectorContents} {
 		namedVectorsConfig[vectorName] = &qdrant.VectorParamsDiff{
 			HnswConfig: &qdrant.HnswConfigDiff{
 				M:      qdrant.PtrOf(uint64(48)),
@@ -608,9 +615,9 @@ func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch 
 
 		// Create point with named vectors for the target collection
 		vectorsMap := map[string]*qdrant.Vector{
-			"dirs":     qdrant.NewVector(dirVector...),
-			"names":    qdrant.NewVector(nameVector...),
-			"contents": qdrant.NewVector(contentVector...),
+			VectorDirs:     qdrant.NewVector(dirVector...),
+			VectorNames:    qdrant.NewVector(nameVector...),
+			VectorContents: qdrant.NewVector(contentVector...),
 		}
 
 		point := &qdrant.PointStruct{
