@@ -64,7 +64,7 @@ var rankMap map[string]int
 func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
 	overwrite := flag.Bool("overwrite", false, "If true, delete existing collections before import")
-	topPurlsPath := flag.String("top-purls", "", "File with top rated purls (required)")
+	topPurlsPath := flag.String("top-purls", "", "Optional file with top rated purls; overrides the rank from the CSV when a purl matches")
 	qdrantHost := flag.String("qdrant-host", QdrantHost, "Qdrant server host")
 	qdrantPort := flag.Int("qdrant-port", QdrantPort, "Qdrant server port")
 
@@ -74,19 +74,20 @@ func main() {
 		log.Fatal("Error: You must specify a directory with the -dir option")
 	}
 
-	if *topPurlsPath == "" {
-		log.Fatal("Error: You must specify a file with the -top-purls option")
-	}
-
 	// Verify that the directory exists
 	if _, err := os.Stat(*csvDir); os.IsNotExist(err) {
 		log.Fatalf("Error: Directory %s does not exist", *csvDir)
 	}
 
-	var err error
-	rankMap, err = initPurlMap(*topPurlsPath)
-	if err != nil {
-		log.Println("Warning: ", err)
+	// The top-purls file is optional. When omitted, the rank from the CSV
+	// (column 12) is used as-is; when provided, it overrides the CSV rank on
+	// matching purls.
+	if *topPurlsPath != "" {
+		var err error
+		rankMap, err = initPurlMap(*topPurlsPath)
+		if err != nil {
+			log.Println("Warning: ", err)
+		}
 	}
 
 	// Start the timer to measure performance

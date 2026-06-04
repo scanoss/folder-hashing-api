@@ -17,6 +17,7 @@
 package mapper
 
 import (
+	"fmt"
 	"maps"
 
 	"github.com/scanoss/papi/api/scanningv2"
@@ -112,7 +113,12 @@ func (m *ScanMapperImpl) scanResultToProto(result *entities.ScanResult) *scannin
 			var licenses []*scanningv2.HFHResponse_Version_License
 			if v.License != "" {
 				licenses = []*scanningv2.HFHResponse_Version_License{
-					{Name: v.License, SpdxId: v.License},
+					{
+						Name:           v.License,
+						SpdxId:         v.License,
+						IsSpdxApproved: true,
+						Url:            fmt.Sprintf("https://spdx.org/licenses/%s.html", v.License),
+					},
 				}
 			}
 			versions = append(versions, &scanningv2.HFHResponse_Version{
