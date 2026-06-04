@@ -45,3 +45,4 @@ hfh-cli
 
 papi/
 target
+qdrant_data/
