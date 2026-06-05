@@ -29,17 +29,23 @@ type ComponentGroup struct {
 
 // Version represents a component version with score.
 type Version struct {
-	Version string  `json:"version"`
-	Score   float32 `json:"score"`
+	Version     string  `json:"version"`
+	Score       float32 `json:"score"`
+	ReleaseDate string  `json:"release_date"`
+	URLMD5      string  `json:"url_md5"`
+	License     string  `json:"license"`
 }
 
 // SearchResult represents a search result from Qdrant.
 type SearchResult struct {
-	Score     float32 `json:"score"`
-	ID        uint64  `json:"id"`
-	Vendor    string  `json:"vendor"`
-	Component string  `json:"component"`
-	Purl      string  `json:"purl"`
-	Version   string  `json:"version"`
-	Rank      int     `json:"rank"`
+	Score       float32 `json:"score"`
+	ID          uint64  `json:"id"`
+	Vendor      string  `json:"vendor"`
+	Component   string  `json:"component"`
+	Purl        string  `json:"purl"`
+	Version     string  `json:"version"`
+	Rank        int     `json:"rank"`
+	ReleaseDate string  `json:"release_date"`
+	URLMD5      string  `json:"url_md5"`
+	License     string  `json:"license"`
 }

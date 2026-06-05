@@ -20,23 +20,35 @@ import (
 	"strings"
 )
 
+// Collection name constants for languages that map from multiple extensions.
+const (
+	javascriptCollection = "javascript_collection"
+	javaCollection       = "java_collection"
+	cppCollection        = "cpp_collection"
+	shellCollection      = "shell_collection"
+	webCollection        = "web_collection"
+
+	// extSwift is the Swift source file extension.
+	extSwift = "swift"
+)
+
 // PrimaryLanguages maps file extensions to their corresponding collection names.
 var PrimaryLanguages = map[string]string{
-	"js":     "javascript_collection",
-	"jsx":    "javascript_collection",
-	"ts":     "javascript_collection",
-	"tsx":    "javascript_collection",
+	"js":     javascriptCollection,
+	"jsx":    javascriptCollection,
+	"ts":     javascriptCollection,
+	"tsx":    javascriptCollection,
 	"py":     "python_collection",
-	"java":   "java_collection",
-	"class":  "java_collection",
-	"jar":    "java_collection",
+	"java":   javaCollection,
+	"class":  javaCollection,
+	"jar":    javaCollection,
 	"c":      "c_collection",
 	"h":      "c_collection",
-	"cpp":    "cpp_collection",
-	"cxx":    "cpp_collection",
-	"cc":     "cpp_collection",
-	"hpp":    "cpp_collection",
-	"hxx":    "cpp_collection",
+	"cpp":    cppCollection,
+	"cxx":    cppCollection,
+	"cc":     cppCollection,
+	"hpp":    cppCollection,
+	"hxx":    cppCollection,
 	"go":     "go_collection",
 	"rb":     "ruby_collection",
 	"php":    "php_collection",
@@ -44,16 +56,16 @@ var PrimaryLanguages = map[string]string{
 	"rs":     "rust_collection",
 	"scala":  "scala_collection",
 	"kt":     "kotlin_collection",
-	"swift":  "swift_collection",
-	"sh":     "shell_collection",
-	"bash":   "shell_collection",
-	"zsh":    "shell_collection",
-	"html":   "web_collection",
-	"css":    "web_collection",
-	"scss":   "web_collection",
-	"less":   "web_collection",
-	"vue":    "web_collection",
-	"svelte": "web_collection",
+	extSwift: "swift_collection",
+	"sh":     shellCollection,
+	"bash":   shellCollection,
+	"zsh":    shellCollection,
+	"html":   webCollection,
+	"css":    webCollection,
+	"scss":   webCollection,
+	"less":   webCollection,
+	"vue":    webCollection,
+	"svelte": webCollection,
 	"dart":   "dart_collection",
 	"sql":    "sql_collection",
 	"lua":    "lua_collection",
@@ -68,7 +80,7 @@ var IndexedLangExtensions = []string{
 	// Backend/General
 	"py", "java", "class", "jar", "go", "rb", "php", "cs", "rs", "scala", "kt", "groovy", "clj", "ex", "exs",
 	// C-family
-	"c", "h", "cpp", "cxx", "cc", "hpp", "hxx", "m", "mm", "swift",
+	"c", "h", "cpp", "cxx", "cc", "hpp", "hxx", "m", "mm", extSwift,
 	// Shell/Scripts
 	"sh", "bash", "zsh", "ps1", "bat", "cmd", "pl", "pm", "t",
 	// Data/Config
@@ -76,7 +88,7 @@ var IndexedLangExtensions = []string{
 	// Documentation
 	"md", "rst", "txt", "tex", "adoc", "wiki",
 	// Mobile
-	"dart", "kotlin", "swift", "gradle",
+	"dart", "kotlin", extSwift, "gradle",
 	// Database
 	"sql", "graphql", "prisma",
 	// Other

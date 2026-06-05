@@ -521,6 +521,15 @@ func (r *ScanRepositoryQdrantImpl) convertPointToResult(point *qdrant.ScoredPoin
 		if val, exists := point.Payload["rank"]; exists {
 			result.Rank = int(val.GetIntegerValue())
 		}
+		if val, exists := point.Payload["release_date"]; exists {
+			result.ReleaseDate = val.GetStringValue()
+		}
+		if val, exists := point.Payload["url_md5"]; exists {
+			result.URLMD5 = val.GetStringValue()
+		}
+		if val, exists := point.Payload["license"]; exists {
+			result.License = val.GetStringValue()
+		}
 	}
 
 	return result
@@ -546,11 +555,12 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 	// Group results by PURL
 	purlGroups := make(map[string][]entities.SearchResult)
 	var orderedPurls []string // Keep track of PURL order
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		if _, exists := purlGroups[result.Purl]; !exists {
 			orderedPurls = append(orderedPurls, result.Purl)
 		}
-		purlGroups[result.Purl] = append(purlGroups[result.Purl], result)
+		purlGroups[result.Purl] = append(purlGroups[result.Purl], *result)
 	}
 
 	componentGroups := make([]entities.ComponentGroup, 0, len(orderedPurls))
@@ -564,10 +574,14 @@ func (r *ScanRepositoryQdrantImpl) groupByPurl(results []entities.SearchResult) 
 		})
 
 		var versions []entities.Version
-		for _, item := range group {
+		for j := range group {
+			item := &group[j]
 			versions = append(versions, entities.Version{
-				Version: item.Version,
-				Score:   distanceToScore(item.Score),
+				Version:     item.Version,
+				Score:       distanceToScore(item.Score),
+				ReleaseDate: item.ReleaseDate,
+				URLMD5:      item.URLMD5,
+				License:     item.License,
 			})
 		}
 

@@ -56,6 +56,13 @@ const (
 	VectorDim = 64 // Single 64-bit hash per collection
 	// DefaultWorkers is the default number of workers to use.
 	DefaultWorkers = 2
+
+	// VectorDirs is the named vector for directory hashes.
+	VectorDirs = "dirs"
+	// VectorNames is the named vector for file name hashes.
+	VectorNames = "names"
+	// VectorContents is the named vector for file content hashes.
+	VectorContents = "contents"
 )
 
 var rankMap map[string]int
@@ -64,7 +71,7 @@ var rankMap map[string]int
 func main() {
 	csvDir := flag.String("dir", "", "Directory containing CSV files (required)")
 	overwrite := flag.Bool("overwrite", false, "If true, delete existing collections before import")
-	topPurlsPath := flag.String("top-purls", "", "File with top rated purls (required)")
+	topPurlsPath := flag.String("top-purls", "", "Optional file with top rated purls; overrides the rank from the CSV when a purl matches")
 	qdrantHost := flag.String("qdrant-host", QdrantHost, "Qdrant server host")
 	qdrantPort := flag.Int("qdrant-port", QdrantPort, "Qdrant server port")
 
@@ -74,19 +81,20 @@ func main() {
 		log.Fatal("Error: You must specify a directory with the -dir option")
 	}
 
-	if *topPurlsPath == "" {
-		log.Fatal("Error: You must specify a file with the -top-purls option")
-	}
-
 	// Verify that the directory exists
 	if _, err := os.Stat(*csvDir); os.IsNotExist(err) {
 		log.Fatalf("Error: Directory %s does not exist", *csvDir)
 	}
 
-	var err error
-	rankMap, err = initPurlMap(*topPurlsPath)
-	if err != nil {
-		log.Println("Warning: ", err)
+	// The top-purls file is optional. When omitted, the rank from the CSV
+	// (column 12) is used as-is; when provided, it overrides the CSV rank on
+	// matching purls.
+	if *topPurlsPath != "" {
+		var err error
+		rankMap, err = initPurlMap(*topPurlsPath)
+		if err != nil {
+			log.Println("Warning: ", err)
+		}
 	}
 
 	// Start the timer to measure performance
@@ -259,7 +267,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	// Create named vectors configuration for dirs, names, and contents
 	// Optimized for bulk import: vectors on disk, HNSW disabled (M=0)
 	namedVectors := map[string]*qdrant.VectorParams{
-		"dirs": {
+		VectorDirs: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -270,7 +278,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
-		"names": {
+		VectorNames: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -281,7 +289,7 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 				OnDisk:            qdrant.PtrOf(true), // Store HNSW index on disk
 			},
 		},
-		"contents": {
+		VectorContents: {
 			Size:     VectorDim,
 			Distance: qdrant.Distance_Manhattan,
 			OnDisk:   qdrant.PtrOf(true), // Store vectors on disk to reduce RAM during import
@@ -320,8 +328,8 @@ func createCollection(ctx context.Context, client *qdrant.Client, collectionName
 	// Create indexes for faster filtering
 	log.Printf("Creating payload indexes for collection %s...", collectionName)
 
-	// Index for component fields and category for faster grouping and filtering
-	textFields := []string{"purl", "version", "url", "category"}
+	// Index for component fields used in grouping and filtering
+	textFields := []string{"purl", "version"}
 	for _, field := range textFields {
 		_, err = client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: collectionName,
@@ -355,7 +363,7 @@ func enableProductionIndexing(ctx context.Context, client *qdrant.Client, collec
 
 	// Build named vectors config map
 	namedVectorsConfig := make(map[string]*qdrant.VectorParamsDiff)
-	for _, vectorName := range []string{"dirs", "names", "contents"} {
+	for _, vectorName := range []string{VectorDirs, VectorNames, VectorContents} {
 		namedVectorsConfig[vectorName] = &qdrant.VectorParamsDiff{
 			HnswConfig: &qdrant.HnswConfigDiff{
 				M:      qdrant.PtrOf(uint64(48)),
@@ -502,7 +510,7 @@ func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch 
 
 	// Process each record in the batch
 	for _, record := range batch {
-		if len(record) < 17 {
+		if len(record) < 13 {
 			log.Printf("WARNING: Skipping incomplete record with %d fields", len(record))
 			continue
 		}
@@ -512,6 +520,7 @@ func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch 
 		hfhNamesStr := strings.TrimSpace(record[1])
 		hfhContentsStr := strings.TrimSpace(record[2])
 		urlHashStr := strings.TrimSpace(record[3])
+		urlMd5Str := strings.TrimSpace(record[4])
 
 		// Skip if any critical hash is invalid
 		if hfhDirsStr == "" || hfhNamesStr == "" || hfhContentsStr == "" {
@@ -531,76 +540,51 @@ func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch 
 			continue
 		}
 
-		// Parse metadata (default to 0 if parsing fails)
-		totalFiles, err := strconv.ParseInt(record[11], 10, 32)
-		if err != nil {
-			totalFiles = 0
-		}
-		indexedFiles, err := strconv.ParseInt(record[12], 10, 32)
-		if err != nil {
-			indexedFiles = 0
-		}
-		sourceFiles, err := strconv.ParseInt(record[13], 10, 32)
-		if err != nil {
-			sourceFiles = 0
-		}
-		ignoredFiles, err := strconv.ParseInt(record[14], 10, 32)
-		if err != nil {
-			ignoredFiles = 0
-		}
-		size, err := strconv.ParseInt(record[15], 10, 32)
-		if err != nil {
-			size = 0
-		}
-		categoryStr := strings.TrimSpace(record[16])
+		purl := strings.TrimSpace(record[5])
+		vendor := strings.TrimSpace(record[6])
+		component := strings.TrimSpace(record[7])
+		version := strings.TrimSpace(record[8])
+		releaseDate := strings.TrimSpace(record[9])
+		license := strings.TrimSpace(record[10])
 
-		// Generate unique point ID based on metadata to handle re-imports gracefully
-		component := strings.TrimSpace(record[5])
-		vendor := strings.TrimSpace(record[4])
-		version := strings.TrimSpace(record[6])
-		url := strings.TrimSpace(record[10])
-
-		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s", vendor, component, version, url, categoryStr, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
-		categoryToRank := map[string]int{"github_popular": 3, "github": 5, "common": 6, "forks": 9}
-		rank := categoryToRank[categoryStr]
-		hasher := fnv.New64a()
-		hasher.Write([]byte(idStringToHash))
-		pointID := hasher.Sum64()
-
-		// If the PURL is on the preferred list of purls, take that value
-		purl := strings.TrimSpace(record[9])
+		// Parse rank from the last CSV column. Defaults to 0 on failure.
+		rank, err := strconv.Atoi(strings.TrimSpace(record[12]))
+		if err != nil {
+			rank = 0
+		}
+		// If the PURL is on the preferred list of purls, override the CSV value
 		if r, exists := rankMap[purl]; exists {
 			rank = r
 		}
 
+		// Generate unique point ID to handle re-imports idempotently
+		idStringToHash := fmt.Sprintf("%s|%s|%s|%s|%s|%s", purl, version, hfhDirsStr, hfhNamesStr, hfhContentsStr, urlHashStr)
+		hasher := fnv.New64a()
+		hasher.Write([]byte(idStringToHash))
+		pointID := hasher.Sum64()
+
 		// Common payload for all collections
 		payload := map[string]*qdrant.Value{
-			"vendor":        qdrant.NewValueString(strings.TrimSpace(record[4])),
-			"component":     qdrant.NewValueString(strings.TrimSpace(record[5])),
-			"version":       qdrant.NewValueString(strings.TrimSpace(record[6])),
-			"release_date":  qdrant.NewValueString(strings.TrimSpace(record[7])),
-			"license":       qdrant.NewValueString(strings.TrimSpace(record[8])),
-			"purl":          qdrant.NewValueString(strings.TrimSpace(record[9])),
-			"url":           qdrant.NewValueString(strings.TrimSpace(record[10])),
+			"vendor":        qdrant.NewValueString(vendor),
+			"component":     qdrant.NewValueString(component),
+			"version":       qdrant.NewValueString(version),
+			"release_date":  qdrant.NewValueString(releaseDate),
+			"license":       qdrant.NewValueString(license),
+			"purl":          qdrant.NewValueString(purl),
 			"url_hash":      qdrant.NewValueString(urlHashStr),
+			"url_md5":       qdrant.NewValueString(urlMd5Str),
 			"dirs_hash":     qdrant.NewValueString(hfhDirsStr),
 			"names_hash":    qdrant.NewValueString(hfhNamesStr),
 			"contents_hash": qdrant.NewValueString(hfhContentsStr),
-			"total_files":   qdrant.NewValueInt(totalFiles),
-			"indexed_files": qdrant.NewValueInt(indexedFiles),
-			"source_files":  qdrant.NewValueInt(sourceFiles),
-			"ignored_files": qdrant.NewValueInt(ignoredFiles),
-			"size":          qdrant.NewValueInt(size),
-			"category":      qdrant.NewValueString(categoryStr),
 			"rank":          qdrant.NewValueInt(int64(rank)),
 		}
 
-		// Parse language extensions if present (column 17) to determine target collection
+		// Parse language extensions (column 11) to determine target collection
 		targetCollection := "misc_collection" // default fallback
 		var langExtensions map[string]int
 
-		if len(record) > 17 && strings.TrimSpace(record[17]) != "" {
-			langExtStr := strings.TrimSpace(record[17])
+		if strings.TrimSpace(record[11]) != "" {
+			langExtStr := strings.TrimSpace(record[11])
 
 			if err := json.Unmarshal([]byte(langExtStr), &langExtensions); err != nil {
 				// Failed to parse JSON - use misc_collection
@@ -631,9 +615,9 @@ func insertBatchToCollections(ctx context.Context, client *qdrant.Client, batch 
 
 		// Create point with named vectors for the target collection
 		vectorsMap := map[string]*qdrant.Vector{
-			"dirs":     qdrant.NewVector(dirVector...),
-			"names":    qdrant.NewVector(nameVector...),
-			"contents": qdrant.NewVector(contentVector...),
+			VectorDirs:     qdrant.NewVector(dirVector...),
+			VectorNames:    qdrant.NewVector(nameVector...),
+			VectorContents: qdrant.NewVector(contentVector...),
 		}
 
 		point := &qdrant.PointStruct{

@@ -11,15 +11,13 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/qdrant/go-client v1.14.0
 	github.com/scanoss/go-grpc-helper v0.8.0
-	github.com/scanoss/papi v0.22.0
+	github.com/scanoss/papi v0.43.0
 	github.com/scanoss/zap-logging-helper v0.3.2
 	github.com/vbauerster/mpb/v8 v8.10.2
 	go.opentelemetry.io/otel v1.35.0
 	go.opentelemetry.io/otel/metric v1.35.0
 	google.golang.org/grpc v1.73.0
 )
-
-// replace github.com/scanoss/papi => ../papi
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
