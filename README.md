@@ -123,7 +123,10 @@ make lint_local_fix
 
 ## Importing Data
 
-The `cmd/import/main.go` tool allows you to populate the Qdrant vector database with component data from CSV files.
+There are two ways to populate the Qdrant vector database:
+
+1. **Import from CSV files** — build the database from raw component data using the `cmd/import/main.go` tool. Use this to create or update the data from scratch.
+2. **Restore from snapshots** — recreate the database from previously generated Qdrant snapshots. This is much faster than a full CSV import and is the recommended way to provision a new environment from an existing dataset. See [Restoring from Snapshots](#restoring-from-snapshots).
 
 ### Basic Usage
 
@@ -215,6 +218,39 @@ go build -o dist/import-tool cmd/import/main.go
 # 4. Verify collections were created
 curl http://localhost:6333/collections
 ```
+
+### Restoring from Snapshots
+
+Instead of importing from CSV, you can recreate the database from Qdrant snapshots. This is the fastest way to provision a new environment from an existing dataset, since it skips vector indexing and bulk loading.
+
+Two helper scripts are provided in [`scripts/`](scripts/):
+
+- `scripts/qdrant-generate-snapshots.sh` — creates a snapshot of every collection through the Qdrant HTTP API and downloads each one to a local `snapshots/<collection>.snapshot` file. The server-side snapshot is removed afterwards so it does not accumulate disk usage.
+- `scripts/qdrant-restore-snapshots.sh` — uploads every `*.snapshot` file from the snapshots directory back to Qdrant, recreating (or overwriting) each collection from its file.
+
+```bash
+# 1. Ensure Qdrant is running
+curl http://localhost:6333/collections
+
+# 2. Generate snapshots of all collections (default output: ./snapshots)
+./scripts/qdrant-generate-snapshots.sh
+
+# 3. Restore / recreate the database from those snapshots
+./scripts/qdrant-restore-snapshots.sh
+```
+
+Both scripts accept an optional snapshots directory as the first argument and honor the `QDRANT_HTTP` environment variable to target a different endpoint (default `http://localhost:6333`):
+
+```bash
+# Custom snapshots directory and remote Qdrant endpoint
+./scripts/qdrant-generate-snapshots.sh /data/backups
+QDRANT_HTTP=http://my-qdrant-host.example.com:6333 ./scripts/qdrant-restore-snapshots.sh /data/backups
+```
+
+Notes:
+- Snapshot files are named `<collection>.snapshot`; the restore script derives the collection name from the file name, so keep that naming convention.
+- The restore uses `priority=snapshot`, so the uploaded snapshot wins over any existing data in the collection.
+- `jq` is required by both scripts.
 
 ## Development
 
