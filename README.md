@@ -135,6 +135,11 @@ There are two ways to populate the Qdrant vector database:
 go build -o dist/import-tool cmd/import/main.go
 
 # Update database (adds/updates data in existing collections)
+# -top-purls is optional; when omitted, the rank from the CSV is used
+./dist/import-tool \
+  -dir /path/to/csv/directory
+
+# Update database with an optional PURL ranking file to prioritize results
 ./dist/import-tool \
   -dir /path/to/csv/directory \
   -top-purls /path/to/top-purls.json
@@ -142,7 +147,6 @@ go build -o dist/import-tool cmd/import/main.go
 # Recreate database (deletes existing collections and imports fresh)
 ./dist/import-tool \
   -dir /path/to/csv/directory \
-  -top-purls /path/to/top-purls.json \
   -overwrite
 
 # Specify Qdrant host and port
@@ -159,8 +163,10 @@ go build -o dist/import-tool cmd/import/main.go
 | Flag | Required | Description |
 |------|----------|-------------|
 | `-dir` | Yes | Directory containing CSV files to import |
-| `-top-purls` | Yes | JSON file with PURL rankings for search prioritization |
+| `-top-purls` | **No (optional)** | JSON file with PURL rankings for search prioritization. **When omitted, the `rank` column from the CSV is used as-is.** |
 | `-overwrite` | No | Delete and recreate all collections (use for fresh start) |
+
+> **Note:** The `-top-purls` file is **optional**. It only overrides the `rank` of the matching PURLs to prioritize them in search results; if you don't provide it, the import relies entirely on the `rank` column already present in the CSV.
 
 ### CSV Format
 
@@ -210,7 +216,7 @@ The import tool:
 # 2. Build the tool
 go build -o dist/import-tool cmd/import/main.go
 
-# 3. Import your data
+# 3. Import your data (-top-purls is optional)
 ./dist/import-tool \
   -dir /data/csv/ \
   -top-purls /data/top-purls.json

@@ -176,7 +176,11 @@ Use the `cmd/import` tool to populate the vector database with component data:
 # Build the import tool
 go build -o dist/import-tool cmd/import/main.go
 
-# Import CSV data
+# Import CSV data (-top-purls is optional)
+./dist/import-tool \
+  -dir /path/to/csv/files
+
+# Import CSV data with an optional PURL ranking file to prioritize results
 ./dist/import-tool \
   -dir /path/to/csv/files \
   -top-purls /path/to/top-purls.json
@@ -184,9 +188,10 @@ go build -o dist/import-tool cmd/import/main.go
 # Recreate database from scratch
 ./dist/import-tool \
   -dir /path/to/csv/files \
-  -top-purls /path/to/top-purls.json \
   -overwrite
 ```
+
+> **Note:** The `-top-purls` file is **optional**. When omitted, the `rank` column from the CSV is used as-is.
 
 For detailed information about the import process, see the [main README](../README.md#importing-data).
 
