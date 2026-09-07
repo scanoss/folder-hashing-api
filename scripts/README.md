@@ -17,11 +17,11 @@ This directory contains deployment and management scripts for the SCANOSS Folder
 
 ### Supporting Infrastructure
 
-The project includes `docker-compose.qdrant.yml` in the root directory for running the Qdrant vector database:
+The project includes `docker-compose-qdrant.yml` in the root directory for running the Qdrant vector database:
 
 ```bash
 # Start Qdrant vector database
-docker-compose -f docker-compose-qdrant.yml up -d
+docker compose -f docker-compose-qdrant.yml up -d
 ```
 
 ## 🚀 Installation
@@ -29,7 +29,7 @@ docker-compose -f docker-compose-qdrant.yml up -d
 ### Prerequisites
 
 - Linux server with systemd
-- Go 1.22+ for building the binary
+- Go 1.23+ for building the binary
 - Docker for Qdrant database
 - `scanoss` system user
 
@@ -40,18 +40,20 @@ docker-compose -f docker-compose-qdrant.yml up -d
    sudo useradd --system scanoss
    ```
 
-2. **Build the API binary**:
+2. **Build the API binary** (from the repository root; this places the binary into `scripts/`):
    ```bash
-   go build -o scanoss-folder-hashing-api
+   make package_amd64   # or: make package_arm64
    ```
 
-3. **Run the setup script**:
+3. **Run the setup script** (from the `scripts/` directory, so it finds the binary and startup script):
    ```bash
+   cd scripts
+
    # Interactive mode (prompts for confirmations)
-   sudo ./scripts/env-setup.sh
+   sudo ./env-setup.sh
 
    # Force mode (automated, no prompts)
-   sudo ./scripts/env-setup.sh --force
+   sudo ./env-setup.sh --force
    ```
 
 4. **Configure the service**:
@@ -156,7 +158,7 @@ sudo systemctl enable scanoss-folder-hashing-api
 Start Qdrant using Docker Compose:
 
 ```bash
-docker-compose -f docker-compose-qdrant.yml up -d
+docker compose -f docker-compose-qdrant.yml up -d
 ```
 
 This starts Qdrant with:
@@ -173,20 +175,20 @@ There are two ways to populate the vector database: import raw data from CSV fil
 Use the `cmd/import` tool to populate the vector database with component data:
 
 ```bash
-# Build the import tool
-go build -o dist/import-tool cmd/import/main.go
+# Build the import tool (from the repository root)
+make build_import_amd64
 
 # Import CSV data (-top-purls is optional)
-./dist/import-tool \
+./target/scanoss-folder-hashing-import-linux-amd64 \
   -dir /path/to/csv/files
 
 # Import CSV data with an optional PURL ranking file to prioritize results
-./dist/import-tool \
+./target/scanoss-folder-hashing-import-linux-amd64 \
   -dir /path/to/csv/files \
   -top-purls /path/to/top-purls.json
 
 # Recreate database from scratch
-./dist/import-tool \
+./target/scanoss-folder-hashing-import-linux-amd64 \
   -dir /path/to/csv/files \
   -overwrite
 ```
@@ -223,17 +225,17 @@ For more details, see the [main README](../README.md#restoring-from-snapshots).
 
 ### Creating a Distribution Package
 
-Use the `package-scripts.sh` in the root directory:
+Use the Make targets in the root directory (they build the binary into `scripts/` and then archive the folder via `package-scripts.sh`):
 
 ```bash
 # Create package for AMD64
-./package-scripts.sh linux_amd64 1.0.0
+make package_amd64
 
 # Create package for ARM64
-./package-scripts.sh linux_arm64 1.0.0
+make package_arm64
 ```
 
-This creates a tar archive containing all scripts for deployment on target servers.
+This creates a tar archive (`scanoss-folder-hashing-api_linux-amd64_<version>-1.tgz`) containing the binary and all scripts for deployment on target servers.
 
 ## ⚙️ Configuration
 
