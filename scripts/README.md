@@ -29,7 +29,7 @@ docker compose -f docker-compose-qdrant.yml up -d
 ### Prerequisites
 
 - Linux server with systemd
-- Go 1.23+ for building the binary
+- Go 1.25+ for building the binary
 - Docker for Qdrant database
 - `scanoss` system user
 
