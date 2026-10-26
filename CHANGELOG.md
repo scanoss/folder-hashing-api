@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Security
+- Upgraded `google.golang.org/grpc` to v1.83.1, `golang.org/x/crypto` to v0.54.0, `golang.org/x/net` to v0.57.0 and `go.opentelemetry.io/otel/sdk`, `otlptrace` and `otlptracegrpc` to v1.45.0 to fix open Dependabot security advisories. The `go` directive moves from 1.23.0 to 1.25.0 and CI now builds with Go 1.25.
+
 ## [0.8.0] - 2026-06-05
 ### Added
 - Import `url_md5`, `release_date` and `license` columns from the CSV and persist them in the Qdrant payload.
