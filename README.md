@@ -1,13 +1,13 @@
 # SCANOSS Folder Hashing API
 
 [![License](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](go.mod)
 
 A high-performance REST and gRPC API service for component fingerprinting and similarity matching using Qdrant vector database. The SCANOSS Folder Hashing API enables efficient code component analysis and similarity detection for software composition analysis.
 
 ## Prerequisites
 
-- **Go 1.23+**: For building and running the service
+- **Go 1.25+**: For building and running the service
 - **Docker + Docker Compose**: For running the Qdrant vector database
 - **jq**: Required by the Qdrant snapshot scripts (optional otherwise)
 
